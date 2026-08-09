@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WineFox 面板</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="panel">
+  <header>
+    <div class="brand">
+      <div class="logo">W</div>
+      <div>
+        <h1>WineFox</h1>
+        <p class="sub">桌面服务面板（占位 UI · Agent 09 fake sidecar）</p>
+      </div>
+    </div>
+    <div class="meta">
+      <span class="dot ok" id="health-dot"></span>
+      <span id="health-text">连接中…</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="card">
+      <h2>服务状态</h2>
+      <table class="kv">
+        <tr><td>应用版本</td><td id="app-version">—</td></tr>
+        <tr><td>Sidecar 实现</td><td id="impl">—</td></tr>
+        <tr><td>运行任务</td><td id="task-count">0</td></tr>
+        <tr><td>当前任务</td><td id="current-task">无</td></tr>
+        <tr><td>关机待定</td><td id="shutdown-state">否</td></tr>
+      </table>
+    </section>
+
+    <section class="card" id="sim-card">
+      <h2>模拟任务（测试用）</h2>
+      <p class="hint">真实 sidecar 中这里是 ComfyUI 生成队列；此处用于验证退出流程的
+        “等待任务完成 / 立即退出 / 返回” 三种行为。</p>
+      <div class="row">
+        <input id="sim-seconds" type="number" min="1" max="120" value="8">
+        <button id="sim-start" class="btn primary">启动模拟任务</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>关于退出</h2>
+      <p class="hint">退出时本服务<b>不会</b>调用 ComfyUI 全局 /interrupt。
+        有任务时默认等待完成；shell 端会弹出选择：等待（默认）/ 立即退出 / 返回。</p>
+    </section>
+  </main>
+
+  <footer>WineFox desktop shell · sidecar 仅绑定 127.0.0.1</footer>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

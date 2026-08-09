@@ -1,0 +1,158 @@
+/* WineFox Desktop — 工具函数与内联图标库
+ * 安全约定：绝不渲染绝对路径（sanitizeName）；不加载外部资源（图标全部内联）。
+ */
+
+export const $ = (sel, root = document) => root.querySelector(sel);
+export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+
+export function el(tag, attrs = {}, children = []) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v == null || v === false) continue;
+    if (k === "class") node.className = v;
+    else if (k === "text") node.textContent = v;
+    else if (k.startsWith("on") && typeof v === "function") node.addEventListener(k.slice(2), v);
+    else if (k === "dataset") Object.assign(node.dataset, v);
+    else node.setAttribute(k, v === true ? "" : v);
+  }
+  for (const c of [].concat(children)) {
+    if (c == null) continue;
+    node.append(c.nodeType ? c : document.createTextNode(String(c)));
+  }
+  return node;
+}
+
+export const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+}[c]));
+
+export const debounce = (fn, ms) => {
+  let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
+};
+
+/* 只保留路径最后一段（文件名），杜绝绝对路径泄露 */
+export function sanitizeName(name) {
+  if (name == null) return "";
+  const s = String(name).trim();
+  if (!s) return "";
+  const seg = s.split(/[\\/]/).pop();
+  return seg || s.replace(/^[\\/]+/, "");
+}
+
+export function fmtTime(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+export function fmtRelative(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  const diff = Date.now() - d.getTime();
+  const m = Math.floor(diff / 60000);
+  if (m < 1) return "刚刚";
+  if (m < 60) return `${m} 分钟前`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} 小时前`;
+  const day = Math.floor(h / 24);
+  if (day < 30) return `${day} 天前`;
+  return fmtTime(iso).slice(0, 10);
+}
+
+export function fmtBytes(n) {
+  if (n == null) return "—";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
+  return `${(n / 1024 ** 3).toFixed(2)} GB`;
+}
+
+export function debouncedSearchInput(placeholder, onInput) {
+  const box = el("div", { class: "search" });
+  box.append(
+    ic("search", { "aria-hidden": "true" }),
+    el("input", { class: "input", type: "search", placeholder, "aria-label": placeholder }),
+  );
+  box.querySelector("input").addEventListener("input", debounce((e) => onInput(e.target.value.trim()), 250));
+  return box;
+}
+
+export function downloadText(filename, text, mime = "text/plain") {
+  const blob = new Blob([text], { type: `${mime};charset=utf-8` });
+  const url = URL.createObjectURL(blob);
+  const a = el("a", { href: url, download: filename });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+/* ================= Toast（全局单例） ================= */
+let toastRegion = null;
+export function toast(msg, kind = "ok", ms = 3200) {
+  if (!toastRegion) toastRegion = $("#toast-region");
+  if (!toastRegion) return;
+  const icons = { ok: "check", err: "warn", warn: "warn", info: "info" };
+  const node = el("div", { class: "toast " + kind, role: kind === "err" ? "alert" : "status" }, [
+    el("span", { class: "t-ico" }, [ic(icons[kind] || "info")]),
+    el("span", { class: "t-msg" }, msg),
+  ]);
+  toastRegion.append(node);
+  const t = setTimeout(() => {
+    node.classList.add("leave");
+    setTimeout(() => node.remove(), 200);
+  }, ms);
+  node.addEventListener("click", () => { clearTimeout(t); node.remove(); });
+}
+
+/* ================= 内联线描图标 ================= */
+const ICONS = {
+  sun: '<path d="M8 10.8a2.8 2.8 0 1 0 0-5.6 2.8 2.8 0 0 0 0 5.6ZM8 2.6v1.3M8 12.1v1.3M2.6 8h1.3M12.1 8h1.3M4 4l.9.9M11.1 11.1 12 12M12 4l-.9.9M4.9 11.1 4 12" stroke-width="1.4"/>',
+  moon: '<path d="M8 2.6a5.4 5.4 0 1 0 5.2 6.9 4.1 4.1 0 0 1-5.2-5.2 5.4 5.4 0 0 0 0-1.7Z" stroke-width="1.4"/>',
+  gen: '<path d="M3 4.5h10M3 8h6.5M3 11.5h10M17.5 3v10M12 16l5.5 2.8L23 16" stroke-width="1.5"/>',
+  history: '<path d="M3.5 8A5.5 5.5 0 1 1 8 13.5" stroke-width="1.4"/><path d="M3.5 8V4M3.5 8h4M8 5.5V8l2 1.5" stroke-width="1.4"/>',
+  fav: '<path d="M8 3.2c-1.9-2.3-5.6-1.4-5.9 1.5-.2 2 1.3 3.7 5.9 7 4.6-3.3 6.1-5 5.9-7C13.6 1.8 9.9.9 8 3.2Z" stroke-width="1.5"/>',
+  model: '<path d="M8 2.8 2.8 5.5v5L8 13.2l5.2-2.7v-5L8 2.8Z" stroke-width="1.4"/><path d="M2.8 5.5 8 8.2l5.2-2.7M8 8.2v5" stroke-width="1.4"/>',
+  gear: '<path d="M8 10.2a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4Z" stroke-width="1.5"/><path d="M8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6M3.6 3.6l1.1 1.1M11.3 11.3l1.1 1.1M12.4 3.6l-1.1 1.1M4.7 11.3l-1.1 1.1" stroke-width="1.4"/>',
+  diag: '<path d="M3 12.5h2v-3H3v3ZM7 12.5h2V5.5H7v7ZM11 12.5h2V8.5h-2v4ZM15 12.5h2V3h-2v9.5ZM2 15.5h14" stroke-width="1.4"/>',
+  search: '<path d="M7.2 12.2a5 5 0 1 0 0-10 5 5 0 0 0 0 10ZM10.8 10.8 14.5 14.5" stroke-width="1.5"/>',
+  x: '<path d="m4 4 8 8M12 4l-8 8" stroke-width="1.5"/>',
+  check: '<path d="m3 8 4 4 7-8" stroke-width="1.8"/>',
+  copy: '<path d="M5.5 5.5h7v7h-7z" stroke-width="1.3"/><path d="M8.5 3h5.5v5.5" stroke-width="1.3"/>',
+  trash: '<path d="M3.5 4.5h9M5.5 4.5V2.8h5v1.7M6.5 7v5M10 7v5M4.2 4.5l.6 8.2a1 1 0 0 0 1 .9h4.4a1 1 0 0 0 1-.9l.6-8.2" stroke-width="1.3"/>',
+  restore: '<path d="M3.5 8A5.5 5.5 0 1 1 8 13.5" stroke-width="1.4"/><path d="M3.5 8V4M3.5 8h4M5 6.2 3.5 8 5 9.8" stroke-width="1.3"/>',
+  refresh: '<path d="M13.5 4.5A5.5 5.5 0 1 0 14 10M13.5 4.5V1.8M13.5 4.5h-2.7" stroke-width="1.4"/>',
+  download: '<path d="M8 2.5v7M5.2 7 8 9.8 10.8 7M3 12h10" stroke-width="1.4"/>',
+  upload: '<path d="M8 10.5v-7M5.2 6.5 8 3.7l2.8 2.8M3 12h10" stroke-width="1.4"/>',
+  eye: '<path d="M1.8 8S4 3.5 8 3.5 14.2 8 14.2 8 12 12.5 8 12.5 1.8 8 1.8 8Z" stroke-width="1.4"/><path d="M8 9.8a1.8 1.8 0 1 0 0-3.6 1.8 1.8 0 0 0 0 3.6Z" stroke-width="1.3"/>',
+  play: '<path d="M4.5 3 12.5 8 4.5 13Z" stroke-width="1.4"/>',
+  save: '<path d="M3 2.8h8.5L14.2 5.5V13.2H3V2.8Z" stroke-width="1.4"/><path d="M5 2.8v3.2h6V2.8M5 13.2V9h6v4.2" stroke-width="1.3"/>',
+  warn: '<path d="M8 2.5 14.8 13.5H1.2L8 2.5Z" stroke-width="1.4"/><path d="M8 6.5v3M8 11.4v.1" stroke-width="1.5"/>',
+  info: '<path d="M8 14.5a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13Z" stroke-width="1.3"/><path d="M8 7.5V11M8 4.8v.1" stroke-width="1.5"/>',
+  queue: '<path d="M3 4h10M3 8h10M3 12h6" stroke-width="1.5"/><path d="M14 12.5h2.5V15H14z" stroke-width="1.2"/>',
+  wand: '<path d="m4 12 6-6 2 2-6 6-2.5.5L4 12Z" stroke-width="1.3"/><path d="m8.5 7.5 2 2M11.5 3l.5 1.5L13.5 5 12 5.5 11.5 7 11 5.5 9.5 5 11 4.5 11.5 3Z" stroke-width="1.2"/>',
+  trashOpen: '<path d="M3 4.5h10M6 6.2 5.8 12a1 1 0 0 0 1 1h4.4a1 1 0 0 0 1-1l-.2-5.8M7.3 7.5v3.8M9.7 7.5v3.8" stroke-width="1.3"/>',
+  alert: '<path d="M8 2.5 14.8 13.5H1.2L8 2.5Z" stroke-width="1.4"/><path d="M8 6.5v3M8 11.4v.1" stroke-width="1.5"/>',
+  image: '<path d="M2.8 3h10.4a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H2.8a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z" stroke-width="1.3"/><path d="m2.5 11 3.4-3.4 2.4 2.4 2.2-2.2 3 3" stroke-width="1.3"/><path d="M5.3 6a1 1 0 1 0 0-.1" stroke-width="1.4"/>',
+};
+
+export function ic(name, attrs = {}) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("aria-hidden", "true");
+  for (const [k, v] of Object.entries(attrs)) svg.setAttribute(k, v);
+  svg.innerHTML = ICONS[name] || ICONS.info;
+  return svg;
+}
+
+/* 状态 → 徽章 */
+export const STATUS_META = {
+  queued: { label: "排队中", cls: "neutral", pulse: true },
+  running: { label: "生成中", cls: "primary", pulse: true },
+  completed: { label: "已完成", cls: "ok" },
+  failed: { label: "失败", cls: "danger" },
+  cancelled: { label: "已取消", cls: "neutral" },
+};

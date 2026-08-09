@@ -1,0 +1,98 @@
+/* WineFox Desktop — base: reset, typography, focus, utilities
+ * 不加载任何外部字体/资源；rem 基准保证 125%–200% DPI 缩放。
+ */
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  font-size: 14px;
+  height: 100%;
+  background: var(--canvas);
+}
+
+body {
+  margin: 0;
+  height: 100%;
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--fs-md);
+  line-height: var(--lh-normal);
+  background: var(--canvas);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+
+h1, h2, h3, h4, p, ul, ol, figure, blockquote { margin: 0; }
+ul, ol { padding: 0; list-style: none; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { background: none; border: 0; padding: 0; cursor: pointer; }
+a { color: var(--primary); text-decoration: none; }
+a:hover { text-decoration: underline; }
+img, svg { display: block; }
+svg { fill: none; stroke: currentColor; }
+::placeholder { color: var(--faint); }
+
+/* ---- 焦点可见性：完整键盘焦点 ---- */
+:focus { outline: none; }
+:focus-visible {
+  outline: var(--focus-outline);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+input:focus-visible, select:focus-visible, textarea:focus-visible,
+button:focus-visible, a:focus-visible, [tabindex]:focus-visible {
+  outline: var(--focus-outline);
+  outline-offset: 2px;
+}
+/* 鼠标操作时不显示焦点环 */
+:focus:not(:focus-visible) { outline: none; }
+
+/* ---- 滚动条 ---- */
+* { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: var(--r-full); border: 3px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* ---- 可访问性工具类 ---- */
+.sr-only {
+  position: absolute; width: 1px; height: 1px;
+  margin: -1px; padding: 0; border: 0;
+  clip: rect(0 0 0 0); clip-path: inset(50%);
+  overflow: hidden; white-space: nowrap;
+}
+.skip-link {
+  position: fixed; top: 8px; left: 8px; z-index: 9999;
+  padding: 8px 16px; border-radius: var(--r-sm);
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border-strong);
+  transform: translateY(-200%);
+  transition: transform var(--dur) var(--ease);
+}
+.skip-link:focus-visible { transform: none; }
+
+.visually-disabled { opacity: 0.55; pointer-events: none; }
+
+/* ---- 排版 ---- */
+.h1 { font-size: var(--fs-3xl); font-weight: 650; letter-spacing: -0.01em; line-height: var(--lh-tight); }
+.h2 { font-size: var(--fs-2xl); font-weight: 650; letter-spacing: -0.01em; line-height: var(--lh-tight); }
+.h3 { font-size: var(--fs-xl); font-weight: 600; line-height: var(--lh-tight); }
+.subtitle { color: var(--muted); font-size: var(--fs-sm); }
+
+.text-muted { color: var(--muted); }
+.text-sm { font-size: var(--fs-sm); }
+.text-xs { font-size: var(--fs-xs); }
+.mono { font-family: var(--font-mono); font-size: 0.92em; }
+
+/* ---- 布局 ---- */
+.stack { display: flex; flex-direction: column; }
+.stack-1 { gap: var(--sp-1); } .stack-2 { gap: var(--sp-2); }
+.stack-3 { gap: var(--sp-3); } .stack-4 { gap: var(--sp-4); }
+.row { display: flex; align-items: center; }
+.row-between { display: flex; align-items: center; justify-content: space-between; }
+.grow { flex: 1; min-width: 0; }
+.wrap { flex-wrap: wrap; }
+.gap-1 { gap: var(--sp-1); } .gap-2 { gap: var(--sp-2); }
+.gap-3 { gap: var(--sp-3); } .gap-4 { gap: var(--sp-4); }
+
+/* 隐藏但保留动画/滚动容器 */
+.scroll-y { overflow-y: auto; min-height: 0; }

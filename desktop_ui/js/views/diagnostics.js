@@ -1,0 +1,176 @@
+/* WineFox Desktop — 诊断页
+ * 版本 / ComfyUI 状态 / 节点缺失 / 配置健康 / 脱敏日志导出。
+ * 完全离线可用：任何请求失败都以「不可用」状态呈现，不抛错。
+ */
+import { el, $, $$, ic, esc, sanitizeName, toast, downloadText } from "../utils.js";
+import { api } from "../api.js";
+
+export class DiagnosticsView {
+  constructor() {
+    this.data = null;
+    this.error = null;
+  }
+
+  async mount(container) {
+    this.root = container;
+    this.render();
+    await this.load();
+  }
+
+  render() {
+    const root = this.root;
+    root.innerHTML = "";
+    root.append(
+      el("div", { class: "view-head" }, [
+        el("div", {}, [
+          el("h1", { class: "h1" }, "诊断"),
+          el("div", { class: "lead" }, "环境信息与健康检查；导出日志已脱敏，不含密钥与绝对路径。"),
+        ]),
+        el("div", { class: "toolbar" }, [
+          el("button", { class: "btn btn-sm", id: "d-refresh", type: "button" }, [ic("refresh"), esc("重新检查")]),
+          el("button", { class: "btn btn-sm", id: "d-export", type: "button" }, [ic("download"), esc("导出脱敏日志")]),
+        ]),
+      ]),
+      el("div", { id: "d-body", class: "stack-4" }, [el("div", { class: "load-more" }, "检查中…")]),
+    );
+    $("#d-refresh")?.addEventListener("click", () => this.load());
+    $("#d-export")?.addEventListener("click", () => this.exportLogs());
+  }
+
+  async load() {
+    const body = $("#d-body");
+    if (!body) return;
+    body.innerHTML = "";
+    body.append(el("div", { class: "load-more" }, "检查中…"));
+    try {
+      this.data = await api.diagnostics();
+      try { this.comfy = await api.comfyui(); } catch { this.comfy = null; }
+      this.error = null;
+    } catch (e) {
+      this.data = null;
+      this.error = e;
+    }
+    this.renderBody();
+  }
+
+  renderBody() {
+    const body = $("#d-body");
+    if (!body) return;
+    body.innerHTML = "";
+    if (!this.data) {
+      body.append(
+        el("div", { class: "card card-pad stack-3" }, [
+          el("div", { class: "row gap-3" }, [ic("warn"), el("b", {}, "无法获取诊断数据")]),
+          el("p", { class: "text-sm text-muted" }, esc(this.error?.message || "后端服务不可用。诊断页仍然可用：请检查 WineFox 服务是否已启动。")),
+        ]),
+      );
+      return;
+    }
+    const d = this.data;
+    const app = d.app || {};
+    const plugin = d.plugin || {};
+    const cf = d.comfyui || {};
+    const nodes = d.nodes || {};
+    const cfg = d.config_health || [];
+
+    const grid = el("div", { class: "diag-grid" }, [
+      this.item("WineFox 应用", esc(app.name || "WineFox Desktop"), esc(app.version || "—"), esc(app.build || "")),
+      this.item("插件版本", esc(plugin.name || "ComfyUI Pro"), esc(plugin.version || "—"), "AstrBot 插件"),
+      this.item("ComfyUI 服务", cf.connected ? [el("span", { class: "badge ok" }, "已连接"), el("span", { class: "mono" }, esc(cf.version || ""))] : el("span", { class: "badge danger" }, "未连接"), esc(cf.url ? urlHost(cf.url) : "—"), "服务地址仅显示主机名"),
+      this.item("自定义节点", nodes.total != null ? esc(`${nodes.total} 个`) : "—", nodes.missing?.length ? el("span", { class: "badge warn" }, esc(`${nodes.missing.length} 个缺失`)) : el("span", { class: "badge ok" }, "全部就绪"), "缺失节点：" + (nodes.missing?.join("、") || "无")),
+    ]);
+    body.append(grid);
+
+    // 配置健康
+    body.append(
+      el("div", { class: "section-card" }, [
+        el("div", { class: "sec-head" }, [el("h3", {}, "配置健康")]),
+        el("div", { class: "sec-body stack-2" }, cfg.length ? cfg.map((c) =>
+          el("div", { class: "model-row" }, [
+            el("div", { class: "grow" }, [el("div", { class: "m-name" }, esc(c.label || c.id)), el("div", { class: "m-sub" }, esc(c.detail || ""))]),
+            el("span", { class: "badge " + ({ ok: "ok", warn: "warn", fail: "danger" }[c.status] || "") }, esc({ ok: "正常", warn: "注意", fail: "异常" }[c.status] || c.status)),
+          ])) : el("p", { class: "text-sm text-muted" }, "无配置项")),
+        ]),
+    );
+
+    // 缺失节点
+    if (nodes.missing?.length) {
+      body.append(
+        el("div", { class: "section-card" }, [
+          el("div", { class: "sec-head" }, [el("h3", {}, "缺失节点")]),
+          el("div", { class: "sec-body stack-2" }, nodes.missing.map((n) =>
+            el("div", { class: "model-row missing" }, [
+              el("div", { class: "grow" }, [el("div", { class: "m-name" }, esc(sanitizeName(n)))]),
+              el("span", { class: "m-warn" }, "请通过 ComfyUI Manager 安装后重启"),
+            ]))),
+        ]),
+      );
+    }
+
+    // 自定义节点明细（来自 /comfyui）
+    const customNodes = this.comfy?.custom_nodes;
+    if (customNodes?.length) {
+      body.append(
+        el("div", { class: "section-card" }, [
+          el("div", { class: "sec-head" }, [el("h3", {}, "自定义节点")]),
+          el("div", { class: "sec-body stack-2" }, customNodes.map((n) =>
+            el("div", { class: "model-row" + (n.installed === false ? " missing" : "") }, [
+              el("div", { class: "grow" }, [el("div", { class: "m-name" }, esc(sanitizeName(n.name)))]),
+              el("span", { class: "badge " + (n.installed === false ? "warn" : "ok") }, n.installed === false ? "缺失" : "就绪"),
+            ]))),
+        ]),
+      );
+    }
+
+    // 最近错误 / 日志摘要
+    if (d.log_tail?.lines?.length) {
+      body.append(
+        el("div", { class: "section-card" }, [
+          el("div", { class: "sec-head" }, [el("h3", {}, "日志摘要"), el("span", { class: "text-xs text-muted" }, esc(d.log_tail.truncated ? "（已截断）" : ""))]),
+          el("div", { class: "sec-body" }, [
+            el("div", { class: "log-box", tabindex: "0", "aria-label": "日志摘要" }, d.log_tail.lines.map((l) => this.logLine(l))),
+          ]),
+        ]),
+      );
+    }
+  }
+
+  item(label, value, sub, hint) {
+    return el("div", { class: "card card-pad diag-item" }, [
+      el("div", { class: "d-label" }, esc(label)),
+      el("div", { class: "d-value" }, value),
+      el("div", { class: "d-sub" }, hint ? esc(String(hint)) : sub ? esc(String(sub)) : ""),
+    ]);
+  }
+
+  logLine(line) {
+    const m = String(line);
+    const span = el("span", {});
+    if (/error|失败|exception/i.test(m)) span.className = "le";
+    else if (/warn|警告/i.test(m)) span.className = "lw";
+    else if (/info|信息/i.test(m)) span.className = "li";
+    span.textContent = m + "\n";
+    return span;
+  }
+
+  async exportLogs() {
+    const btn = $("#d-export");
+    if (btn) btn.disabled = true;
+    try {
+      const res = await api.exportDiagnostics();
+      const content = res.content || JSON.stringify(res, null, 2);
+      downloadText(`winefox_diagnostics_${new Date().toISOString().slice(0, 10)}.log`, content, "text/plain");
+      toast("已导出脱敏日志", "ok");
+    } catch (e) {
+      // 离线：导出当前可见诊断信息
+      const fallback = JSON.stringify({ note: "后端不可用，导出为本地摘要", error: e.message, generated_at: new Date().toISOString(), diagnostics: this.data }, null, 2);
+      downloadText(`winefox_diagnostics_${new Date().toISOString().slice(0, 10)}.json`, fallback, "application/json");
+      toast("后端不可用，已导出本地摘要", "warn");
+    }
+    if (btn) btn.disabled = false;
+  }
+}
+
+function urlHost(url) {
+  try { return new URL(url).host; } catch { return "—"; }
+}

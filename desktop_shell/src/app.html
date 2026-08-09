@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WineFox — 面板</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="app-body">
+  <header class="app-bar">
+    <div class="app-bar-left">
+      <span class="dot" id="bar-dot"></span>
+      <span id="bar-state">已连接</span>
+      <span class="bar-sep">|</span>
+      <span id="bar-version">…</span>
+    </div>
+    <div class="app-bar-right">
+      <button class="btn small ghost" id="btn-back">回到启动页</button>
+      <button class="btn small" id="btn-quit-app">退出</button>
+    </div>
+  </header>
+  <iframe id="panel" title="WineFox 面板"></iframe>
+
+  <div class="modal-backdrop" id="exit-modal" hidden>
+    <div class="modal">
+      <h2>正在生成图片，确认退出？</h2>
+      <p>当前有 <b id="exit-task-count">0</b> 个任务在运行。退出时不会打断 ComfyUI 后端，生成任务会继续在后台跑完并丢弃。</p>
+      <div class="modal-actions">
+        <button class="btn primary" id="exit-wait">等待任务完成（默认）</button>
+        <button class="btn" id="exit-now">立即退出</button>
+        <button class="btn ghost" id="exit-cancel">返回应用</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="quitting-modal" hidden>
+    <div class="modal">
+      <h2 id="quitting-title">正在退出…</h2>
+      <p id="quitting-text">等待任务完成后退出，不会打断 ComfyUI 后端。</p>
+      <div class="modal-actions">
+        <button class="btn" id="quit-force">停止等待，立即退出</button>
+        <button class="btn ghost" id="quit-back">返回应用</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="main.js"></script>
+</body>
+</html>

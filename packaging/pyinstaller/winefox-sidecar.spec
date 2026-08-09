@@ -1,0 +1,140 @@
+# -*- mode: python ; coding: utf-8 -*-
+"""PyInstaller spec: WineFox desktop sidecar (onedir, windowed, x64).
+
+Base package policy (Agent 09):
+  * MUST NOT include TensorFlow / Keras / torch / opennsfw2
+  * MUST NOT include Playwright (and its Chromium)
+  * MUST NOT include ComfyUI code, models or CUDA runtime
+  * MUST collect: workflow/*.json, templates/, assets/, desktop_ui/,
+    lora_source_aliases.json, sensitive_words.json, zayu_messages_template.json
+  * Heavy features (image audit, GPT vision, browser rendering) belong to a
+    future full build; they are excluded here.
+
+Data paths:
+  * sidecar package: ../../desktop_shell/sidecar/winefox_sidecar
+  * plugin source:   env WINE_FOX_PLUGIN_SRC or ../../source/<plugin dir>
+"""
+
+import json
+import os
+import sys
+
+from PyInstaller.utils.hooks import collect_data_files  # noqa: F401  (kept for future use)
+
+# ---------------------------------------------------------------------------
+# paths
+# ---------------------------------------------------------------------------
+SPEC_DIR = os.path.dirname(os.path.abspath(SPEC))
+ROOT = os.path.normpath(os.path.join(SPEC_DIR, "..", ".."))
+SIDECAR_DIR = os.path.normpath(os.path.join(ROOT, "desktop_shell", "sidecar"))
+SIDECAR_PKG = os.path.join(SIDECAR_DIR, "winefox_sidecar")
+
+PLUGIN_SRC = os.environ.get("WINE_FOX_PLUGIN_SRC") or os.path.normpath(
+    os.path.join(ROOT, "source", "astrbot_plugin_comfyui_pro_UltraPlusMax-master")
+)
+
+with open(os.path.join(ROOT, "packaging", "version.json"), encoding="utf-8") as fh:
+    VERSIONS = json.load(fh)
+APP_VERSION = VERSIONS["app"]
+
+# ---------------------------------------------------------------------------
+# collect plugin data (skip missing dirs with a warning)
+# ---------------------------------------------------------------------------
+datas = []
+plugin_datas = [
+    ("workflow", "plugin_data/workflow"),
+    ("templates", "plugin_data/templates"),
+    ("assets", "plugin_data/assets"),
+    ("desktop_ui", "plugin_data/desktop_ui"),
+    ("lora_source_aliases.json", "plugin_data"),
+    ("sensitive_words.json", "plugin_data"),
+    ("zayu_messages_template.json", "plugin_data"),
+    ("metadata.yaml", "plugin_data"),
+]
+for src_rel, dst in plugin_datas:
+    src = os.path.join(PLUGIN_SRC, src_rel)
+    if os.path.exists(src):
+        if os.path.isdir(src):
+            datas.append((src, dst))
+        else:
+            datas.append((src, dst))
+    else:
+        print(f"[spec] WARN: plugin data {src_rel} not found, skipping", file=sys.stderr)
+
+# sidecar package data (desktop_ui served by the sidecar itself).
+# collect_data_files cannot import the uninstalled package, so walk it.
+desktop_ui = os.path.join(SIDECAR_PKG, "desktop_ui")
+if os.path.isdir(desktop_ui):
+    for dirpath, _dirnames, filenames in os.walk(desktop_ui):
+        rel = os.path.relpath(dirpath, SIDECAR_PKG)
+        for fn in filenames:
+            datas.append((os.path.join(dirpath, fn), rel))
+datas.append((os.path.join(SIDECAR_DIR, "README.md"), "sidecar"))
+
+# ---------------------------------------------------------------------------
+# exclusions: heavy / out-of-scope dependencies
+# ---------------------------------------------------------------------------
+excludes = [
+    "tensorflow", "tensorflow_core", "keras", "tf_keras",
+    "torch", "torchvision", "torchaudio",
+    "opennsfw2", "onnxruntime",
+    "playwright", "selenium",
+    "matplotlib", "scipy", "notebook", "IPython",
+    "PyQt5", "PySide2", "PySide6", "tkinter",
+    "numba", "pandas",
+]
+
+# ---------------------------------------------------------------------------
+# version resource (stamped by build.ps1 from packaging/version.json)
+# ---------------------------------------------------------------------------
+version_file = os.path.join(SPEC_DIR, "generated", "sidecar_version_file.txt")
+if os.path.exists(version_file):
+    vs_info = version_file
+else:
+    vs_info = None
+
+a = Analysis(
+    [os.path.join(SIDECAR_DIR, "winefox_sidecar_entry.py")],
+    pathex=[SIDECAR_DIR],
+    binaries=[],
+    datas=datas,
+    hiddenimports=["winefox_sidecar"],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=excludes,
+    noarchive=False,
+    optimize=1,
+)
+pyz = PYZ(a.pure)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    [],
+    exclude_binaries=True,
+    name="winefox-sidecar",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,
+    console=False,          # windowed: no console window on Windows
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    version=vs_info,
+    icon=os.path.join(ROOT, "desktop_shell", "src-tauri", "icons", "icon.ico"),
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=False,
+    name="winefox-sidecar",
+)
+
+print(f"[spec] WineFox sidecar v{APP_VERSION} onedir -> dist/winefox-sidecar/")

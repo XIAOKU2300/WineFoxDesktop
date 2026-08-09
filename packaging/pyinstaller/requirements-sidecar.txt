@@ -1,0 +1,5 @@
+# WineFox sidecar build dependencies (PyInstaller only)
+# The fake sidecar itself is pure stdlib.  Heavy feature deps (Pillow,
+# opennsfw2, playwright...) belong to a future FULL build - add them here
+# and remove the matching entries from winefox-sidecar.spec excludes.
+pyinstaller>=6.16,<7

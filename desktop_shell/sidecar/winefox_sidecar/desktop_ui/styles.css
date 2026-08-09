@@ -1,0 +1,49 @@
+:root {
+  --bg: #14161f;
+  --card: #1d2130;
+  --line: #2c3248;
+  --text: #e8eaf2;
+  --muted: #9aa3bd;
+  --accent: #c9a86a;
+  --ok: #4ade80;
+  --bad: #f87171;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+}
+.panel { max-width: 860px; margin: 0 auto; padding: 28px 20px 60px; }
+header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+.brand { display: flex; gap: 14px; align-items: center; }
+.logo {
+  width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center;
+  font-weight: 800; font-size: 22px; color: #14161f; background: linear-gradient(135deg, #e8c47a, #b98a3e);
+}
+h1 { margin: 0; font-size: 20px; }
+.sub { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+.meta { display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 13px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: #555; }
+.dot.ok { background: var(--ok); }
+.dot.bad { background: var(--bad); }
+.card {
+  background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+  padding: 18px 20px; margin-bottom: 16px;
+}
+.card h2 { margin: 0 0 10px; font-size: 15px; color: var(--accent); }
+.kv { width: 100%; border-collapse: collapse; font-size: 13px; }
+.kv td { padding: 6px 0; border-bottom: 1px dashed var(--line); }
+.kv td:first-child { color: var(--muted); width: 120px; }
+.hint { color: var(--muted); font-size: 12.5px; line-height: 1.6; }
+.row { display: flex; gap: 10px; margin-top: 10px; }
+input {
+  background: #14161f; border: 1px solid var(--line); color: var(--text);
+  border-radius: 8px; padding: 8px 10px; width: 90px;
+}
+.btn {
+  border: 0; border-radius: 8px; padding: 9px 16px; cursor: pointer; font-size: 13px;
+  background: #2c3248; color: var(--text);
+}
+.btn.primary { background: var(--accent); color: #14161f; font-weight: 600; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+footer { text-align: center; color: var(--muted); font-size: 11.5px; margin-top: 30px; }

@@ -1,0 +1,125 @@
+/* WineFox Desktop — Design tokens
+ * 设计语言：现代 Windows 桌面工具 + 日式精致线描 + 克制半透明材质
+ * 禁止：高饱和堆叠 / 巨大渐变标题 / 游戏启动器卡片墙 / 远程资源 / 过度毛玻璃
+ * 所有颜色均通过 WCAG AA 校验（见 DESIGN_SYSTEM.md 对比度表）。
+ */
+:root {
+  color-scheme: light;
+
+  /* ---- 色板 Light ---- */
+  --canvas: #F6F3F1;
+  --surface: #FFFFFF;
+  --surface-2: #FBF9F7;
+  --glass: rgba(255, 255, 255, 0.82);
+  --glass-strong: rgba(255, 255, 255, 0.92);
+  --primary: #A45C73;          /* 主色（按钮底色 / 链接） 4.82:1 on white */
+  --primary-strong: #8A4A5F;   /* hover 加深 */
+  --primary-soft: rgba(164, 92, 115, 0.10);
+  --primary-soft-2: rgba(164, 92, 115, 0.16);
+  --accent: #D3A65A;           /* 点缀金 —— 仅装饰/边框/深色模式强调 */
+  --accent-soft: rgba(211, 166, 90, 0.16);
+  --text: #241F22;             /* 16.23:1 on white */
+  --text-2: #4A4248;
+  --muted: #756B71;            /* 5.12:1 on white */
+  --faint: #9B9298;
+  --success: #3D7A63;          /* 5.05:1 */
+  --success-soft: rgba(61, 122, 99, 0.12);
+  --danger: #B84A50;           /* 5.08:1 */
+  --danger-soft: rgba(184, 74, 80, 0.10);
+  --warn: #9A6B22;             /* 警示文字（金底深字） */
+  --warn-soft: rgba(211, 166, 90, 0.22);
+
+  /* ---- 边框 / 阴影 ---- */
+  --border: rgba(36, 31, 34, 0.10);
+  --border-strong: rgba(36, 31, 34, 0.18);
+  --hairline: rgba(36, 31, 34, 0.06);
+  --ring: rgba(164, 92, 115, 0.45);
+  --shadow-1: 0 1px 2px rgba(36, 31, 34, 0.05), 0 2px 8px rgba(36, 31, 34, 0.05);
+  --shadow-2: 0 4px 16px rgba(36, 31, 34, 0.08), 0 2px 4px rgba(36, 31, 34, 0.05);
+  --shadow-3: 0 12px 40px rgba(36, 31, 34, 0.14);
+
+  /* ---- 排版 ---- */
+  --font-ui: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", "Segoe UI Mono", Consolas, monospace;
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 14px;
+  --fs-xl: 16px;
+  --fs-2xl: 20px;
+  --fs-3xl: 28px;
+  --lh-tight: 1.35;
+  --lh-normal: 1.55;
+
+  /* ---- 间距（4 的倍数） ---- */
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px;
+  --sp-5: 24px; --sp-6: 32px; --sp-7: 48px;
+
+  /* ---- 圆角 ---- */
+  --r-sm: 8px; --r-md: 12px; --r-lg: 16px; --r-full: 999px;
+
+  /* ---- 动效（160–220ms） ---- */
+  --dur-fast: 160ms;
+  --dur: 200ms;
+  --dur-slow: 220ms;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --ease-out: cubic-bezier(0.22, 0.61, 0.36, 1);
+
+  /* ---- 尺寸 ---- */
+  --topbar-h: 52px;
+  --rail-w: 200px;
+  --rail-w-collapsed: 64px;
+
+  /* ---- 语义 ---- */
+  --focus-outline: 2px solid var(--ring);
+}
+
+/* 深色：画布/表面/文字反转，主色提亮保证 4.5:1 */
+[data-theme="dark"] {
+  color-scheme: dark;
+  --canvas: #181416;
+  --surface: #242025;
+  --surface-2: #2A252B;
+  --glass: rgba(36, 32, 37, 0.82);
+  --glass-strong: rgba(36, 32, 37, 0.94);
+  --primary: #C07A90;          /* 4.91:1 on #242025 */
+  --primary-strong: #D291A4;   /* hover 提亮 */
+  --primary-soft: rgba(192, 122, 144, 0.14);
+  --primary-soft-2: rgba(192, 122, 144, 0.22);
+  --accent: #D3A65A;           /* 7.16:1 on #242025 */
+  --accent-soft: rgba(211, 166, 90, 0.18);
+  --text: #F7F2F4;             /* 14.49:1 */
+  --text-2: #D8CFD3;
+  --muted: #B9AEB4;            /* 7.47:1 */
+  --faint: #8E8289;
+  --success: #6FBE9E;
+  --success-soft: rgba(111, 190, 158, 0.14);
+  --danger: #E0858B;
+  --danger-soft: rgba(224, 133, 139, 0.14);
+  --warn: #E0BE7A;
+  --warn-soft: rgba(211, 166, 90, 0.20);
+  --border: rgba(247, 242, 244, 0.12);
+  --border-strong: rgba(247, 242, 244, 0.22);
+  --hairline: rgba(247, 242, 244, 0.06);
+  --ring: rgba(192, 122, 144, 0.55);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.35);
+  --shadow-3: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+
+/* 主按钮在深色下仍用可读的深玫瑰底 + 白字（4.82:1） */
+[data-theme="dark"] .btn-primary {
+  --btn-bg: #A45C73;
+  --btn-bg-hover: #B96A83;
+  --btn-fg: #FFFFFF;
+  --btn-border: #A45C73;
+}
+
+/* ---- 动效偏好 ---- */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0ms;
+    --dur: 0ms;
+    --dur-slow: 0ms;
+  }
+}

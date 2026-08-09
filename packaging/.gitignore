@@ -1,0 +1,5 @@
+.build/
+dist/
+pyinstaller/generated/
+nsis/payload/
+nsis/*.exe
