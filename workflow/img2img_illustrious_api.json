@@ -1,0 +1,233 @@
+{
+  "1": {
+    "inputs": {
+      "ckpt_name": "waiIllustriousSDXL_v170.safetensors"
+    },
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": {
+      "title": "AstrBot Illustrious Img2Img Lite v2.2.0 - Checkpoint"
+    }
+  },
+  "2": {
+    "inputs": {
+      "stop_at_clip_layer": -2,
+      "clip": [
+        "1",
+        1
+      ]
+    },
+    "class_type": "CLIPSetLastLayer",
+    "_meta": {
+      "title": "CLIP Skip -2"
+    }
+  },
+  "99": {
+    "inputs": {
+      "model": [
+        "1",
+        0
+      ],
+      "clip": [
+        "2",
+        0
+      ],
+      "lora_name": "anima-preview-3-masterpieces-v5.safetensors",
+      "strength_model": 0,
+      "strength_clip": 0
+    },
+    "class_type": "LoraLoader",
+    "_meta": {
+      "title": "Character LoRA 99"
+    }
+  },
+  "11": {
+    "inputs": {
+      "text": "masterpiece, best quality, high quality, anime illustration, detailed eyes, clean lineart, sharp focus",
+      "clip": [
+        "99",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Positive Prompt 11"
+    }
+  },
+  "12": {
+    "inputs": {
+      "text": "worst quality, low quality, normal quality, lowres, blurry, bad anatomy, bad hands, extra fingers, missing fingers, malformed limbs, bad feet, extra limbs, cropped, out of frame, watermark, text, signature, jpeg artifacts",
+      "clip": [
+        "99",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Negative Prompt 12"
+    }
+  },
+  "20": {
+    "inputs": {
+      "image": "__ASTRBOT_IMG2IMG_SOURCE__",
+      "upload": "image"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "AstrBot Img2Img Source - prewired"
+    }
+  },
+  "21": {
+    "inputs": {
+      "image": [
+        "20",
+        0
+      ],
+      "aspect_ratio": "original",
+      "proportional_width": 1,
+      "proportional_height": 1,
+      "fit": "crop",
+      "method": "lanczos",
+      "round_to_multiple": "8",
+      "scale_to_side": "longest",
+      "scale_to_length": 896,
+      "background_color": "#000000"
+    },
+    "class_type": "LayerUtility: ImageScaleByAspectRatio V2",
+    "_meta": {
+      "title": "Scale Source Lite 896"
+    }
+  },
+  "30": {
+    "inputs": {
+      "image": [
+        "21",
+        0
+      ],
+      "preprocessor": "DepthAnythingV2Preprocessor",
+      "resolution": 640
+    },
+    "class_type": "AIO_Preprocessor",
+    "_meta": {
+      "title": "Depth Structure"
+    }
+  },
+  "31": {
+    "inputs": {
+      "control_net_name": "illustriousXLDepth_v20.safetensors"
+    },
+    "class_type": "ControlNetLoader",
+    "_meta": {
+      "title": "Load Illustrious Depth ControlNet"
+    }
+  },
+  "32": {
+    "inputs": {
+      "positive": [
+        "11",
+        0
+      ],
+      "negative": [
+        "12",
+        0
+      ],
+      "control_net": [
+        "31",
+        0
+      ],
+      "image": [
+        "30",
+        0
+      ],
+      "vae": [
+        "1",
+        2
+      ],
+      "strength": 0.22,
+      "start_percent": 0,
+      "end_percent": 0.7
+    },
+    "class_type": "ControlNetApplyAdvanced",
+    "_meta": {
+      "title": "Depth ControlNet Apply"
+    }
+  },
+  "22": {
+    "inputs": {
+      "pixels": [
+        "21",
+        0
+      ],
+      "vae": [
+        "1",
+        2
+      ]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "VAE Encode Scaled Source"
+    }
+  },
+  "23": {
+    "inputs": {
+      "seed": 529027640026575,
+      "steps": 18,
+      "cfg": 5.6,
+      "sampler_name": "euler_ancestral",
+      "scheduler": "normal",
+      "denoise": 0.58,
+      "model": [
+        "99",
+        0
+      ],
+      "positive": [
+        "32",
+        0
+      ],
+      "negative": [
+        "32",
+        1
+      ],
+      "latent_image": [
+        "22",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "Illustrious Img2Img Base KSampler"
+    }
+  },
+  "26": {
+    "inputs": {
+      "tile_size": 512,
+      "overlap": 64,
+      "temporal_size": 64,
+      "temporal_overlap": 8,
+      "samples": [
+        "23",
+        0
+      ],
+      "vae": [
+        "1",
+        2
+      ]
+    },
+    "class_type": "VAEDecodeTiled",
+    "_meta": {
+      "title": "Tiled VAE Decode"
+    }
+  },
+  "66": {
+    "inputs": {
+      "filename_prefix": "AstrBot_Illustrious_img2img_lite",
+      "images": [
+        "26",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Output 66"
+    }
+  }
+}

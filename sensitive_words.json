@@ -1,0 +1,138 @@
+{
+            "legacy_lite": [
+                                "shit", "poop", "feces", "urine", "piss", "scat", "pee", "peeing", "pissing",
+                "defecate", "defecation", "excrement", "bowel", "toilet", "potty",
+        
+                                "blood", "gore", "bloody", "wound", "injury", "decapitation", "guro", "torture",
+                "behead", "severed", "bleeding", "hemorrhage", "bruise", "bruised", "cut", "cuts",
+                "stab", "stabbing", "slash", "slashing", "violence", "violent", "massacre",
+                "butcher", "mutilate", "dismember", "amputate", "laceration", "gash",
+        
+                                "obese", "fat", "chubby", "plump", "overweight", "fatty", "fatso", "lard",
+                "blob", "thick", "chunky", "hefty", "pudgy", "rotund", "tubby", "porky",
+        
+                                "deformed", "mutilated", "amputee", "missing limbs", "extra limbs", "malformed", 
+                "mutation", "deformity", "disfigured", "disfigure", "cripple", "crippled",
+                "handicap", "handicapped", "disabled", "disability", "prosthetic", "stump",
+                "birth defect", "abnormal", "freak", "grotesque", "monstrous",
+        
+                                "zoophilia", "bestiality", "zoo", "animal sex", "beast", "bestial",
+                "furry sex", "anthro sex", "knot", "knotting", "mating",
+        
+                                "futanari", "futa", "dickgirl", "shemale", "newhalf", "hermaphrodite",
+                "trans", "transgender", "ladyboy", "femboy", "trap", "otokonoko",
+        
+                                "yaoi", "bara", "bl", "boys love", "gay", "male on male", "homo",
+                "homosexual", "queer", "mlm", "shounen ai", "june", "tanbi",
+                "seme", "uke", "fujoshi", "fudanshi",
+
+                                                "da bian", "dabian", "niao", "xiao bian", "xiaobian", "bian bian", "bianbian",
+                "la shi", "lashi", "ce suo", "cesuo", "mao keng", "maokeng",
+        
+                                "xie xing", "xiexing", "duan tou", "duantou", "shang kou", "shangkou",
+                "ku xing", "kuxing", "lie qi", "lieqi", "sha ren", "sharen", "can sha", "cansha",
+                "xue", "liu xue", "liuxue", "bao li", "baoli", "nue sha", "nuesha",
+        
+                                "fei pang", "feipang", "chao zhong", "chaozhong", "si fei zhu", "sifeizhu",
+                "pang zi", "pangzi", "fei zhu", "feizhu", "da pang zi", "dapangzi",
+        
+                                "ji xing", "jixing", "jie zhi", "jiezhi", "can ji", "canji",
+                "tu bian", "tubian", "duo zhi", "duozhi", "que xian", "quexian",
+                "guai wu", "guaiwu", "guai tai", "guaitai",
+        
+                                "shou jiao", "shoujiao", "ren shou", "renshou", "dong wu", "dongwu",
+                "ye shou", "yeshou", "qin shou", "qinshou",
+        
+                                "dan mei", "danmei", "nan tong", "nantong", "nan nan", "nannan",
+                "gei", "shou", "gong", "tong xing lian", "tongxinglian", "ji you", "jiyou",
+        
+                                "fu ta", "futa", "bian xing", "bianxing", "liang xing", "liangxing",
+                "yin yang ren", "yinyangren", "shuang xing", "shuangxing"
+            ],
+
+                        "minors": [
+                "loli", "lolicon", "shota", "shotacon", "lolita", "shouta",
+                "child porn", "cp", "underage", "minor", "kid", "kiddie",
+                "jk", "js", "jc", "elementary", "middle school", "kindergarten",
+                "toddler", "infant", "baby", "preteen", "prepubescent",
+                "pedo", "pedophile", "pedophilia", "hebephile", "hebephilia"
+            ],
+    
+            "sexual_violence": [
+                "rape", "rapist", "raping", "sexual assault", "molest", "molestation",
+                "forced sex", "coerce", "noncon", "non-consensual", "dubcon", "dub-con",
+                "date rape", "drugged", "rohypnol", "roofies", "assault", "violate",
+                "gang rape", "gangrape", "abuse", "abused", "force", "forced",
+                "blackmail", "hypnosis", "mind break", "mindbreak", "slave", "slavery"
+            ],
+    
+            "bestiality_incest_necrophilia": [
+                "bestiality", "zoophilia", "zoo", "animal sex", "beast sex",
+                "incest", "stepbro", "stepbrother", "stepsis", "stepsister", "stepmom",
+                "stepdad", "stepfather", "stepmother", "daddy", "mommy", "sister", "brother",
+                "father daughter", "mother son", "sibling", "family sex", "inbreeding",
+                "necrophilia", "necrophile", "corpse", "dead body", "cadaver",
+                "snuff", "death", "dying", "kill", "murder"
+            ],
+    
+            "violence_gore": [
+                "blood", "bloody", "gore", "gory", "guro", "bleeding", "hemorrhage",
+                "severed", "dismember", "decapitate", "decapitation", "behead", "beheading",
+                "amputation", "mutilate", "mutilation", "dissect", "dissection",
+                "disembowel", "entrails", "intestines", "organs", "viscera",
+                "slit throat", "stabbed", "execution", "impale", "impaled",
+                "torture", "corpse", "rotting", "laceration", "eviscerate",
+                "cannibalism", "cannibal", "flesh", "meat", "butcher"
+            ],
+    
+            "scat_urine_vomit": [
+                "shit", "poop", "feces", "urine", "pee", "piss", "scat", "scatology",
+                "vomit", "puke", "throw up", "barf", "diarrhea", "enema", 
+                "coprophagia", "coprophilia", "urophagia", "urophilia", "watersports",
+                "golden shower", "brown shower", "toilet", "potty", "diaper",
+                "da bian", "dabian", "niao", "la shi", "lashi"
+            ],
+    
+            "self_harm": [
+                "suicide", "self harm", "self-harm", "selfharm", "cut", "cutting",
+                "kms", "kys", "kill myself", "kill yourself", "end my life",
+                "slit wrists", "slit wrist", "overdose", "od", "hang myself",
+                "hanging", "noose", "jump off", "pill", "pills", "bleach",
+                "razor", "blade", "burn", "burning", "self mutilation"
+            ],
+    
+            "sexual": [
+                "sex", "porn", "pornography", "xxx", "adult", "explicit",
+                "nipple", "nipples", "areola", "tit", "tits", "titty", "titties",
+                "breasts", "breast", "boobs", "boob", "busty", "cleavage",
+                "ass", "butt", "buttocks", "anus", "anal", "oral", "fellatio",
+                "blowjob", "bj", "handjob", "hj", "footjob", "titjob", "paizuri",
+                "cum", "cumming", "semen", "ejaculate", "ejaculation", "orgasm",
+                "creampie", "bukkake", "facial", "deepthroat", "throat fuck",
+                "vagina", "vulva", "labia", "clitoris", "clit", "g-spot",
+                "penis", "dick", "cock", "phallus", "shaft", "glans", "balls",
+                "pussy", "cunt", "cunnilingus", "fingering", "masturbate",
+                "69", "threesome", "foursome", "gangbang", "orgy", "swinger",
+                "milf", "dilf", "gilf", "mature", "cougar",
+                "pegging", "rimming", "fisting", "anal beads", "dildo", "vibrator",
+                "nsfw", "lewd", "erotic", "explicit", "r18", "r-18", "adult only",
+                "hentai", "ecchi", "ahegao", "paipan", "oppai", "ero"
+            ],
+    
+            "nudity": [
+                "nude", "naked", "topless", "bottomless", "nip slip", "exposed",
+                "undress", "undressed", "strip", "stripped", "bare", "unclothed",
+                "birthday suit", "au naturel", "in the buff", "skinny dip",
+                "wardrobe malfunction", "see through", "transparent", "revealing"
+            ],
+    
+            "fetish": [
+                "bdsm", "bondage", "dominatrix", "fetish", "kink", "kinky",
+                "spanking", "spank", "whip", "whipping", "paddle", "cane",
+                "submissive", "sub", "dom", "dominant", "master", "slave",
+                "chastity", "chastity belt", "collar", "leash", "cage",
+                "latex", "leather", "rubber", "pvc", "catsuit",
+                "footjob", "foot fetish", "feet", "toes", "soles",
+                "armpit", "smell", "sniff", "lick", "worship"
+            ]
+        }

@@ -1,0 +1,229 @@
+{
+  "8": {
+    "inputs": {
+      "samples": [
+        "19",
+        0
+      ],
+      "vae": [
+        "15",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "11": {
+    "inputs": {
+      "text": "full character replacement edit, preserve source composition and pose, target character identity dominates, anime illustration, clean readable meme sticker style",
+      "clip": [
+        "45",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Positive Prompt"
+    }
+  },
+  "12": {
+    "inputs": {
+      "text": "worst quality, low quality, blurry, text, watermark, logo, extra fingers, missing fingers, bad anatomy, deformed, duplicate, unchanged source character, original character identity, partial character replacement, only eyes changed, face-only swap, identity mixing, wrong hair, wrong outfit, source outfit kept",
+      "clip": [
+        "45",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Negative Prompt"
+    }
+  },
+  "15": {
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "19": {
+    "inputs": {
+      "seed": 826759515445902,
+      "steps": 28,
+      "cfg": 2.5,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1,
+      "model": [
+        "47",
+        0
+      ],
+      "positive": [
+        "70",
+        0
+      ],
+      "negative": [
+        "71",
+        0
+      ],
+      "latent_image": [
+        "72",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "37": {
+    "inputs": {
+      "unet_name": "anima_baseV10.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Anima UNet"
+    }
+  },
+  "44": {
+    "inputs": {
+      "lora_name": "qwen_image_union_diffsynth_lora.safetensors",
+      "strength_model": 1,
+      "model": [
+        "37",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "Qwen Image Union Control LoRA"
+    }
+  },
+  "45": {
+    "inputs": {
+      "clip_name": "qwen_3_06b_base.safetensors",
+      "type": "stable_diffusion",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "47": {
+    "inputs": {
+      "shift": 3,
+      "model": [
+        "99",
+        0
+      ]
+    },
+    "class_type": "ModelSamplingAuraFlow",
+    "_meta": {
+      "title": "AuraFlow Sampling"
+    }
+  },
+  "66": {
+    "inputs": {
+      "filename_prefix": "Anima_CharacterReplace",
+      "images": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "70": {
+    "inputs": {
+      "conditioning": [
+        "11",
+        0
+      ],
+      "latent": [
+        "72",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "Positive Reference Latent"
+    }
+  },
+  "71": {
+    "inputs": {
+      "conditioning": [
+        "12",
+        0
+      ],
+      "latent": [
+        "72",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "Negative Reference Latent"
+    }
+  },
+  "72": {
+    "inputs": {
+      "pixels": [
+        "74",
+        0
+      ],
+      "vae": [
+        "15",
+        0
+      ]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "Canny Structure Latent"
+    }
+  },
+  "73": {
+    "inputs": {
+      "image": "__ASTRBOT_IMG2IMG_SOURCE__"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "AstrBot Img2Img Source - prewired"
+    }
+  },
+  "74": {
+    "inputs": {
+      "image": [
+        "73",
+        0
+      ],
+      "low_threshold": 0.26,
+      "high_threshold": 0.35
+    },
+    "class_type": "Canny",
+    "_meta": {
+      "title": "Canny Structure"
+    }
+  },
+  "99": {
+    "inputs": {
+      "lora_name": "anima-preview-3-masterpieces-v5.safetensors",
+      "strength_model": 0,
+      "model": [
+        "44",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "LoRA 1 - Character controlled by plugin"
+    }
+  }
+}

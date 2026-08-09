@@ -1,0 +1,2470 @@
+{
+  "server_address": {
+    "description": "ComfyUI 地址",
+    "type": "string",
+    "default": "127.0.0.1:8188",
+    "hint": "例如 127.0.0.1:8188 或 http://127.0.0.1:8188"
+  },
+  "server_ssl_verify": {
+    "description": "校验 ComfyUI HTTPS 证书",
+    "type": "bool",
+    "default": false,
+    "hint": "关闭后可连接自签名证书的 FRP/反代 ComfyUI；只影响 ComfyUI API，不影响 LLM、Civitai 或模型下载。"
+  },
+  "command_settings": {
+    "description": "指令设置",
+    "type": "object",
+    "items": {
+      "prefix": {
+        "description": "主前缀",
+        "type": "string",
+        "default": "jh",
+        "hint": "日常绘图只用 酒狐来点；管理命令可用 /jh。"
+      }
+    }
+  },
+  "self_update_settings": {
+    "description": "插件自更新",
+    "type": "object",
+    "items": {
+      "enable": {
+        "description": "启用自更新命令",
+        "type": "bool",
+        "default": true
+      },
+      "remote": {
+        "description": "Git remote 名称",
+        "type": "string",
+        "default": "origin"
+      },
+      "branch": {
+        "description": "更新分支",
+        "type": "string",
+        "default": "",
+        "hint": "留空使用当前分支；detached HEAD 时必须填写，例如 master。"
+      },
+      "repo_url": {
+        "description": "仓库地址",
+        "type": "string",
+        "default": "",
+        "hint": "仅在 remote 不存在时自动添加；不要在 URL 里写 token。私库推荐 SSH deploy key。"
+      },
+      "token_env": {
+        "description": "HTTPS Token 环境变量名",
+        "type": "string",
+        "default": "JH_PLUGIN_GIT_TOKEN",
+        "hint": "这里填环境变量名，例如 JH_PLUGIN_GIT_TOKEN；不要填 /root/.ssh/... 路径。SSH 路径请填到 SSH 私钥路径。误填 github_pat_/ghp_ token 时会自动兼容。"
+      },
+      "username": {
+        "description": "HTTPS 用户名",
+        "type": "string",
+        "default": "x-access-token"
+      },
+      "access_token": {
+        "description": "HTTPS Token",
+        "type": "string",
+        "default": "",
+        "hint": "不推荐直接写配置；优先使用 token_env 或 SSH deploy key。日志会打码。"
+      },
+      "proxy": {
+        "description": "自更新代理",
+        "type": "string",
+        "default": "",
+        "hint": "留空时复用 civitai_settings.proxy 或 model_download.proxy。Docker 里访问 GitHub 不稳时可填 http://host.docker.internal:7890 或你的代理地址。"
+      },
+      "ssh_key_path": {
+        "description": "SSH 私钥路径",
+        "type": "string",
+        "default": "",
+        "hint": "私库推荐给 GitHub 仓库添加只读 deploy key，然后这里填容器内私钥路径，例如 /root/.ssh/jh_comfyui_update。"
+      },
+      "allow_dirty_update": {
+        "description": "允许有未提交代码改动时更新",
+        "type": "bool",
+        "default": false,
+        "hint": "默认关闭，避免覆盖本地手改代码。"
+      },
+      "auto_reload_after_update": {
+        "description": "更新后自动热重载",
+        "type": "bool",
+        "default": true,
+        "hint": "开启后，酒狐更新画图成功覆盖代码后会延迟约 1 秒调用 AstrBot 插件重载。"
+      },
+      "timeout": {
+        "description": "Git 命令超时秒数",
+        "type": "int",
+        "default": 180
+      },
+      "history_limit": {
+        "description": "更新记录保留条数",
+        "type": "int",
+        "default": 30
+      },
+      "history_render_browser": {
+        "description": "更新记录本地渲染浏览器",
+        "type": "string",
+        "default": "chromium",
+        "hint": "使用 Playwright 本地截图。默认 chromium；可选 chromium、firefox、webkit。"
+      }
+    }
+  },
+  "sub_config": {
+    "description": "基础出图参数",
+    "type": "object",
+    "items": {
+      "steps": {
+        "description": "默认步数",
+        "type": "int",
+        "default": 20
+      },
+      "width": {
+        "description": "默认宽度",
+        "type": "int",
+        "default": 768
+      },
+      "height": {
+        "description": "默认高度",
+        "type": "int",
+        "default": 1024
+      },
+      "fixed_seed_enabled": {
+        "description": "启用固定生成种子",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后 seed 可固定为 0 或正整数；关闭时每次随机。通常用 /jh seed <数字> 和 /jh seed random 自动维护。"
+      },
+      "seed": {
+        "description": "默认生成种子",
+        "type": "int",
+        "default": 0,
+        "hint": "固定种子的数值，允许 0；是否固定由 fixed_seed_enabled 控制。也可用 /jh seed <数字> 或在提示词里写 seed=0 临时指定。"
+      },
+      "negative_prompt": {
+        "description": "默认负面提示词",
+        "type": "text",
+        "default": "worst quality, low quality, normal quality, lowres, blurry, bad anatomy, bad hands, extra fingers, missing fingers, deformed, mutated, text, watermark, signature, jpeg artifacts, cropped",
+        "hint": "也可以用 /jh 负面 设置 <内容> 临时覆盖。"
+      }
+    }
+  },
+  "workflow_settings": {
+    "description": "文生图工作流",
+    "type": "object",
+    "items": {
+      "json_file": {
+        "description": "默认工作流文件",
+        "type": "string",
+        "default": "finish_optimized_api.json",
+        "options": [
+          "character_replace_anima_reference_api.json",
+          "character_replace_anima_lllite_api.json",
+          "character_replace_union_control_api.json",
+          "finish_illustrious_api.json",
+          "finish_illustrious_multi_lora_regional_api.json",
+          "finish_illustrious_multi_lora_api.json",
+          "img2img_illustrious_api.json",
+          "finish_optimized_api.json",
+          "workflow_api.json"
+        ],
+        "enum": [
+          "character_replace_anima_reference_api.json",
+          "character_replace_anima_lllite_api.json",
+          "character_replace_union_control_api.json",
+          "finish_illustrious_api.json",
+          "finish_illustrious_multi_lora_regional_api.json",
+          "finish_illustrious_multi_lora_api.json",
+          "img2img_illustrious_api.json",
+          "finish_optimized_api.json",
+          "workflow_api.json"
+        ]
+      },
+      "input_node_id": {
+        "description": "正面提示词节点 ID",
+        "type": "string",
+        "default": "11"
+      },
+      "neg_node_id": {
+        "description": "负面提示词节点 ID",
+        "type": "string",
+        "default": "12"
+      },
+      "output_node_id": {
+        "description": "输出节点 ID",
+        "type": "string",
+        "default": "66"
+      }
+    }
+  },
+  "video_settings": {
+    "description": "Wan 图生视频",
+    "type": "object",
+    "items": {
+      "enable": {
+        "description": "启用图生视频入口",
+        "type": "bool",
+        "default": true,
+        "hint": "入口：引用或附带一张图，然后发送 酒狐来点视频 <动作/镜头描述>。"
+      },
+      "workflow": {
+        "description": "Wan I2V 工作流档位",
+        "type": "string",
+        "default": "wan_i2v_api.json",
+        "options": [
+          "wan_i2v_api.json",
+          "wan_i2v_quality.json"
+        ],
+        "enum": [
+          "wan_i2v_api.json",
+          "wan_i2v_quality.json"
+        ],
+        "hint": "wan_i2v_api.json=快速档(Q4 GGUF 4步，速度快、画质一般，显存友好)；wan_i2v_quality.json=画质档(FP8 原生双模型 20步，对齐Wan2.2教程原生工作流，画质上限高、单段较慢，需额外下载FP8模型)。两者都已接入 CLIPVision 语义引导。"
+      },
+      "clip_vision_model": {
+        "description": "CLIP Vision 模型",
+        "type": "string",
+        "default": "clip_vision_h.safetensors",
+        "hint": "图生视频语义引导模型，放到 ComfyUI/models/clip_vision/。8.5.1 起图生视频必需——历史工作流缺少 CLIPVisionEncode 管线是画质塌房的主要原因。推荐 clip_vision_h.safetensors(或 Wan 官方 open-clip-xlm-roberta-large-vit-huge-14)。"
+      },
+      "sampler_preset": {
+        "description": "采样预设",
+        "type": "string",
+        "default": "auto",
+        "options": [
+          "auto",
+          "fast_4step",
+          "quality_20step"
+        ],
+        "enum": [
+          "auto",
+          "fast_4step",
+          "quality_20step"
+        ],
+        "hint": "提供一整套采样参数，避免逐字段默认值打架。auto=按工作流文件名推断(quality→20步euler shift8, 否则4步lcm)；fast_4step=强制4步lcm(快速档)；quality_20step=强制20步euler shift8(画质档,对齐官方)。OOM降级时自动用快速档兜底。"
+      },
+      "default_prompt": {
+        "description": "默认正面提示词(图生视频)",
+        "type": "string",
+        "default": "镜头缓缓推进，角色保持自然姿态，头发与衣摆随轻风微微飘动，目光注视镜头，柔和光影，细腻肌肤质感，电影级画质，高细节",
+        "hint": "用户未写运镜描述时的兜底提示词。按官方通义万相2.2图生视频公式=运动+运镜，应优先描述动作与镜头运动(如\"镜头推进\"\"固定镜头\")，再补光影/质感。8.5.2起默认词改为带运镜的中文公式，避免历史英文空泛词导致肢体/足部崩坏。"
+      },
+      "negative_prompt": {
+        "description": "默认负面提示词(图生视频)",
+        "type": "text",
+        "default": "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走，肢体变形，足部畸形，多余脚趾，融化的脚趾，穿模，闪烁，时序不一致，过饱和，色彩断层，色彩漂移，荧光伪影",
+        "hint": "透传到 Wan I2V 负面提示词节点，用于压制过饱和、色彩断层、段间漂移、闪烁和常见肢体崩坏。"
+      },
+      "input_node_id": {
+        "description": "正面提示词节点 ID",
+        "type": "string",
+        "default": "5"
+      },
+      "neg_node_id": {
+        "description": "负面提示词节点 ID",
+        "type": "string",
+        "default": "6"
+      },
+      "output_node_id": {
+        "description": "视频输出节点 ID",
+        "type": "string",
+        "default": "11"
+      },
+      "width": {
+        "description": "视频宽度",
+        "type": "int",
+        "default": 720,
+        "hint": "单段每次的生成分辨率。720×480 横版适合 16GB 显存；显存吃紧可降到 640×384。"
+      },
+      "height": {
+        "description": "视频高度",
+        "type": "int",
+        "default": 480
+      },
+      "frames": {
+        "description": "单段帧数",
+        "type": "int",
+        "default": 81,
+        "hint": "每一段（分段续写）的帧数。81 帧 @16fps ≈ 5 秒。Wan2.2 推荐 4n+1（如 49/65/81）。"
+      },
+      "fps": {
+        "description": "单段原始帧率",
+        "type": "int",
+        "default": 16,
+        "hint": "Wan2.2 按 16fps 训练，保持 16 画面才自然；最终会插帧到 target_fps。"
+      },
+      "segments": {
+        "description": "分段续写段数",
+        "type": "int",
+        "default": 4,
+        "hint": "用上一段末帧作为下一段图生视频输入，拼接成长视频。4 段 ×5 秒 ≈ 20 秒。设为 1 则回到单段旧行为。"
+      },
+      "interpolate_enable": {
+        "description": "ffmpeg 插帧",
+        "type": "bool",
+        "default": true,
+        "hint": "拼接后用 ffmpeg minterpolate 把 fps 提升到 target_fps，画面更丝滑。无需安装任何 ComfyUI 节点。"
+      },
+      "interpolate_mci": {
+        "description": "插帧用 mci 运动补偿(易糊化)",
+        "type": "bool",
+        "default": false,
+        "hint": "关闭(默认)走 blend 纯时域混合，快速动作不糊化、不重影，观感更稳定；开启则用 mci 运动估计，帧数更准但快动作下易糊。"
+      },
+      "color_match": {
+        "description": "分段色彩锚定到原图",
+        "type": "bool",
+        "default": true,
+        "hint": "分段续写时用 ffmpeg colormatch 把每段(及最终整段)色彩锚定回原始参考图，消除段间偏色/闪烁(尤其第2段)，需 ffmpeg 带 colormatch 滤镜。"
+      },
+      "target_fps": {
+        "description": "插帧目标帧率",
+        "type": "int",
+        "default": 32,
+        "hint": "插帧后的最终帧率，建议为单段帧率的整数倍（16→32）。"
+      },
+      "steps": {
+        "description": "采样步数",
+        "type": "int",
+        "default": 4
+      },
+      "cfg_high": {
+        "description": "高噪 CFG",
+        "type": "float",
+        "default": 3.0
+      },
+      "cfg_low": {
+        "description": "低噪 CFG",
+        "type": "float",
+        "default": 3.0
+      },
+      "sampler_name": {
+        "description": "采样器",
+        "type": "string",
+        "default": "lcm"
+      },
+      "scheduler": {
+        "description": "调度器",
+        "type": "string",
+        "default": "simple"
+      },
+      "boundary": {
+        "description": "MoE 切换边界",
+        "type": "float",
+        "default": 0.9
+      },
+      "sigma_shift": {
+        "description": "Sigma Shift",
+        "type": "float",
+        "default": 5.0
+      },
+      "crf": {
+        "description": "MP4 质量 CRF",
+        "type": "int",
+        "default": 19
+      },
+      "ffmpeg_path": {
+        "description": "ffmpeg 路径",
+        "type": "string",
+        "default": "",
+        "hint": "留空时优先使用 imageio_ffmpeg，找不到时自动尝试 Aki 自带 ffmpeg。"
+      },
+      "inline_send": {
+        "description": "直接发送可播放视频",
+        "type": "bool",
+        "default": true,
+        "hint": "开启后优先把 mp4 作为可播放视频内联发送(NapCat/OneBot video 段)；发送失败自动降级为文件上传。"
+      },
+      "send_as_password_zip": {
+        "description": "视频结果改发密码压缩包",
+        "type": "bool",
+        "default": true,
+        "hint": "默认开启，避免 QQ/OneBot 直发 mp4 卡死或失败。"
+      },
+      "archive_password": {
+        "description": "视频压缩包密码",
+        "type": "string",
+        "default": "114514"
+      },
+      "file_upload_timeout": {
+        "description": "视频压缩包上传超时秒数",
+        "type": "int",
+        "default": 90
+      },
+      "ai_prompt_enabled": {
+        "description": "AI 两段式整理视频提示词",
+        "type": "bool",
+        "default": true,
+        "hint": "先用 llm_settings.img2img_vision_* 识图生成源图描述，再交给文生图提示词 LLM 结合用户动作需求整理 Wan prompt；失败会回退原提示词。"
+      },
+      "ai_prompt_max_tokens": {
+        "description": "AI 视频提示词最大 token",
+        "type": "int",
+        "default": 700
+      },
+      "free_memory_before": {
+        "description": "生成前释放 ComfyUI 显存",
+        "type": "bool",
+        "default": true
+      },
+      "free_memory_after": {
+        "description": "生成后释放 ComfyUI 显存",
+        "type": "bool",
+        "default": true,
+        "hint": "Wan 会长时间占用大模型；开启后可降低下一次生成 CUDA 状态异常概率。"
+      },
+      "oom_retry_after_free": {
+        "description": "CUDA 异常或 OOM 后低显存重试一次",
+        "type": "bool",
+        "default": true
+      },
+      "fallback_width": {
+        "description": "OOM 降级宽度",
+        "type": "int",
+        "default": 448
+      },
+      "fallback_height": {
+        "description": "OOM 降级高度",
+        "type": "int",
+        "default": 448
+      },
+      "fallback_frames": {
+        "description": "OOM 降级帧数",
+        "type": "int",
+        "default": 33
+      },
+      "fallback_steps": {
+        "description": "OOM 降级步数",
+        "type": "int",
+        "default": 4
+      }
+    }
+  },
+  "model_family_settings": {
+    "description": "模型族设置",
+    "type": "object",
+    "items": {
+      "active_family": {
+        "description": "当前模型族",
+        "type": "string",
+        "default": "anima",
+        "options": [
+          "anima",
+          "illustrious"
+        ],
+        "enum": [
+          "anima",
+          "illustrious"
+        ],
+        "hint": "升级后默认保持 anima。切到 illustrious 后，文生图使用 Illustrious 工作流，LoRA 搜索只搜 Illustrious。"
+      },
+      "illustrious": {
+        "description": "Illustrious 模型族",
+        "type": "object",
+        "items": {
+          "base_models": {
+            "description": "Civitai LoRA BaseModel",
+            "type": "list",
+            "default": [
+              "Illustrious"
+            ]
+          },
+          "checkpoint_name": {
+            "description": "Illustrious Checkpoint（主模型）",
+            "type": "string",
+            "default": "Illustrious-XL-v2.0.safetensors",
+            "hint": "这里选主模型 checkpoint，文件应放在 ComfyUI/models/checkpoints。PerfectDeliberate 这类模型是 checkpoint，不会出现在角色 LoRA 或画风 LoRA 下拉里；找不到时先刷新/重启 ComfyUI，或在 model_download.checkpoint_dir 填 AstrBot 能访问的 checkpoints 目录。",
+            "options": [
+              "Illustrious-XL-v2.0.safetensors",
+              "waiIllustriousSDXL_v170.safetensors"
+            ]
+          },
+          "style_preset": {
+            "description": "Illustrious 内置画风预设",
+            "type": "string",
+            "default": "default",
+            "hint": "default 使用普通 Illustrious 插画配置；切回 default 会把 PerfectDeliberate checkpoint 重置为普通 Illustrious。perfectdeliberate_realism 会自动使用 perfectdeliberate_v90.safetensors、Euler a、最终 960x1440、34 steps、CFG 6.8，并限制角色 LoRA 强度；pvc 使用 WAI + PVC 专用工作流；newpvc 使用 Nova 3DCG + SSS/RIN 专用工作流；random 每次在内置画风里随机。",
+            "options": [
+              "default",
+              "perfectdeliberate_realism",
+              "pvc",
+              "newpvc",
+              "random"
+            ],
+            "enum": [
+              "default",
+              "perfectdeliberate_realism",
+              "pvc",
+              "newpvc",
+              "random"
+            ]
+          },
+          "txt2img_workflow": {
+            "description": "文生图工作流",
+            "type": "string",
+            "default": "finish_illustrious_api.json"
+          },
+          "multi_lora_txt2img_workflow": {
+            "description": "Illustrious 多人 LoRA 文生图工作流",
+            "type": "string",
+            "default": "finish_illustrious_multi_lora_api.json"
+          },
+          "multi_lora_mode": {
+            "description": "Illustrious multi-character LoRA mode",
+            "type": "string",
+            "default": "densediffusion",
+            "options": [
+              "auto",
+              "densediffusion",
+              "staged_multi_lora",
+              "regional_lora",
+              "safe_chain",
+              "disabled"
+            ],
+            "enum": [
+              "auto",
+              "densediffusion",
+              "staged_multi_lora",
+              "regional_lora",
+              "safe_chain",
+              "disabled"
+            ],
+            "hint": "densediffusion is the default path matching the reference two-character workflow: chain-load role LoRAs, then bind global and role prompts to split masks through DenseDiffusion. staged_multi_lora remains available as a manual compatibility mode."
+          },
+          "multi_lora_optional_refine": {
+            "description": "Enable optional multi-LoRA refine pass",
+            "type": "bool",
+            "default": false,
+            "hint": "Adds one low-denoise final full-frame Illustrious img2img blend after staged role passes. Off by default to avoid extra time and style drift."
+          },
+          "multi_lora_staged_base_workflow": {
+            "description": "Staged multi-LoRA base txt2img workflow",
+            "type": "string",
+            "default": "finish_illustrious_multi_lora_staged_base_api.json"
+          },
+          "multi_lora_staged_img2img_workflow": {
+            "description": "Staged multi-LoRA regional img2img workflow",
+            "type": "string",
+            "default": "img2img_illustrious_multi_lora_staged_api.json"
+          },
+          "multi_lora_staged_inpaint_denoise": {
+            "description": "Staged multi-LoRA per-role inpaint denoise",
+            "type": "float",
+            "default": 0.9,
+            "hint": "Higher values rewrite each masked role more strongly, improving LoRA identity isolation at the cost of extra redraw freedom."
+          },
+          "multi_lora_staged_control_strength": {
+            "description": "Staged multi-LoRA Depth ControlNet strength",
+            "type": "float",
+            "default": 0.16
+          },
+          "multi_lora_staged_mask_overlap": {
+            "description": "Staged multi-LoRA regional mask overlap",
+            "type": "float",
+            "default": 0.06,
+            "hint": "Lower overlap keeps role regions more isolated; raise only if split seams are more visible than identity bleed."
+          },
+          "multi_lora_staged_mask_blur": {
+            "description": "Staged multi-LoRA regional mask blur radius",
+            "type": "float",
+            "default": 6,
+            "hint": "Softens split-mask seams before inpaint while keeping character regions tight."
+          },
+          "multi_lora_install_policy": {
+            "description": "Multi-LoRA optional node install policy",
+            "type": "string",
+            "default": "optional_only",
+            "options": [
+              "optional_only",
+              "never"
+            ],
+            "enum": [
+              "optional_only",
+              "never"
+            ],
+            "hint": "optional_only allows future additive custom node installs without deleting existing ComfyUI plugins."
+          },
+          "img2img_workflow": {
+            "description": "Illustrious img2img workflow",
+            "type": "string",
+            "default": "img2img_illustrious_api.json"
+          },
+          "input_node_id": {
+            "description": "正面提示词节点 ID",
+            "type": "string",
+            "default": "11"
+          },
+          "neg_node_id": {
+            "description": "负面提示词节点 ID",
+            "type": "string",
+            "default": "12"
+          },
+          "output_node_id": {
+            "description": "输出节点 ID",
+            "type": "string",
+            "default": "66"
+          },
+          "lora_node_id": {
+            "description": "角色 LoRA 节点 ID",
+            "type": "string",
+            "default": "99"
+          },
+          "sampler": {
+            "description": "采样器",
+            "type": "string",
+            "default": "euler_ancestral"
+          },
+          "scheduler": {
+            "description": "调度器",
+            "type": "string",
+            "default": "normal"
+          },
+          "steps": {
+            "description": "步数",
+            "type": "int",
+            "default": 60
+          },
+          "cfg": {
+            "description": "CFG",
+            "type": "float",
+            "default": 5.15
+          },
+          "refine_steps": {
+            "description": "Hi-Res 精修步数",
+            "type": "int",
+            "default": 24,
+            "hint": "二段 Hi-Res Fix 精修采样步数。base 原生出图后放大再用该步数重画细节，0 表示跳过精修。"
+          },
+          "refine_cfg": {
+            "description": "Hi-Res 精修 CFG",
+            "type": "float",
+            "default": 5.0
+          },
+          "refine_denoise": {
+            "description": "Hi-Res 精修重绘强度",
+            "type": "float",
+            "default": 0.45,
+            "hint": "二段精修的 denoise，越高细节重画越多但越偏离 base，0.35-0.5 通常稳定。"
+          },
+          "latent_upscale_by": {
+            "description": "Hi-Res 放大倍率",
+            "type": "float",
+            "default": 1.5,
+            "hint": "base 原生尺寸的 latent 放大倍率。896x1344 在 1.5x 下输出约 1344x2016。"
+          },
+          "width": {
+            "description": "默认竖图宽度（base 原生，未放大）",
+            "type": "int",
+            "default": 896
+          },
+          "height": {
+            "description": "默认竖图高度（base 原生，未放大）",
+            "type": "int",
+            "default": 1344
+          },
+          "enable_prompt_aspect_detect": {
+            "description": "根据 Prompt 自动识别横竖图",
+            "type": "bool",
+            "default": true,
+            "hint": "开启后，prompt 写横图/横着的/landscape 会用 landscape 尺寸；写宽屏/16:9 会用 wide 尺寸；写 尺寸 1344x768 或单独 1344x768 会直接用该尺寸。"
+          },
+          "landscape_width": {
+            "description": "横图宽度（base 原生，未放大）",
+            "type": "int",
+            "default": 1344
+          },
+          "landscape_height": {
+            "description": "横图高度（base 原生，未放大）",
+            "type": "int",
+            "default": 896
+          },
+          "wide_width": {
+            "description": "宽屏宽度（base 原生，未放大）",
+            "type": "int",
+            "default": 1344
+          },
+          "wide_height": {
+            "description": "宽屏高度（base 原生，未放大）",
+            "type": "int",
+            "default": 768
+          },
+          "square_size": {
+            "description": "方图边长（base 原生，未放大）",
+            "type": "int",
+            "default": 1152
+          },
+          "enable_single_subject_foot_detailer": {
+            "description": "Illustrious single-subject foot Detailer",
+            "type": "bool",
+            "default": true,
+            "hint": "Requires ComfyUI-Impact-Pack, ComfyUI-Impact-Subpack, UltralyticsDetectorProvider, ImpactSimpleDetectorSEGS and DetailerForEach. Missing dependency stops generation."
+          },
+          "foot_detailer_detector_model": {
+            "description": "Foot Detailer YOLO bbox model",
+            "type": "string",
+            "default": "foot-yolov8l.pt",
+            "hint": "Install via scripts/astrbot_comfyui_setup.bat or place under ComfyUI/models/ultralytics/bbox."
+          },
+          "foot_detailer_steps": {
+            "description": "Foot Detailer steps",
+            "type": "int",
+            "default": 26
+          },
+          "foot_detailer_cfg": {
+            "description": "Foot Detailer CFG",
+            "type": "float",
+            "default": 4.6
+          },
+          "foot_detailer_denoise": {
+            "description": "Foot Detailer denoise",
+            "type": "float",
+            "default": 0.24
+          },
+          "enable_single_subject_output_audit": {
+            "description": "Illustrious single-subject output audit",
+            "type": "bool",
+            "default": true,
+            "hint": "Requires ComfyUI-AstrBot-LoraBridge 1.4.0+, ultralytics, face_yolov8m.pt and person_yolov8s-seg.pt. Duplicate face/person outputs are rejected and retried instead of sent."
+          },
+          "subject_audit_face_detector_model": {
+            "description": "Single-subject face audit YOLO bbox model",
+            "type": "string",
+            "default": "face_yolov8m.pt",
+            "hint": "Install via scripts/astrbot_comfyui_setup.bat or place under ComfyUI/models/ultralytics/bbox."
+          },
+          "subject_audit_person_detector_model": {
+            "description": "Single-subject person audit YOLO segm model",
+            "type": "string",
+            "default": "person_yolov8s-seg.pt",
+            "hint": "Install via scripts/astrbot_comfyui_setup.bat or place under ComfyUI/models/ultralytics/segm."
+          },
+          "subject_audit_max_retries": {
+            "description": "Single-subject audit retry count",
+            "type": "int",
+            "default": 2
+          },
+          "subject_audit_face_threshold": {
+            "description": "Single-subject face audit threshold",
+            "type": "float",
+            "default": 0.35
+          },
+          "subject_audit_person_threshold": {
+            "description": "Single-subject person audit threshold",
+            "type": "float",
+            "default": 0.35
+          },
+          "img2img_denoise": {
+            "description": "Illustrious img2img denoise",
+            "type": "float",
+            "default": 0.6
+          },
+          "img2img_refine_denoise": {
+            "description": "Illustrious 图生图二采 denoise",
+            "type": "float",
+            "default": 0.0,
+            "hint": "内置低显存工作流默认单采，此项仅在自定义工作流有 refine 采样器时生效。"
+          },
+          "img2img_control_strength": {
+            "description": "Illustrious 图生图 Depth ControlNet 强度",
+            "type": "float",
+            "default": 0.22
+          },
+          "img2img_scale_to_length": {
+            "description": "Illustrious 图生图源图长边",
+            "type": "int",
+            "default": 896
+          },
+          "img2img_preprocessor_resolution": {
+            "description": "Illustrious 图生图 Depth 预处理分辨率",
+            "type": "int",
+            "default": 640
+          },
+          "img2img_latent_upscale_by": {
+            "description": "Illustrious 图生图 latent 放大倍率",
+            "type": "float",
+            "default": 1.0,
+            "hint": "低显存建议 1.0；大于 1 会明显增加显存压力。"
+          },
+          "default_strength_model": {
+            "description": "Illustrious LoRA model 强度",
+            "type": "float",
+            "default": 0.68
+          },
+          "default_strength_clip": {
+            "description": "Illustrious LoRA clip 强度",
+            "type": "float",
+            "default": 0.45
+          },
+          "quality_prefix": {
+            "description": "Illustrious 质量前缀",
+            "type": "text",
+            "default": "masterpiece, best quality, high quality, anime illustration, detailed eyes, clean eye shape"
+          },
+          "negative_prompt": {
+            "description": "Illustrious 默认负面词",
+            "type": "text",
+            "default": "worst quality, low quality, bad anatomy, bad hands, bad feet, extra fingers, missing fingers, extra limbs, distorted face, blurry, watermark, text, signature"
+          },
+          "prompt_translate_system_prompt": {
+            "description": "Illustrious LLM 转译系统提示词",
+            "type": "text",
+            "default": "You are an Illustrious XL anime prompt translator. Convert the user's Chinese plain-language image request into concise English comma-separated Danbooru-style tags and natural anime prompt phrases. Keep every user-specified character, action, pose, expression, clothing, scene, camera angle, spatial direction and visible detail. Keep the scene single-character unless the user explicitly asks for multiple characters, a group, twins, a couple, or another person. Do not invent cloned bodies, duplicate characters, extra people, outfits, places, actions or body traits. When the user specifies camera position such as front, back, left, right, above, below, high angle or low angle, translate it into precise camera/view tags. Preserve explicit counts for accessories such as rings and do not add extra rings or jewelry. Keep the matched character's original hair color, fur color, eye color and iconic color design unless the raw user request explicitly changes them. Do not add generic color, lighting, anatomy, hand, foot, or quality padding unless the raw request needs it. Do not output monochrome, grayscale, sketch, lineart-only, or colorless tags unless the raw user request explicitly asks for them. For full-body or distant framing, keep the face and eyes readable with as few tags as possible. Only add hand, finger, foot or toe detail tags when the raw user request explicitly asks to show or focus on them. For single-character requests, any touching, pulling, spreading, holding, armpit, body-part focus, or hand/finger action must use the same character's own attached hands unless the user explicitly asks for another person. Never translate it into offscreen hands, third-party hands, helper hands, male hands, or hands entering from the frame edge. Do not invent foreground limbs, cropped extra bodies, background people, shadow people, or partial extra characters. Keep the output concise: aim for 18-32 tags. Do not use Pony score tags such as score_9 or score_8_up. Output only the final English prompt tags, no Chinese, no explanation, no markdown."
+          }
+        }
+      }
+    }
+  },
+  "model_download": {
+    "description": "模型下载设置",
+    "type": "object",
+    "items": {
+      "checkpoint_dir": {
+        "description": "ComfyUI checkpoints 目录",
+        "type": "string",
+        "default": "",
+        "hint": "留空时尝试从 ComfyUI /experiment/models 自动探测。PerfectDeliberate 等 checkpoint 应放在这个目录下，而不是 loras 目录。Docker/跨机器场景建议手动填写 AstrBot 进程可访问的目录。"
+      },
+      "proxy": {
+        "description": "模型下载代理",
+        "type": "string",
+        "default": "",
+        "hint": "例如 http://127.0.0.1:7899。留空时默认复用 civitai_settings.proxy。"
+      },
+      "timeout": {
+        "description": "下载超时秒数",
+        "type": "int",
+        "default": 3600
+      }
+    }
+  },
+  "lora_settings": {
+    "description": "LoRA 设置",
+    "type": "object",
+    "items": {
+      "enable_lora": {
+        "description": "启用 LoRA",
+        "type": "bool",
+        "default": true
+      },
+      "default_lora": {
+        "description": "默认角色 LoRA（当前模型族）",
+        "type": "string",
+        "default": "",
+        "hint": "这里只切换角色 LoRA，只显示当前模型族兼容项；画风/质量 LoRA 不应放这里。切换 /jh 模型 后刷新配置页即可看到对应模型族列表。",
+        "options": [
+          ""
+        ],
+        "enum": [
+          ""
+        ]
+      },
+      "enable_style_lora": {
+        "description": "启用画风 LoRA",
+        "type": "bool",
+        "default": true,
+        "hint": "画风/质量 LoRA 与角色 LoRA 分开注入；关闭后会把识别到的固定画风 LoRA 节点强度归零。"
+      },
+      "default_style_lora": {
+        "description": "默认画风 LoRA（当前模型族）",
+        "type": "string",
+        "default": "",
+        "hint": "只负责画风/质感 LoRA，不写角色档案。留空时使用工作流里已有的固定画风节点；Illustrious 没有固定节点时留空就是不额外加画风 LoRA。默认只显示未绑定角色档案、文件名能识别当前模型族且带 style/quality/aesthetic 等风格标记的 LoRA。",
+        "options": [
+          ""
+        ],
+        "enum": [
+          ""
+        ]
+      },
+      "style_lora_node_id": {
+        "description": "画风 LoRA 节点 ID",
+        "type": "string",
+        "default": "",
+        "hint": "留空自动寻找 style/quality/aesthetic 节点；找不到时运行时动态接入一个画风 LoRA 节点。Anima 默认工作流的固定画风节点通常是 100。不要填角色节点 99 或 Control/LLLite/Union 工具节点。"
+      },
+      "style_strength_model": {
+        "description": "画风 model 强度",
+        "type": "float",
+        "default": 0.25
+      },
+      "style_strength_clip": {
+        "description": "画风 clip 强度",
+        "type": "float",
+        "default": 0.25
+      },
+      "allow_unmarked_style_lora": {
+        "description": "允许未标注模型族的画风 LoRA",
+        "type": "bool",
+        "default": false,
+        "hint": "默认关闭。关闭时，画风 LoRA 文件名必须能看出当前模型族且带 style/quality/aesthetic 等风格标记；避免把角色 LoRA、SD1.5/Pony/Flux 或 checkpoint 当画风 LoRA 混用。确认兼容时再开启。"
+      },
+      "lora_node_id": {
+        "description": "角色 LoRA 节点 ID",
+        "type": "string",
+        "default": "99",
+        "hint": "推荐保持 99，只改角色 LoRA 节点，避免误改固定质量 LoRA。"
+      },
+      "strength_model": {
+        "description": "默认 model 强度",
+        "type": "float",
+        "default": 1.0
+      },
+      "strength_clip": {
+        "description": "默认 clip 强度",
+        "type": "float",
+        "default": 1.0
+      },
+      "apply_all_lora_nodes": {
+        "description": "注入所有 LoRA 节点",
+        "type": "bool",
+        "default": false,
+        "hint": "一般关闭。开启后会把当前 LoRA 写入工作流里的每个 LoRA 节点。"
+      },
+      "multi_lora_debug_masks": {
+        "description": "Debug multi-LoRA regional masks",
+        "type": "bool",
+        "default": false,
+        "hint": "When enabled, regional_lora/densediffusion saves uploaded masks and the final submitted workflow JSON under debug/multi_lora_masks for topology checks."
+      },
+      "auto_refresh_lora_list": {
+        "description": "实时刷新 LoRA 列表",
+        "type": "bool",
+        "default": true
+      },
+      "comfyui_connect_timeout": {
+        "description": "ComfyUI 连接超时秒数",
+        "type": "float",
+        "default": 20,
+        "hint": "FRP/HTTPS/高延迟连接可调到 30-45。"
+      },
+      "comfyui_read_timeout": {
+        "description": "ComfyUI 读取超时秒数",
+        "type": "float",
+        "default": 300,
+        "hint": "生图执行、取图等 ComfyUI API 读取超时。"
+      },
+      "history_request_timeout": {
+        "description": "ComfyUI history 单次查询超时",
+        "type": "float",
+        "default": 30
+      },
+      "queue_request_timeout": {
+        "description": "ComfyUI queue 单次查询超时",
+        "type": "float",
+        "default": 8,
+        "hint": "用于检测 prompt_id 是否还在 ComfyUI /queue 中，避免远端任务消失后插件一直等 history。"
+      },
+      "queue_missing_grace_seconds": {
+        "description": "ComfyUI prompt_id 丢失检测宽限秒数",
+        "type": "float",
+        "default": 45,
+        "hint": "提交 prompt 后先等待这段时间，再开始用 /queue 判断任务是否已经从远端队列消失。"
+      },
+      "queue_missing_confirmations": {
+        "description": "ComfyUI prompt_id 丢失确认次数",
+        "type": "int",
+        "default": 3,
+        "hint": "连续多少次 /queue 都找不到 prompt_id 才判定远端任务消失。"
+      },
+      "poll_max_interval": {
+        "description": "ComfyUI 轮询最大间隔秒数",
+        "type": "float",
+        "default": 3
+      },
+      "view_download_retries": {
+        "description": "ComfyUI 取回图片/视频重试次数",
+        "type": "int",
+        "default": 3
+      },
+      "lora_alias_map": {
+        "description": "LoRA 别名映射",
+        "type": "text",
+        "default": "",
+        "hint": "每行一个：别名 => LoRA文件名"
+      },
+      "auto_append_character_prompt": {
+        "description": "自动附加角色触发词",
+        "type": "bool",
+        "default": true
+      },
+      "character_prompt_position": {
+        "description": "角色触发词位置",
+        "type": "string",
+        "default": "append",
+        "options": [
+          "prepend",
+          "append"
+        ],
+        "enum": [
+          "prepend",
+          "append"
+        ]
+      },
+      "character_prompt_detail_mode": {
+        "description": "角色提示词细节模式",
+        "type": "string",
+        "default": "smart",
+        "options": [
+          "smart",
+          "minimal",
+          "full"
+        ],
+        "enum": [
+          "smart",
+          "minimal",
+          "full"
+        ],
+        "hint": "smart 会保留身份和关键外观，尽量避免压过用户要求。"
+      },
+      "character_prompt_separator": {
+        "description": "角色提示词分隔符",
+        "type": "string",
+        "default": ", "
+      },
+      "skip_if_character_prompt_exists": {
+        "description": "已有触发词时不重复附加",
+        "type": "bool",
+        "default": true
+      },
+      "show_character_prompt_in_result": {
+        "description": "结果中显示角色提示词",
+        "type": "bool",
+        "default": true
+      },
+      "character_prompt_map": {
+        "description": "LoRA 角色提示词映射",
+        "type": "text",
+        "default": "",
+        "hint": "每行一个：LoRA文件名 => 角色提示词"
+      }
+    }
+  },
+  "img2img_settings": {
+    "description": "图生图设置",
+    "type": "object",
+    "items": {
+      "enable": {
+        "description": "启用自动图生图",
+        "type": "bool",
+        "default": true,
+        "hint": "用户引用/附带图片时自动切换图生图。"
+      },
+      "auto_use_character_replace_workflow": {
+        "description": "角色替换时使用专用工作流",
+        "type": "bool",
+        "default": true
+      },
+      "character_replace_workflow": {
+        "description": "角色替换工作流",
+        "type": "string",
+        "default": "character_replace_anima_reference_api.json",
+        "options": [
+          "character_replace_anima_reference_api.json",
+          "character_replace_anima_lllite_api.json",
+          "character_replace_union_control_api.json",
+          "finish_optimized_api.json",
+          "workflow_api.json"
+        ],
+        "enum": [
+          "character_replace_anima_reference_api.json",
+          "character_replace_anima_lllite_api.json",
+          "character_replace_union_control_api.json",
+          "finish_optimized_api.json",
+          "workflow_api.json"
+        ],
+        "hint": "默认使用从 Anima 正式版图生图参考工作流重建的 API 版。"
+      },
+      "character_replace_input_node_id": {
+        "description": "角色替换正面节点 ID",
+        "type": "string",
+        "default": "11"
+      },
+      "character_replace_neg_node_id": {
+        "description": "角色替换负面节点 ID",
+        "type": "string",
+        "default": "12"
+      },
+      "character_replace_output_node_id": {
+        "description": "角色替换输出节点 ID",
+        "type": "string",
+        "default": "404"
+      },
+      "character_replace_lora_node_id": {
+        "description": "角色替换 LoRA 节点 ID",
+        "type": "string",
+        "default": "99"
+      },
+      "denoise_strength": {
+        "description": "普通图生图重绘幅度",
+        "type": "float",
+        "default": 0.65
+      },
+      "character_replace_enable": {
+        "description": "启用角色替换提示词优化",
+        "type": "bool",
+        "default": true
+      },
+      "character_replace_denoise_strength": {
+        "description": "角色替换重绘幅度",
+        "type": "float",
+        "default": 1.0,
+        "hint": "Anima LLLite 专用工作流推荐 1.0：参考图只提供结构，角色由 LoRA 和提示词完整重绘。普通 VAE 图生图才建议 0.45-0.75。"
+      },
+      "character_replace_lora_strength_model": {
+        "description": "角色替换 LoRA model 强度",
+        "type": "float",
+        "default": 1.05
+      },
+      "character_replace_lora_strength_clip": {
+        "description": "角色替换 LoRA clip 强度",
+        "type": "float",
+        "default": 1.0
+      },
+      "character_replace_control_strength": {
+        "description": "Anima LLLite 结构控制强度",
+        "type": "float",
+        "default": 1.0,
+        "hint": "参考 Anima 正式版图生图工作流。想更像源图姿势用 1.0；想更自由重绘可降到 0.75-0.9。"
+      },
+      "character_replace_control_end_percent": {
+        "description": "Anima LLLite 控制结束比例",
+        "type": "float",
+        "default": 1.0,
+        "hint": "参考工作流为 1.0。降低到 0.7-0.85 可减少源图结构束缚。"
+      },
+      "character_replace_preprocessor": {
+        "description": "Anima 结构预处理器",
+        "type": "string",
+        "default": "DepthAnythingV2Preprocessor",
+        "hint": "推荐 DepthAnythingV2Preprocessor。表情包线稿可尝试 CannyEdgePreprocessor。"
+      },
+      "character_replace_preprocessor_resolution": {
+        "description": "Anima 预处理分辨率",
+        "type": "int",
+        "default": 1024
+      },
+      "character_replace_scale_to_length": {
+        "description": "Anima 源图长边缩放",
+        "type": "int",
+        "default": 1536
+      },
+      "character_replace_prompt": {
+        "description": "角色替换提示词模板",
+        "type": "text",
+        "default": "target character {character}, redraw visible character as {character}, source image provides pose, gesture, expression, camera angle, depth and composition reference only, preserve the action, framing and scene relationship, replace face, hair, eyes, body, outfit, accessories and color design with the target character, do not keep source character identity, source outfit, source hairstyle, source colors or source facial design, strong target character likeness, coherent full-body anatomy when requested",
+        "hint": "{character} 会替换为自动匹配到的角色名。"
+      },
+      "negative_prompt": {
+        "description": "角色替换额外负面词",
+        "type": "text",
+        "default": "unchanged source character, original character identity, partial character replacement, only eyes changed, face-only swap, identity mixing, wrong hair, wrong outfit, source outfit kept, source hairstyle kept, source color palette kept, source face kept, real person identity kept, extreme close-up, body-part crop, cropped head, cropped face, cropped torso, cropped legs, out of frame, broken spine, twisted torso, impossible pose, dislocated shoulders, disconnected limbs"
+      },
+      "upload_subfolder": {
+        "description": "上传到 ComfyUI input 的子目录",
+        "type": "string",
+        "default": "astrbot_img2img"
+      }
+    }
+  },
+  "avatar_redraw_settings": {
+    "description": "酒狐来点 @群友 头像重绘",
+    "type": "object",
+    "items": {
+      "enable": {
+        "description": "启用 @群友头像重绘",
+        "type": "bool",
+        "default": true,
+        "hint": "发送 酒狐来点 @群友 时，自动获取被 @ 用户头像并走图生图重绘。"
+      },
+      "prompt": {
+        "description": "头像重绘提示词",
+        "type": "text",
+        "default": "猪猪",
+        "hint": "后台可改；默认按“猪猪”提示词重绘头像。"
+      },
+      "avatar_url_template": {
+        "description": "QQ 头像 URL 模板",
+        "type": "string",
+        "default": "https://q1.qlogo.cn/g?b=qq&nk={qq}&s=640",
+        "hint": "可使用 {qq}/{user_id}/{uin} 占位符；平台接口拿不到头像 URL 时使用该模板。"
+      },
+      "timeout": {
+        "description": "头像下载超时秒数",
+        "type": "int",
+        "default": 20
+      }
+    }
+  },
+  "message_settings": {
+    "description": "消息设置",
+    "type": "object",
+    "items": {
+      "send_waiting_message": {
+        "description": "发送等待提示",
+        "type": "bool",
+        "default": true
+      },
+      "waiting_message": {
+        "description": "等待提示内容",
+        "type": "string",
+        "default": "🎨 正在为你绘图，请稍等..."
+      },
+      "auto_recall_generation_result": {
+        "description": "自动撤回生图结果",
+        "type": "bool",
+        "default": false,
+        "hint": "仅撤回本插件发送的生图结果。"
+      },
+      "auto_recall_delay_seconds": {
+        "description": "撤回延迟秒数",
+        "type": "int",
+        "default": 180
+      }
+    }
+  },
+  "favorite_settings": {
+    "description": "酒狐收藏",
+    "type": "object",
+    "items": {
+      "enable": {
+        "description": "启用酒狐收藏",
+        "type": "bool",
+        "default": false,
+        "hint": "管理员引用或附带图片发送“酒狐收藏”时，按角色名分类保存图片；不保存 Prompt JSON。"
+      },
+      "owner_user_id": {
+        "description": "收藏接收主人 QQ",
+        "type": "string",
+        "default": "",
+        "hint": "留空则只保存到本地 favorites 目录，不私聊发送。"
+      }
+    }
+  },
+  "prompt_note_settings": {
+    "description": "酒狐记下来提示词收藏",
+    "type": "object",
+    "items": {
+      "enable": {
+        "description": "启用提示词收藏",
+        "type": "bool",
+        "default": true,
+        "hint": "引用文字或直接发送 酒狐记下来 <提示词> 后，会要求同一用户在同一会话内为提示词命名。"
+      },
+      "pending_timeout_seconds": {
+        "description": "等待命名超时秒数",
+        "type": "int",
+        "default": 180
+      },
+      "max_prompt_length": {
+        "description": "单条提示词最大长度",
+        "type": "int",
+        "default": 6000
+      },
+      "max_title_length": {
+        "description": "标题最大长度",
+        "type": "int",
+        "default": 60
+      },
+      "max_entries_per_user": {
+        "description": "每个用户每个会话最多保存条数",
+        "type": "int",
+        "default": 200,
+        "hint": "同一用户在同一群或私聊内超出上限时，会清理最旧的记录。"
+      },
+      "template_llm_enabled": {
+        "description": "保存时整理成本本模板",
+        "type": "bool",
+        "default": true,
+        "hint": "开启后会优先使用 utility_llm 配置把原始提示词整理成 draw_prompt 文本；未配置 LLM 或调用失败时会保存原文，不会修改 ComfyUI 工作流。"
+      }
+    }
+  },
+  "gpt_magic_settings": {
+    "description": "GPT 魔法生图",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用 GPT 魔法",
+        "type": "bool",
+        "default": true,
+        "hint": "聊天触发词：酒狐魔法 <提示词>。提示词会原样传入 OpenAI 兼容图片接口，不走 ComfyUI。"
+      },
+      "draw_enabled": {
+        "description": "允许用户生图",
+        "type": "bool",
+        "default": true
+      },
+      "draw_close_reason": {
+        "description": "关闭原因",
+        "type": "string",
+        "default": ""
+      },
+      "default_quota": {
+        "description": "注册默认额度",
+        "type": "int",
+        "default": 2
+      },
+      "max_queue_size": {
+        "description": "队列上限",
+        "type": "int",
+        "default": 100
+      },
+      "max_concurrent_tasks": {
+        "description": "GPT 魔法并发任务数",
+        "type": "int",
+        "default": 2,
+        "hint": "同时处理的 GPT 魔法生图任务数量。建议 2-3；外部接口限流或机器压力大时调低。"
+      },
+      "history_limit": {
+        "description": "历史记录条数",
+        "type": "int",
+        "default": 300
+      },
+      "result_image_in_forward": {
+        "description": "GPT 图片放入聊天记录",
+        "type": "bool",
+        "default": true,
+        "hint": "开启：GPT 魔法结果说明和图片在同一条合并转发/聊天记录里。关闭：说明进聊天记录，图片单独发送。"
+      },
+      "send_task_received_message": {
+        "description": "发送收到任务提示",
+        "type": "bool",
+        "default": true
+      },
+      "task_received_message": {
+        "description": "收到任务提示文案",
+        "type": "string",
+        "default": "🪄 已收到 GPT 魔法任务，当前位置：{position}"
+      },
+      "send_processing_message": {
+        "description": "发送开始生成提示",
+        "type": "bool",
+        "default": true
+      },
+      "processing_message": {
+        "description": "文生图开始生成提示",
+        "type": "string",
+        "default": "🪄 GPT 魔法正在生成图片，请稍等..."
+      },
+      "edit_processing_message": {
+        "description": "图生图开始编辑提示",
+        "type": "string",
+        "default": "🪄 GPT 魔法正在编辑图片，请稍等..."
+      },
+      "webui": {
+        "description": "GPT 魔法 WebUI",
+        "type": "object",
+        "items": {
+          "enabled": {
+            "description": "启用独立 WebUI",
+            "type": "bool",
+            "default": true
+          },
+          "host": {
+            "description": "WebUI 监听地址",
+            "type": "string",
+            "default": "0.0.0.0"
+          },
+          "port": {
+            "description": "WebUI 端口",
+            "type": "int",
+            "default": 1144
+          },
+          "token": {
+            "description": "WebUI 登录令牌",
+            "type": "string",
+            "default": "",
+            "hint": "留空会自动生成并写入 gpt_magic/db.json。"
+          }
+        }
+      },
+      "gallery": {
+        "description": "WineFox 收藏展示页",
+        "type": "object",
+        "items": {
+          "enabled": {
+            "description": "启用独立收藏展示页",
+            "type": "bool",
+            "default": true
+          },
+          "host": {
+            "description": "展示页监听地址",
+            "type": "string",
+            "default": "0.0.0.0",
+            "hint": "内网穿透使用时保持 0.0.0.0。"
+          },
+          "port": {
+            "description": "展示页端口",
+            "type": "int",
+            "default": 6666
+          },
+          "name": {
+            "description": "展示页名称",
+            "type": "string",
+            "default": "WineFox"
+          },
+          "public_url": {
+            "description": "展示页公网登录地址",
+            "type": "string",
+            "default": "https://frp-own.com:53414/"
+          },
+          "admin_username": {
+            "description": "展示页管理员用户名",
+            "type": "string",
+            "default": "admin"
+          },
+          "admin_password": {
+            "description": "展示页管理员初始密码",
+            "type": "string",
+            "default": "REDACTED_LEGACY_PASSWORD",
+            "hint": "首次初始化时写入管理员账号；后续可在 WineFox 管理台重置账号密码。"
+          },
+          "limit": {
+            "description": "最多展示收藏数",
+            "type": "int",
+            "default": 900
+          },
+          "draw_history_ttl_hours": {
+            "description": "Web 绘图历史保留小时数",
+            "type": "int",
+            "default": 24,
+            "hint": "默认保留 1 天，过期自动清理 Web 绘图记录和对应图片。"
+          },
+          "video_local_price": {
+            "description": "本地视频单价（元/次）",
+            "type": "float",
+            "default": 0.5,
+            "hint": "本地 Wan 图生视频每次扣费；生成失败自动退回。"
+          },
+          "video_api_price": {
+            "description": "API 视频单价（元/次）",
+            "type": "float",
+            "default": 0.5,
+            "hint": "Grok API 图生视频每次扣费；生成失败自动退回。"
+          },
+          "video_trial_balance": {
+            "description": "默认试用额度（元）",
+            "type": "float",
+            "default": 5.0,
+            "hint": "新老用户首次激活/登录后一次性赠送的试用额度。"
+          }
+        }
+      },
+      "draw": {
+        "description": "OpenAI 兼容图片接口",
+        "type": "object",
+        "items": {
+          "base_url": {
+            "description": "API Base",
+            "type": "string",
+            "default": "",
+            "hint": "例如 https://api.openai.com 或 https://example.com/v1；api_url 为空时会自动拼图片接口。"
+          },
+          "api_url": {
+            "description": "完整图片接口",
+            "type": "string",
+            "default": ""
+          },
+          "edit_api_url": {
+            "description": "完整图生图/编辑接口",
+            "type": "string",
+            "default": "",
+            "hint": "可留空。留空时会自动使用 base_url + /v1/images/edits，或把 api_url 里的 /images/generations 替换为 /images/edits。"
+          },
+          "api_key": {
+            "description": "API Key",
+            "type": "string",
+            "default": ""
+          },
+          "model": {
+            "description": "图片模型",
+            "type": "string",
+            "default": "gpt-image-2"
+          },
+          "model_2k": {
+            "description": "2K 图片模型",
+            "type": "string",
+            "default": "gpt-image-2-2k",
+            "hint": "自动模型选择开启且分辨率为 2K 时使用；留空则沿用图片模型。"
+          },
+          "model_4k": {
+            "description": "4K 图片模型",
+            "type": "string",
+            "default": "gpt-image-2-4k",
+            "hint": "自动模型选择开启且分辨率为 4K 时使用；留空则沿用图片模型。"
+          },
+          "auto_model_by_resolution": {
+            "description": "按分辨率自动换模型",
+            "type": "bool",
+            "default": true
+          },
+          "timeout_sec": {
+            "description": "超时秒数",
+            "type": "int",
+            "default": 600
+          },
+          "quality": {
+            "description": "质量参数",
+            "type": "string",
+            "default": "high"
+          },
+          "background": {
+            "description": "背景参数",
+            "type": "string",
+            "default": "auto"
+          },
+          "moderation": {
+            "description": "审核参数",
+            "type": "string",
+            "default": "auto",
+            "hint": "默认 auto。若上游兼容 OpenAI 图像接口，会随请求一起发送。"
+          },
+          "output_format": {
+            "description": "输出格式",
+            "type": "string",
+            "default": "png",
+            "options": [
+              "png",
+              "jpeg",
+              "webp"
+            ],
+            "enum": [
+              "png",
+              "jpeg",
+              "webp"
+            ]
+          },
+          "output_compression": {
+            "description": "jpeg/webp 压缩率",
+            "type": "int",
+            "default": 100
+          },
+          "stream": {
+            "description": "启用 gpt-image 流式请求",
+            "type": "bool",
+            "default": true,
+            "hint": "中转不支持时会自动回退非流式。"
+          },
+          "aspect_strategy": {
+            "description": "默认比例",
+            "type": "string",
+            "default": "auto",
+            "options": [
+              "auto",
+              "square",
+              "portrait",
+              "story",
+              "landscape",
+              "wide",
+              "square_2k",
+              "portrait_2k",
+              "story_2k",
+              "landscape_2k",
+              "square_4k",
+              "portrait_4k",
+              "story_4k",
+              "landscape_4k",
+              "wide_4k"
+            ],
+            "enum": [
+              "auto",
+              "square",
+              "portrait",
+              "story",
+              "landscape",
+              "wide",
+              "square_2k",
+              "portrait_2k",
+              "story_2k",
+              "landscape_2k",
+              "square_4k",
+              "portrait_4k",
+              "story_4k",
+              "landscape_4k",
+              "wide_4k"
+            ],
+            "hint": "常规预设保持 OpenAI 兼容尺寸；2K/4K/Max 预设会通过 size 字段透传给支持高分辨率的中转。"
+          },
+          "default_resolution": {
+            "description": "默认分辨率",
+            "type": "string",
+            "default": "4k",
+            "options": [
+              "1k",
+              "2k",
+              "4k"
+            ],
+            "enum": [
+              "1k",
+              "2k",
+              "4k"
+            ],
+            "hint": "提示词没有明确 1K/2K/4K 时使用。默认 4K，质量优先。"
+          },
+          "enable_prompt_aspect_detect": {
+            "description": "按提示词识别比例",
+            "type": "bool",
+            "default": true
+          },
+          "enable_custom_size": {
+            "description": "启用自定义尺寸",
+            "type": "bool",
+            "default": false
+          },
+          "custom_size": {
+            "description": "自定义尺寸",
+            "type": "string",
+            "default": "",
+            "hint": "例如 1024x1024、3840x2160、2160x3840。中转若使用其他字段，可用 extra_body 透传。"
+          },
+          "input_fidelity": {
+            "description": "图生图源图保真度",
+            "type": "string",
+            "default": "high",
+            "options": [
+              "",
+              "low",
+              "high"
+            ],
+            "enum": [
+              "",
+              "low",
+              "high"
+            ],
+            "hint": "用于 /v1/images/edits。部分中转不支持时会自动移除后重试；仍失败会自动降级为最小兼容参数。"
+          },
+          "extra_body": {
+            "description": "额外请求 JSON",
+            "type": "text",
+            "default": "{}",
+            "hint": "会合并进图片接口请求体，可用于中转私有参数，例如 output_size、resolution 等。"
+          }
+        }
+      },
+      "cache": {
+        "description": "GPT 魔法缓存",
+        "type": "object",
+        "items": {
+          "enabled": {
+            "description": "启用缓存",
+            "type": "bool",
+            "default": true
+          },
+          "ttl_sec": {
+            "description": "缓存保留秒数",
+            "type": "int",
+            "default": 604800
+          },
+          "max_entries": {
+            "description": "缓存最大条数",
+            "type": "int",
+            "default": 500
+          },
+          "consume_quota_on_hit": {
+            "description": "命中缓存也扣额度",
+            "type": "bool",
+            "default": true
+          }
+        }
+      }
+    }
+  },
+  "output_settings": {
+    "description": "结果显示",
+    "type": "object",
+    "items": {
+      "include_prompt": {
+        "description": "显示 Prompt",
+        "type": "bool",
+        "default": true
+      },
+      "include_generation_time": {
+        "description": "显示耗时",
+        "type": "bool",
+        "default": true
+      },
+      "include_workflow": {
+        "description": "显示工作流",
+        "type": "bool",
+        "default": true
+      },
+      "include_lora": {
+        "description": "显示 LoRA 信息",
+        "type": "bool",
+        "default": true
+      },
+      "include_seed": {
+        "description": "显示 Seed",
+        "type": "bool",
+        "default": true
+      },
+      "comfy_image_in_forward": {
+        "description": "ComfyUI 图片放入聊天记录",
+        "type": "bool",
+        "default": true,
+        "hint": "开启：结果说明和图片在同一条合并转发/聊天记录里。关闭：说明进聊天记录，图片单独发送。"
+      },
+      "watermark_enabled": {
+        "description": "出图添加酒狐水印",
+        "type": "bool",
+        "default": true,
+        "hint": "ComfyUI 和 GPT 魔法生图都会在保存/发送前添加水印。"
+      },
+      "watermark_path": {
+        "description": "自定义水印 PNG 路径",
+        "type": "string",
+        "default": "",
+        "hint": "留空使用内置 assets/jiuhu_watermark_huizhi.png。"
+      },
+      "watermark_position": {
+        "description": "水印位置",
+        "type": "string",
+        "default": "bottom_left",
+        "hint": "bottom_left / bottom_right / top_left / top_right"
+      },
+      "watermark_size": {
+        "description": "水印大小",
+        "type": "string",
+        "default": "0.24",
+        "hint": "相对出图宽度；新方形酒狐水印推荐 0.24。旧配置 watermark_width_ratio 仍兼容。"
+      },
+      "watermark_opacity": {
+        "description": "水印透明度",
+        "type": "string",
+        "default": "0.76",
+        "hint": "0.05-1.0"
+      },
+      "enable_black_screen_retry": {
+        "description": "VAE black-screen / solid-fill retry",
+        "type": "bool",
+        "default": true,
+        "hint": "On: when a VAE-decode failure produces a black/solid-fill frame, auto re-roll the seed and retry. Off: send as-is (disable if it misfires on a special workflow)."
+      },
+      "black_screen_max_retries": {
+        "description": "Black-screen retry count",
+        "type": "int",
+        "default": 2
+      }
+    }
+  },
+  "comfy_nsfw_self_review": {
+    "description": "ComfyUI 一级自审查",
+    "type": "object",
+    "items": {
+      "enable": {
+        "description": "启用 ComfyUI 一级自审查",
+        "type": "bool",
+        "default": true,
+        "hint": "仅作用于 ComfyUI 出图，不影响 GPT 魔法。未通过时不直发图片，改为发送加密 ZIP。"
+      },
+      "password": {
+        "description": "加密压缩包密码",
+        "type": "string",
+        "default": "114514"
+      },
+      "block_suggestive_clothing": {
+        "description": "拦截内衣/透视/湿衣等擦边标签",
+        "type": "bool",
+        "default": true
+      },
+      "block_swimsuit": {
+        "description": "连泳装也拦截",
+        "type": "bool",
+        "default": false,
+        "hint": "默认关闭，避免普通泳装图误伤；需要更严格时可开启。"
+      },
+      "log_reason": {
+        "description": "日志记录命中的自审查标签",
+        "type": "bool",
+        "default": true
+      }
+    }
+  },
+  "image_audit_settings": {
+    "description": "酒狐图片审核（独立功能）",
+    "type": "object",
+    "items": {
+      "backend": {
+        "description": "审核后端",
+        "type": "string",
+        "default": "auto",
+        "hint": "auto/local/nsfw_detector 使用本地 nsfw_detector；http/api 使用你自己部署的 NSFWJS/兼容 HTTP 服务。"
+      },
+      "nsfw_detector_model_path": {
+        "description": "nsfw_detector 模型路径",
+        "type": "string",
+        "default": "",
+        "hint": "填写 GantMan/nsfw_model 的模型文件或目录；也可用环境变量 JIUHU_NSFW_MODEL。"
+      },
+      "api_url": {
+        "description": "HTTP 审核服务地址",
+        "type": "string",
+        "default": "",
+        "hint": "可选。填写你自建的 NSFWJS/五分类服务地址，插件会 multipart 上传 image 字段并读取 JSON。"
+      },
+      "auto_download_model": {
+        "description": "启动时自动下载本地模型包",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后，插件初始化时若未找到本地模型，会自动下载 GantMan/nsfw_model zip 并解压。只下载模型，不自动 pip 安装 TensorFlow/nsfw_detector。"
+      },
+      "model_url": {
+        "description": "本地模型包下载地址",
+        "type": "string",
+        "default": "https://github.com/GantMan/nsfw_model/releases/download/1.1.0/nsfw_mobilenet_v2_140_224.zip"
+      },
+      "model_dir": {
+        "description": "本地模型保存目录",
+        "type": "string",
+        "default": "",
+        "hint": "留空时保存到插件数据目录 image_audit_models。"
+      },
+      "proxy": {
+        "description": "模型下载代理",
+        "type": "string",
+        "default": "",
+        "hint": "留空时复用 civitai_settings.proxy。"
+      },
+      "download_split": {
+        "description": "模型下载分片数",
+        "type": "int",
+        "default": 8
+      },
+      "timeout": {
+        "description": "审核超时秒数",
+        "type": "int",
+        "default": 30
+      },
+      "fail_hentai": {
+        "description": "二次元色情未通过阈值",
+        "type": "float",
+        "default": 0.55
+      },
+      "fail_porn": {
+        "description": "色情未通过阈值",
+        "type": "float",
+        "default": 0.55
+      },
+      "fail_sexy": {
+        "description": "性感未通过阈值",
+        "type": "float",
+        "default": 0.75
+      },
+      "fail_explicit_sum": {
+        "description": "二次元色情+色情综合阈值",
+        "type": "float",
+        "default": 0.6
+      },
+      "fail_total": {
+        "description": "二次元色情+色情+性感综合阈值",
+        "type": "float",
+        "default": 0.8
+      },
+      "fail_binary_nsfw": {
+        "description": "OpenNSFW2 二分类未通过阈值",
+        "type": "float",
+        "default": 0.85,
+        "hint": "仅在 GantMan/nsfw_model 五分类不可用、自动回退 OpenNSFW2 二分类时生效。可填 0.85、85 或 85%。"
+      },
+      "generated_output_audit_enabled": {
+        "description": "生成图片发送前审核开关，特殊白名单群会跳过",
+        "type": "bool",
+        "default": true
+      },
+      "generated_output_audit_threshold": {
+        "description": "生成图片发送前综合风险拦截阈值",
+        "type": "float",
+        "default": 0.9,
+        "hint": "默认 0.90；风险大于等于该值时不发送图片。"
+      },
+      "generated_output_audit_fail_closed": {
+        "description": "生成图片审核失败时是否按失败处理并拦截发送",
+        "type": "bool",
+        "default": true
+      },
+      "generated_output_audit_forward_to_special_whitelist": {
+        "description": "生成图片审核未通过或审核失败时，把被拦截图片连同来源和原请求转发到特殊白名单群",
+        "type": "bool",
+        "default": true
+      }
+    }
+  },
+  "llm_settings": {
+    "description": "LLM 模型配置",
+    "type": "object",
+    "items": {
+      "multi_image_mode": {
+        "description": "多图模式",
+        "type": "bool",
+        "default": false
+      },
+      "enable_system_prompt_injection": {
+        "description": "启用主聊天系统提示词注入",
+        "type": "bool",
+        "default": true,
+        "hint": "用于 AstrBot 主聊天 LLM 请求；绘图/识图等插件内部 LLM 请求使用下方“插件 LLM 请求注入提示词”。"
+      },
+      "system_prompt": {
+        "description": "主聊天系统提示词注入",
+        "type": "text",
+        "default": "",
+        "hint": "追加到 AstrBot 主聊天 LLM 的 system_prompt。插件不会内置破限内容，内容由你自己填写。"
+      },
+      "llm_request_injection_prompt": {
+        "description": "插件 LLM 请求注入提示词",
+        "type": "text",
+        "default": "",
+        "hint": "追加到插件内部提示词转译、最终整理、视觉识图等 OpenAI 兼容请求的 system message。不会自带破限内容。"
+      },
+      "mirror_llm_injection_to_user": {
+        "description": "注入词同时镜像到 User 消息",
+        "type": "bool",
+        "default": true,
+        "hint": "部分中转/模型不吃 system role，开启后会把插件 LLM 请求注入提示词也放到 user 内容前面，提高兼容性。"
+      },
+      "enable_prompt_translate": {
+        "description": "启用 Prompt 转译",
+        "type": "bool",
+        "default": true
+      },
+      "prompt_translate_api_base": {
+        "description": "主模型 API Base（提示词生成）",
+        "type": "string",
+        "default": "",
+        "hint": "质量优先，用于中文转英文 Prompt、图生图合并提示词等影响出图质量的任务。OpenAI 兼容接口，例如 https://api.openai.com/v1"
+      },
+      "prompt_translate_api_key": {
+        "description": "主模型 API Key",
+        "type": "string",
+        "default": ""
+      },
+      "prompt_translate_model": {
+        "description": "主模型名称",
+        "type": "string",
+        "default": "",
+        "hint": "建议填质量较好的模型，用于提示词生成/转译。"
+      },
+      "prompt_translate_timeout": {
+        "description": "主模型超时秒数",
+        "type": "int",
+        "default": 20,
+        "hint": "用于提示词转译等插件内部 LLM 请求；太慢会拖延画图入队。"
+      },
+      "prompt_translate_fail_fast_timeout": {
+        "description": "绘图前置 LLM 快速降级秒数",
+        "type": "int",
+        "default": 20,
+        "hint": "中文转译/最终 Prompt 整理超过此秒数就直接使用本地兜底继续生成；填 0 表示只按主模型超时。"
+      },
+      "disable_llm_thinking": {
+        "description": "关闭 LLM Thinking / Reasoning",
+        "type": "bool",
+        "default": true,
+        "hint": "Gemini 请求会显式传 reasoning_effort=none；DeepSeek 请求会显式传 thinking={type:disabled}，降低思考消耗和空回/截断概率。"
+      },
+      "enable_final_prompt_optimize": {
+        "description": "启用最终 Prompt 整理",
+        "type": "bool",
+        "default": false,
+        "hint": "默认关闭，避免二次 LLM 编辑把用户短指令扩写变厚。开启后只做去重和冲突消解，不应补写默认服装、画风、颜色或质量词。"
+      },
+      "final_prompt_optimize_max_tokens": {
+        "description": "最终 Prompt 整理最大 tokens",
+        "type": "int",
+        "default": 450,
+        "hint": "只输出最终英文 tags，默认 450 足够；调低可省成本，调高可处理特别长的 Prompt。"
+      },
+      "enable_llm_composition_director": {
+        "description": "Enable LLM Composition Director",
+        "type": "bool",
+        "default": true,
+        "hint": "For multi-character LoRA prompts, asks the utility LLM for structured camera/framing/role-action JSON before submitting to ComfyUI. Falls back silently when unavailable."
+      },
+      "llm_composition_director_multi_lora_only": {
+        "description": "Composition Director only for multi-LoRA",
+        "type": "bool",
+        "default": true,
+        "hint": "Keep enabled to avoid changing single-character prompt behavior."
+      },
+      "llm_composition_director_max_tokens": {
+        "description": "Composition Director max tokens",
+        "type": "int",
+        "default": 900,
+        "hint": "Maximum utility LLM output tokens for the structured composition JSON."
+      },
+      "utility_llm_api_base": {
+        "description": "轻量模型 API Base",
+        "type": "string",
+        "default": "",
+        "hint": "用于 LoRA 搜索别名转译、角色档案 JSON 提取、语义匹配等低成本任务。留空复用主模型 API Base。"
+      },
+      "utility_llm_api_key": {
+        "description": "轻量模型 API Key",
+        "type": "string",
+        "default": "",
+        "hint": "同一服务商时可留空复用主模型 Key。"
+      },
+      "utility_llm_model": {
+        "description": "轻量模型名称",
+        "type": "string",
+        "default": "",
+        "hint": "建议填便宜/快速模型，例如 flash/mini/lite 类模型；留空复用主模型。"
+      },
+      "utility_llm_timeout": {
+        "description": "轻量模型超时秒数",
+        "type": "int",
+        "default": 30
+      },
+      "enable_lora_search_llm_translate": {
+        "description": "LoRA 搜索启用 LLM 别名转译",
+        "type": "bool",
+        "default": true,
+        "hint": "搜索 LoRA 前用轻量模型把中文/昵称扩展为官方英文名、罗马音、作品名组合，提升 Civitai/Hugging Face 搜索结果。"
+      },
+      "enable_llm_lora_match": {
+        "description": "启用 LLM 语义匹配 LoRA",
+        "type": "bool",
+        "default": true,
+        "hint": "使用轻量模型在候选角色档案内做严格语义匹配；不会让主模型承担这类 JSON 判断任务。"
+      },
+      "lora_match_cache_ttl": {
+        "description": "LoRA 匹配缓存秒数",
+        "type": "int",
+        "default": 1800,
+        "hint": "同一提示词和同一档案库在缓存期内不重复调用 LLM。设为 0 可关闭。"
+      },
+      "lora_search_llm_cache_ttl": {
+        "description": "LoRA 搜索转译缓存秒数",
+        "type": "int",
+        "default": 3600,
+        "hint": "同一模型族、同一搜索词、同一搜索来源在缓存期内不重复调用轻量模型。设为 0 可关闭。"
+      },
+      "enable_img2img_vision_reverse": {
+        "description": "图生图启用视觉反推",
+        "type": "bool",
+        "default": true,
+        "hint": "引用/附带图片时，先用视觉模型反推源图构图、动作、表情、镜头，再合并到最终 Prompt。"
+      },
+      "img2img_vision_api_base": {
+        "description": "图生图视觉 API Base",
+        "type": "string",
+        "default": "",
+        "hint": "OpenAI 兼容接口。例如 https://newapi-hk.qianye.host/v1"
+      },
+      "img2img_vision_api_key": {
+        "description": "图生图视觉 API Key",
+        "type": "string",
+        "default": ""
+      },
+      "img2img_vision_model": {
+        "description": "图生图视觉模型",
+        "type": "string",
+        "default": "",
+        "hint": "例如 gemini-3.5-flash-low"
+      },
+      "img2img_vision_timeout": {
+        "description": "图生图视觉超时秒数",
+        "type": "int",
+        "default": 60
+      },
+      "img2img_vision_max_tokens": {
+        "description": "图生图视觉最大输出 tokens",
+        "type": "int",
+        "default": 700
+      },
+      "img2img_vision_system_prompt": {
+        "description": "图生图视觉反推规则",
+        "type": "text",
+        "default": "You are an Anima anime image prompt reverse-engineer for image-to-image character replacement. Look at the source image and output concise English comma-separated prompt tags that describe ONLY reusable visual structure: pose, gesture, facial expression, camera angle, shot size, composition, body orientation, scene, props, atmosphere, and art style. Do NOT describe or preserve the source character identity, exact hair color, exact outfit color, unique clothing design, logos, name, or franchise. If the user asks for a different framing such as full body, do not output conflicting close-up/cropped/body-part-focus tags from the source image. Do not output quality tags such as masterpiece or best quality. Do not output markdown, explanations, Chinese, or more than one line."
+      },
+      "look_vision_enable": {
+        "description": "启用 酒狐看看",
+        "type": "bool",
+        "default": true,
+        "hint": "引用或附带图片发送“酒狐看看”，让视觉 LLM 反推出详细英文生图 Prompt。"
+      },
+      "look_vision_api_base": {
+        "description": "酒狐看看视觉 API Base",
+        "type": "string",
+        "default": "",
+        "hint": "留空复用图生图视觉 API Base。OpenAI 兼容接口，例如 https://api.openai.com/v1"
+      },
+      "look_vision_api_key": {
+        "description": "酒狐看看视觉 API Key",
+        "type": "string",
+        "default": "",
+        "hint": "留空复用图生图视觉 API Key。"
+      },
+      "look_vision_model": {
+        "description": "酒狐看看视觉模型",
+        "type": "string",
+        "default": "",
+        "hint": "留空复用图生图视觉模型。需要支持 image_url/base64 图片输入。"
+      },
+      "look_vision_timeout": {
+        "description": "酒狐看看视觉超时秒数",
+        "type": "int",
+        "default": 60
+      },
+      "look_vision_max_tokens": {
+        "description": "酒狐看看最大输出 tokens",
+        "type": "int",
+        "default": 1600,
+        "hint": "越高越能写细节，但成本也更高。"
+      },
+      "look_vision_max_images": {
+        "description": "酒狐看看最多图片数",
+        "type": "int",
+        "default": 6
+      },
+      "look_vision_system_prompt": {
+        "description": "酒狐看看识图反推规则",
+        "type": "text",
+        "default": "You are an anime image prompt reverse-engineer for reusable composition prompts. Inspect every attached image carefully and output one very detailed English comma-separated Stable Diffusion prompt. Describe only reusable visual structure: subject count, body pose, gesture, facial expression category, gaze direction, head angle, torso orientation, arm and hand placement, leg and foot placement, viewpoint, view angle, perspective, shot size, framing, composition, depth of field, foreground/background layout, scene, props, environment, lighting direction, shadow quality, atmosphere, color palette, rendering style, linework, texture, material feel, and other non-identity visual details. If the image is a line drawing, stick figure, rough sketch, storyboard, pose guide, or simple doodle, treat it as a pose/composition reference only: infer a clean, anatomically plausible human pose and ignore unfinished sketch artifacts, stray lines, distorted proportions, missing fingers, missing head, or impossible joints. If the reference has the head or face covered, cropped, hidden, blocked, outside the frame, or only roughly indicated, do not copy that crop: infer a complete visible anime head and readable face for the generated prompt. Never output headless crop, neck down, no head, faceless, cropped head, head out of frame, or body-only framing unless the user explicitly asks for a headless/body-only result. If the image is live-action, a selfie, a photo, or a real-person pose reference, convert it into an anime illustration prompt: keep the reusable pose, gesture, viewpoint, framing, lighting, and scene layout, but do not preserve real person identity, photorealistic skin texture, celebrity identity, ethnicity, exact face, exact clothing brand, or photo style. Always include anime-illustration style cues such as anime illustration, clean anime linework, cel shading or soft anime rendering, expressive anime face, complete head visible, face visible, stylized proportions, and full-color illustration unless the source explicitly describes a monochrome drawing. Do NOT identify or preserve the source character: no character names, no franchise/source names, no LoRA trigger words, no cosplay labels, no exact hair color, eye color, pupil shape, unique hairstyle, iconic accessories, logos, or signature outfit details. Clothing may be described only as generic garment categories, silhouette, fabric type, fit, and broad material behavior, not as a named character outfit. Use viewpoint, view angle, or perspective wording instead of camera angle. Do not mention a physical camera, DSLR, camera lens, or camera object unless a real camera prop is clearly the intended subject. If multiple images are attached, merge the shared composition/style and include useful differences only when they are reusable structure. Output only the final prompt tags in one line; no markdown, no headings, no explanation, no JSON, no Chinese."
+      },
+      "prompt_translate_system_prompt": {
+        "description": "Prompt 转译规则",
+        "type": "text",
+        "default": "You are a Stable Diffusion / anime prompt translator. Convert the user's Chinese plain-language image request into concise English comma-separated tags. Keep every user-specified character, action, pose, expression, clothing, scene, camera angle and visible detail. Do not invent new characters, outfits, places, actions or body traits. You may only add modest quality, texture, material, lighting and rendering tags. Output only the final English prompt tags, no Chinese, no explanation, no markdown."
+      },
+      "discard_prompt_from_history": {
+        "description": "生成后从对话历史清理绘图提示词",
+        "type": "bool",
+        "default": true
+      }
+    }
+  },
+  "civitai_settings": {
+    "description": "LoRA 搜索/导入",
+    "type": "object",
+    "items": {
+      "enable": {
+        "description": "启用 LoRA 搜索/导入",
+        "type": "bool",
+        "default": true
+      },
+      "api_token": {
+        "description": "Civitai API Token",
+        "type": "string",
+        "default": ""
+      },
+      "cookie": {
+        "description": "Civitai Cookie",
+        "type": "text",
+        "default": ""
+      },
+      "search_sources": {
+        "description": "LoRA 搜索来源",
+        "type": "string",
+        "default": "civitai,huggingface,civitai_red",
+        "hint": "逗号分隔：civitai,huggingface,civitai_red,yodayo。默认会同时搜索 Civitai Red（R18+），red 来源结果会显示 R18+ 标注；命令里仍可用 /jh 找lora red <关键词> 或 /jh 找lora r18 <关键词> 只搜红站。Yodayo 当前没有公开稳定下载 API，默认不启用。"
+      },
+      "huggingface_api_token": {
+        "description": "Hugging Face Token",
+        "type": "string",
+        "default": "",
+        "hint": "公开模型搜索/下载通常可留空；私有、gated 仓库或更高限额需要填 HF User Access Token。"
+      },
+      "yodayo_cookie": {
+        "description": "Yodayo Cookie（预留）",
+        "type": "text",
+        "default": "",
+        "hint": "Yodayo 当前网页有 Cloudflare 防护，且未发现公开稳定 LoRA 下载 API；这里先预留登录态配置，默认不建议把 yodayo 加入 search_sources。"
+      },
+      "proxy": {
+        "description": "Civitai 代理",
+        "type": "string",
+        "default": "",
+        "hint": "你的 Clash 可填 http://127.0.0.1:7899"
+      },
+      "timeout": {
+        "description": "Civitai 超时秒数",
+        "type": "int",
+        "default": 60
+      },
+      "network_max_retries": {
+        "description": "Civitai/HF network retry count",
+        "type": "int",
+        "default": 2,
+        "hint": "Lower retry count prevents long stalls when the proxy is down. Bridge mode can route source requests through the ComfyUI host instead."
+      },
+      "proxy_circuit_breaker": {
+        "description": "Enable proxy circuit breaker",
+        "type": "bool",
+        "default": true,
+        "hint": "Temporarily skips repeated Civitai/HF requests when the configured proxy is unreachable."
+      },
+      "proxy_circuit_breaker_cooldown": {
+        "description": "Proxy circuit breaker cooldown seconds",
+        "type": "int",
+        "default": 60
+      },
+      "downloader": {
+        "description": "下载器",
+        "type": "string",
+        "default": "multithread",
+        "options": [
+          "multithread",
+          "aiohttp",
+          "aria2"
+        ],
+        "enum": [
+          "multithread",
+          "aiohttp",
+          "aria2"
+        ]
+      },
+      "aria2c_path": {
+        "description": "aria2c 路径",
+        "type": "string",
+        "default": "aria2c"
+      },
+      "download_split": {
+        "description": "多线程连接数",
+        "type": "int",
+        "default": 8
+      },
+      "lora_download_dir": {
+        "description": "ComfyUI LoRA 下载目录",
+        "type": "string",
+        "default": "",
+        "hint": "本地下载模式使用，必须指向 ComfyUI 实际读取的 models/loras。跨机器建议把 lora_download_mode 改为 comfyui_bridge，可留空。"
+      },
+      "lora_download_mode": {
+        "description": "LoRA 文件下载方式",
+        "type": "string",
+        "default": "auto",
+        "hint": "auto=有本地目录就本地下载，未填目录时走 ComfyUI Bridge；local=只用 lora_download_dir；comfyui_bridge=让 ComfyUI 所在机器直接下载到 models/loras。",
+        "options": [
+          "auto",
+          "local",
+          "comfyui_bridge"
+        ],
+        "enum": [
+          "auto",
+          "local",
+          "comfyui_bridge"
+        ]
+      },
+      "comfyui_bridge_token": {
+        "description": "ComfyUI Bridge Token",
+        "type": "string",
+        "default": "",
+        "hint": "安装 comfyui_custom_nodes/ComfyUI-AstrBot-LoraBridge 到 ComfyUI 后，重启并复制其 config.json 里的 token。"
+      },
+      "comfyui_bridge_endpoint": {
+        "description": "ComfyUI LoRA Bridge 路径",
+        "type": "string",
+        "default": "/astrbot/lora",
+        "hint": "通常保持默认。接口挂在当前 server_address 下，不需要单独端口。"
+      },
+      "comfyui_bridge_proxy": {
+        "description": "ComfyUI Bridge 代理",
+        "type": "string",
+        "default": "",
+        "hint": "用于 ComfyUI Bridge 转发 Civitai/Hugging Face 元数据请求和下载 LoRA 文件。代理地址按 ComfyUI 服务器本机视角填写：Clash 在同机填 http://127.0.0.1:7890；走 Clash LAN 填 http://CLASH_LAN_IP:7890，例如 http://192.168.1.23:7890；只填 host:port 也会自动补 http://。"
+      },
+      "comfyui_bridge_timeout": {
+        "description": "ComfyUI Bridge 下载超时秒数",
+        "type": "int",
+        "default": 7200,
+        "hint": "Bridge 任务总等待时间。大 LoRA 或慢网络可调大。"
+      },
+      "comfyui_bridge_connect_timeout": {
+        "description": "ComfyUI Bridge 连接超时秒数",
+        "type": "int",
+        "default": 30,
+        "hint": "AstrBot 连接 ComfyUI/FRP Bridge 的超时。FRP 链路慢或偶发超时时可调到 45-60。"
+      },
+      "comfyui_bridge_sock_read_timeout": {
+        "description": "ComfyUI Bridge 读取超时秒数",
+        "type": "int",
+        "default": 60,
+        "hint": "AstrBot 等待 Bridge 响应的单次读取超时，通常保持默认。"
+      },
+      "comfyui_bridge_fetch_timeout": {
+        "description": "ComfyUI Bridge metadata fetch timeout seconds",
+        "type": "int",
+        "default": 45,
+        "hint": "Used when Bridge mode fetches Civitai/Hugging Face metadata through the ComfyUI host and its local proxy."
+      },
+      "auto_create_profile": {
+        "description": "下载后自动创建角色档案",
+        "type": "bool",
+        "default": true
+      },
+      "enable_llm_profile_extract": {
+        "description": "用 LLM 提取角色档案",
+        "type": "bool",
+        "default": true
+      },
+      "llm_profile_cache": {
+        "description": "缓存 LLM 角色档案提取",
+        "type": "bool",
+        "default": true,
+        "hint": "同一 Civitai 版本和页面证据不重复调用 LLM，降低导入成本。"
+      },
+      "auto_optimize_allow_llm": {
+        "description": "保留项：LoRA 重置不再使用",
+        "type": "bool",
+        "default": false,
+        "hint": "3.0 起 /jh 重置lora 会清空 LoRA 获取/档案状态，不再用 LLM 修旧档案。"
+      },
+      "enable_profile_auto_match": {
+        "description": "绘图时自动按角色档案匹配 LoRA",
+        "type": "bool",
+        "default": true
+      },
+      "search_result_limit": {
+        "description": "LoRA 搜索结果数量",
+        "type": "int",
+        "default": 6,
+        "hint": "最大 6。搜索结果会按心数和下载量的综合分排序，并在转发消息里附带安全预览图。"
+      },
+      "default_strength_model": {
+        "description": "导入 LoRA 默认 model 强度",
+        "type": "float",
+        "default": 0.8
+      },
+      "default_strength_clip": {
+        "description": "导入 LoRA 默认 clip 强度",
+        "type": "float",
+        "default": 0.8
+      }
+    }
+  },
+  "control": {
+    "description": "权限与安全",
+    "type": "object",
+    "items": {
+      "admin_ids": {
+        "description": "管理员 QQ 号",
+        "type": "list",
+        "default": []
+      },
+      "whitelist_group_ids": {
+        "description": "允许使用的群号；留空表示不限制群聊",
+        "type": "list",
+        "default": []
+      },
+      "special_whitelist_enabled": {
+        "description": "生图特殊白名单群开关，仅对生图链路绕过插件侧管控",
+        "type": "bool",
+        "default": true
+      },
+      "special_whitelist_group_ids": {
+        "description": "生图特殊白名单群号，不与普通白名单合并",
+        "type": "list",
+        "default": []
+      },
+      "cooldown_seconds": {
+        "description": "冷却秒数",
+        "type": "int",
+        "default": 60
+      },
+      "generation_queue_max_size": {
+        "description": "ComfyUI 生成队列最大任务数",
+        "type": "int",
+        "default": 30,
+        "hint": "限制聊天、网页、视频和 LLM 工具的排队/运行任务总数。队列满时直接拒绝新任务，避免远端服务器延迟时无限堆后台任务。"
+      },
+      "generation_queue_stale_seconds": {
+        "description": "ComfyUI 排队任务陈旧秒数",
+        "type": "int",
+        "default": 21600,
+        "hint": "排队条目超过这个时间会从队列账本清理。"
+      },
+      "generation_queue_running_stale_seconds": {
+        "description": "ComfyUI 运行任务陈旧秒数",
+        "type": "int",
+        "default": 10800,
+        "hint": "运行条目超过这个时间会从队列账本清理，避免远端调用异常后队列长期假满。"
+      },
+      "generation_queue_ready_stale_seconds": {
+        "description": "ComfyUI ready/preparing orphan queue cleanup seconds",
+        "type": "int",
+        "default": 300,
+        "hint": "Only queue entries without a bound background task are cleaned by this timeout. Normal live tasks can keep waiting behind an active generation lock."
+      },
+      "generation_lock_acquire_timeout_seconds": {
+        "description": "ComfyUI generation lock stale recovery seconds",
+        "type": "int",
+        "default": 900,
+        "hint": "When a task waits for the ComfyUI generation lock longer than this and the recorded lock owner task is already done or missing, the plugin treats the lock as stale and releases it. Live generation tasks are not interrupted."
+      },
+      "generation_lock_remote_idle_timeout_seconds": {
+        "description": "ComfyUI remote-idle generation lock recovery seconds",
+        "type": "int",
+        "default": 300,
+        "hint": "If the local generation lock is held this long but ComfyUI /queue stays empty, the plugin treats the lock owner as a local stuck task and recovers the lock after confirmation."
+      },
+      "generation_lock_remote_idle_check_interval_seconds": {
+        "description": "ComfyUI remote-idle lock check interval seconds",
+        "type": "int",
+        "default": 15,
+        "hint": "How often to re-check ComfyUI /queue while diagnosing a long-held local generation lock."
+      },
+      "lockdown": {
+        "description": "全局锁定",
+        "type": "bool",
+        "default": false
+      },
+      "lockdown_command_enabled": {
+        "description": "允许管理员用命令切换锁定",
+        "type": "bool",
+        "default": true
+      },
+      "default_group_policy": {
+        "description": "群聊默认敏感词策略",
+        "type": "string",
+        "default": "none",
+        "options": [
+          "none",
+          "lite",
+          "full"
+        ],
+        "enum": [
+          "none",
+          "lite",
+          "full"
+        ]
+      },
+      "default_private_policy": {
+        "description": "私聊默认敏感词策略",
+        "type": "string",
+        "default": "none",
+        "options": [
+          "none",
+          "lite",
+          "full"
+        ],
+        "enum": [
+          "none",
+          "lite",
+          "full"
+        ]
+      },
+      "group_policies": {
+        "description": "群号到策略映射 JSON",
+        "type": "text",
+        "default": "{}"
+      }
+    }
+  },
+  "zayu_mode_settings": {
+    "description": "杂鱼模式",
+    "type": "object",
+    "items": {
+      "enable": {
+        "description": "开启杂鱼模式",
+        "type": "bool",
+        "default": false,
+        "hint": "默认关闭；开启后只替换 zayu_messages.json 里的常用提示文案。"
+      },
+      "message_map_path": {
+        "description": "杂鱼文案表路径",
+        "type": "string",
+        "default": "",
+        "hint": "留空使用插件数据目录下的 zayu_messages.json；一般不用改。"
+      }
+    }
+  }
+}

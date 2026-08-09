@@ -1,0 +1,3 @@
+opennsfw2[keras3]>=0.18.0
+Pillow>=10.0.0
+playwright>=1.44.0

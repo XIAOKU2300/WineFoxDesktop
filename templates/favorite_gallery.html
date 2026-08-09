@@ -1,0 +1,3240 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>酒狐 Gallery</title>
+  <link rel="preconnect" href="https://www.loliapi.com">
+  <style>
+    /* ═══════════════════════ 1. VARIABLES & RESET ═══════════════════════ */
+    :root{
+      color-scheme:dark;
+      --bg:#09090f;
+      --surface:rgba(18,18,28,.72);
+      --surface-solid:#12121c;
+      --glass:rgba(255,255,255,.04);
+      --glass-border:rgba(255,255,255,.07);
+      --glass-hover:rgba(255,255,255,.09);
+      --text:#ece8df;
+      --text-secondary:#9ea3b5;
+      --text-tertiary:#646a7d;
+      --accent:#e05a7a;
+      --accent-soft:rgba(224,90,122,.15);
+      --gold:#e8c870;
+      --gold-soft:rgba(232,200,112,.12);
+      --cyan:#5abfbf;
+      --cyan-soft:rgba(90,191,191,.12);
+      --border:rgba(255,255,255,.06);
+      --border-strong:rgba(255,255,255,.12);
+      --radius:12px;
+      --radius-sm:8px;
+      --radius-xs:6px;
+      --shadow:0 8px 32px rgba(0,0,0,.35);
+      --shadow-lg:0 20px 60px rgba(0,0,0,.5);
+      --font-sans:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC","Microsoft YaHei",sans-serif;
+      --font-mono:ui-monospace,SFMono-Regular,"SF Mono",Consolas,"Liberation Mono",monospace;
+      --ease:cubic-bezier(.4,0,.2,1);
+      --ease-spring:cubic-bezier(.175,.885,.32,1.275);
+      --ease-out:cubic-bezier(0,0,.2,1);
+      --topbar-h:62px;
+    }
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    html{min-height:100%;background:var(--bg);scroll-behavior:smooth;
+      scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.12) transparent}
+    ::-webkit-scrollbar{width:6px;height:6px}
+    ::-webkit-scrollbar-track{background:transparent}
+    ::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:99px}
+    ::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.2)}
+    body{min-height:100vh;color:var(--text);font-family:var(--font-sans);
+      font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased;
+      -moz-osx-font-smoothing:grayscale;overflow-x:hidden}
+    button,input,select,textarea{font:inherit;color:inherit;border:none;background:none}
+    button{cursor:pointer;-webkit-tap-highlight-color:transparent}
+    a{color:inherit;text-decoration:none}
+    img{display:block;max-width:100%}
+    h1,h2,h3,h4,p{margin:0}
+    ul,ol{list-style:none}
+    .sr-only{position:absolute;width:1px;height:1px;clip:rect(0,0,0,0);overflow:hidden}
+    .hidden{display:none!important}
+    body.secure-gallery{user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+    body.secure-gallery img{-webkit-user-drag:none}
+    body.age-locked{overflow:hidden}
+    body.age-locked .bg-orb,
+    body.age-locked .login-page,
+    body.age-locked .register-page,
+    body.age-locked .app-shell,
+    body.age-locked .page-loader,
+    body.age-locked .privacy-watermark{filter:blur(18px);transform:scale(1.012)}
+    .age-gate{position:fixed;inset:0;z-index:10000;display:grid;place-items:center;padding:20px;
+      background:rgba(5,5,8,.68);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px)}
+    .age-card{width:min(560px,100%);display:grid;gap:16px;padding:26px;border-radius:18px;
+      background:rgba(18,18,28,.82);border:1px solid var(--glass-border);
+      backdrop-filter:blur(40px);-webkit-backdrop-filter:blur(40px);box-shadow:var(--shadow-lg);
+      animation:scaleIn .45s var(--ease-spring) both}
+    .age-title{font-size:26px;line-height:1.12;font-weight:900;letter-spacing:-.01em}
+    .age-text{color:var(--text-secondary);font-size:13px;line-height:1.75}
+    .age-list{display:grid;gap:8px;padding:12px;border-radius:var(--radius-sm);
+      background:rgba(0,0,0,.24);border:1px solid var(--border);color:var(--text-secondary);
+      font-size:13px;line-height:1.65}
+    .age-list b{color:var(--text)}
+    .age-check{display:flex;align-items:flex-start;gap:10px;color:var(--text-secondary);
+      font-size:13px;line-height:1.65}
+    .age-check input{margin-top:4px;accent-color:var(--accent)}
+    .age-actions{display:flex;gap:10px;flex-wrap:wrap}
+    .age-actions .btn-primary{flex:1;min-width:220px}
+    .privacy-watermark{position:fixed;inset:-12vh -12vw;z-index:260;pointer-events:none;
+      display:grid;grid-template-columns:repeat(4,1fr);gap:52px;align-content:center;
+      opacity:0;visibility:hidden;transform:rotate(-24deg);mix-blend-mode:screen;
+      transition:opacity .2s var(--ease),visibility .2s var(--ease)}
+    .privacy-watermark.visible{opacity:.14;visibility:visible}
+    .privacy-watermark span{font:700 10px/1.5 var(--font-mono);letter-spacing:.04em;
+      color:rgba(255,255,255,.2);white-space:nowrap;text-shadow:0 1px 3px rgba(0,0,0,.45)}
+    .privacy-shield{position:fixed;inset:0;z-index:9998;display:grid;place-items:center;
+      padding:24px;background:rgba(7,7,12,.96);backdrop-filter:blur(24px);
+      opacity:0;visibility:hidden;pointer-events:none;transition:opacity .16s var(--ease)}
+    .privacy-shield.visible{opacity:1;visibility:visible;pointer-events:auto}
+    .privacy-shield-card{width:min(420px,92vw);padding:28px;border-radius:16px;
+      background:var(--surface-solid);border:1px solid var(--border);box-shadow:var(--shadow-lg);
+      text-align:center;display:grid;gap:8px}
+    .privacy-shield-card b{font-size:18px}
+    .privacy-shield-card span{color:var(--text-secondary);font-size:13px}
+    @media print{body.secure-gallery *{visibility:hidden!important}.privacy-shield{visibility:visible!important;opacity:1!important}}
+
+    /* ═══════════════════════ 2. ANIMATED BACKGROUND ═══════════════════════ */
+    #bgCanvas{position:fixed;inset:0;z-index:0;pointer-events:none}
+    .bg-orb{position:fixed;border-radius:50%;filter:blur(100px);opacity:.35;
+      pointer-events:none;z-index:0;will-change:transform}
+    .bg-orb-1{width:600px;height:600px;background:var(--accent);top:-15%;left:-10%;
+      animation:orbFloat1 25s ease-in-out infinite}
+    .bg-orb-2{width:500px;height:500px;background:var(--cyan);bottom:-10%;right:-8%;
+      animation:orbFloat2 30s ease-in-out infinite}
+    .bg-orb-3{width:350px;height:350px;background:var(--gold);top:40%;left:50%;
+      animation:orbFloat3 20s ease-in-out infinite;opacity:.18}
+    @keyframes orbFloat1{0%,100%{transform:translate(0,0) scale(1)}
+      33%{transform:translate(80px,60px) scale(1.1)}
+      66%{transform:translate(-40px,100px) scale(.9)}}
+    @keyframes orbFloat2{0%,100%{transform:translate(0,0) scale(1)}
+      33%{transform:translate(-70px,-50px) scale(.9)}
+      66%{transform:translate(50px,-80px) scale(1.08)}}
+    @keyframes orbFloat3{0%,100%{transform:translate(0,0) scale(1)}
+      50%{transform:translate(-100px,50px) scale(1.15)}}
+
+    /* ═══════════════════════ 3. GLOBAL ANIMATIONS ═══════════════════════ */
+    @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+    @keyframes fadeUp{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:none}}
+    @keyframes fadeDown{from{opacity:0;transform:translateY(-16px)}to{opacity:1;transform:none}}
+    @keyframes scaleIn{from{opacity:0;transform:scale(.92)}to{opacity:1;transform:none}}
+    @keyframes slideInRight{from{opacity:0;transform:translateX(30px)}to{opacity:1;transform:none}}
+    @keyframes slideInLeft{from{opacity:0;transform:translateX(-30px)}to{opacity:1;transform:none}}
+    @keyframes shimmer{0%{background-position:-400px 0}100%{background-position:400px 0}}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+    @keyframes barGrow{from{width:0}to{width:var(--bar-w,0%)}}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    @keyframes floatY{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+    @keyframes toastIn{from{opacity:0;transform:translateX(100%) scale(.9)}
+      to{opacity:1;transform:none}}
+    @keyframes toastOut{to{opacity:0;transform:translateX(100%) scale(.9)}}
+    @keyframes marquee{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
+
+    .anim-fade-up{animation:fadeUp .5s var(--ease) both}
+    .anim-fade-in{animation:fadeIn .4s var(--ease) both}
+    .anim-scale-in{animation:scaleIn .35s var(--ease) both}
+    [data-reveal]{opacity:0;transform:translateY(30px);
+      transition:opacity .6s var(--ease),transform .6s var(--ease)}
+    [data-reveal].revealed{opacity:1;transform:none}
+
+    /* ═══════════════════════ 4. SHARED COMPONENTS ═══════════════════════ */
+    /* --- Glass Card --- */
+    .glass{background:var(--glass);border:1px solid var(--glass-border);
+      backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+      border-radius:var(--radius);transition:background .25s var(--ease),
+      border-color .25s var(--ease),box-shadow .25s var(--ease)}
+    .glass:hover{background:var(--glass-hover);border-color:var(--border-strong)}
+    .glass-solid{background:var(--surface);border:1px solid var(--border);
+      backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);
+      border-radius:var(--radius)}
+
+    /* --- Buttons --- */
+    .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;
+      height:40px;padding:0 18px;border:1px solid var(--border);border-radius:var(--radius-sm);
+      background:var(--glass);backdrop-filter:blur(12px);color:var(--text);font-size:13px;
+      font-weight:600;white-space:nowrap;transition:all .2s var(--ease);user-select:none;
+      position:relative;overflow:hidden}
+    .btn::after{content:'';position:absolute;inset:0;background:radial-gradient(circle at var(--mx,50%) var(--my,50%),
+      rgba(255,255,255,.12),transparent 60%);opacity:0;transition:opacity .3s}
+    .btn:hover::after{opacity:1}
+    .btn:hover{border-color:var(--border-strong);transform:translateY(-1px);
+      box-shadow:0 4px 16px rgba(0,0,0,.25)}
+    .btn:active{transform:translateY(0) scale(.98)}
+    .btn-primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:700}
+    .btn-primary:hover{background:#d44f6f;border-color:#d44f6f}
+    .btn-ghost{background:transparent;border-color:transparent}
+    .btn-ghost:hover{background:var(--glass);border-color:var(--border)}
+    .btn-sm{height:34px;padding:0 12px;font-size:12px;border-radius:var(--radius-xs)}
+    .btn-icon{width:40px;padding:0;justify-content:center}
+    .btn-icon.sm{width:34px;height:34px}
+
+    /* --- Inputs --- */
+    .input,.select-wrap select{width:100%;height:42px;padding:0 14px;
+      border:1px solid var(--border);border-radius:var(--radius-sm);
+      background:rgba(0,0,0,.3);color:var(--text);font-size:14px;
+      transition:all .2s var(--ease);outline:none}
+    .input:focus,.select-wrap select:focus{border-color:var(--accent);
+      box-shadow:0 0 0 3px var(--accent-soft)}
+    .input::placeholder{color:var(--text-tertiary)}
+    .textarea{width:100%;min-height:90px;padding:12px 14px;border:1px solid var(--border);
+      border-radius:var(--radius-sm);background:rgba(0,0,0,.3);color:var(--text);
+      font-size:13px;line-height:1.7;resize:vertical;outline:none}
+    .textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+    .select-wrap{position:relative}
+    .select-wrap select{appearance:none;padding-right:36px;cursor:pointer}
+    .select-wrap::after{content:'▾';position:absolute;right:12px;top:50%;
+      transform:translateY(-50%);color:var(--text-tertiary);pointer-events:none;font-size:12px}
+    .search-wrap{position:relative}
+    .search-wrap .input{padding-left:40px}
+    .search-wrap .search-icon{position:absolute;left:13px;top:50%;transform:translateY(-50%);
+      color:var(--text-tertiary);pointer-events:none}
+
+    /* --- Tags --- */
+    .tag{display:inline-flex;align-items:center;gap:4px;height:26px;padding:0 10px;
+      border-radius:99px;font-size:11px;font-weight:600;white-space:nowrap}
+    .tag-pink{background:var(--accent-soft);color:var(--accent)}
+    .tag-gold{background:var(--gold-soft);color:var(--gold)}
+    .tag-cyan{background:var(--cyan-soft);color:var(--cyan)}
+
+    /* --- Skeleton --- */
+    .skeleton{background:linear-gradient(90deg,rgba(255,255,255,.04) 0%,
+      rgba(255,255,255,.08) 50%,rgba(255,255,255,.04) 100%);
+      background-size:800px 100%;animation:shimmer 1.8s infinite linear;
+      border-radius:var(--radius-sm)}
+
+    /* --- Toast System --- */
+    #toasts{position:fixed;top:16px;right:16px;z-index:9999;display:flex;
+      flex-direction:column;gap:8px;pointer-events:none;max-width:380px;width:100%}
+    .toast{pointer-events:auto;display:flex;align-items:center;gap:10px;
+      padding:14px 18px;border-radius:var(--radius-sm);background:var(--surface-solid);
+      border:1px solid var(--border);backdrop-filter:blur(20px);
+      box-shadow:var(--shadow);animation:toastIn .35s var(--ease-spring) both;
+      font-size:13px;line-height:1.5}
+    .toast.leaving{animation:toastOut .3s var(--ease) both}
+    .toast-icon{flex-shrink:0;width:20px;height:20px;border-radius:50%;display:grid;
+      place-items:center;font-size:11px;font-weight:900}
+    .toast-success .toast-icon{background:rgba(90,191,140,.2);color:#5abf8c}
+    .toast-error .toast-icon{background:var(--accent-soft);color:var(--accent)}
+    .toast-info .toast-icon{background:var(--cyan-soft);color:var(--cyan)}
+
+    /* --- Spinner --- */
+    .spinner{width:20px;height:20px;border:2px solid var(--border);
+      border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite}
+    .spinner-lg{width:36px;height:36px;border-width:3px}
+    .page-loader{position:fixed;inset:var(--topbar-h) 0 0;z-index:90;
+      display:grid;place-items:start center;padding-top:120px;background:rgba(9,9,15,.46);
+      backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+      opacity:0;pointer-events:none;transition:opacity .18s var(--ease)}
+    .page-loader.visible{opacity:1;pointer-events:auto}
+    .page-loader-card{display:flex;align-items:center;gap:12px;padding:14px 18px;
+      border-radius:var(--radius);background:var(--surface-solid);border:1px solid var(--border);
+      box-shadow:var(--shadow);color:var(--text-secondary);font-size:13px;font-weight:600}
+    .image-loader{position:absolute;inset:0;z-index:2;display:grid;place-items:center;
+      background:linear-gradient(135deg,rgba(255,255,255,.035),rgba(0,0,0,.18));
+      transition:opacity .25s var(--ease),visibility .25s var(--ease)}
+    .image-loader .spinner{width:28px;height:28px;border-width:2px}
+    .image-loaded .image-loader{opacity:0;visibility:hidden}
+    .image-error .image-loader{display:none}
+    .image-error::after{content:'加载失败';position:absolute;inset:0;z-index:2;
+      display:grid;place-items:center;color:var(--text-tertiary);font-size:12px;
+      background:rgba(0,0,0,.28)}
+    .lightbox-loader{background:rgba(0,0,0,.22);z-index:4}
+    .lightbox-image.image-loaded .lightbox-loader{opacity:0;visibility:hidden}
+    .lightbox-image.image-error .lightbox-loader{display:none}
+
+    /* ═══════════════════════ 5. LOGIN PAGE ═══════════════════════ */
+    .login-page{position:fixed;inset:0;z-index:100;display:grid;place-items:center;
+      padding:20px;overflow-y:auto;overscroll-behavior:contain}
+    .login-bg{position:absolute;inset:0;z-index:0}
+    .login-bg img{width:100%;height:100%;object-fit:cover;opacity:0;
+      transition:opacity 1.2s var(--ease)}
+    .login-bg img.loaded{opacity:1}
+    .login-bg::after{content:'';position:absolute;inset:0;
+      background:linear-gradient(135deg,rgba(9,9,15,.88),rgba(9,9,15,.65),rgba(9,9,15,.85));
+      backdrop-filter:blur(3px)}
+    .login-card{position:relative;z-index:2;width:min(400px,100%);padding:36px;
+      border-radius:20px;background:rgba(18,18,28,.6);border:1px solid var(--glass-border);
+      backdrop-filter:blur(40px);-webkit-backdrop-filter:blur(40px);
+      box-shadow:var(--shadow-lg);animation:scaleIn .5s var(--ease-spring) both;
+      display:flex;flex-direction:column;gap:20px}
+    .login-logo{width:56px;height:56px;border-radius:16px;
+      background:linear-gradient(135deg,var(--accent),#c94068);
+      display:grid;place-items:center;font-size:24px;font-weight:900;color:#fff;
+      box-shadow:0 8px 24px rgba(224,90,122,.3)}
+    .login-title{font-size:26px;font-weight:800;letter-spacing:-.02em}
+    .login-subtitle{color:var(--text-secondary);font-size:14px;margin-top:2px}
+    .login-form{display:flex;flex-direction:column;gap:14px}
+    .login-divider{height:1px;background:var(--border);margin:2px 0}
+    .register-box{display:grid;gap:10px}
+    .register-title{font-size:13px;font-weight:800;color:var(--text)}
+    .register-hint{font-size:12px;color:var(--text-secondary);line-height:1.7}
+    .register-output{display:none;gap:8px;padding:10px;border:1px solid var(--border);
+      border-radius:var(--radius-sm);background:rgba(0,0,0,.26)}
+    .register-output.visible{display:grid}
+    .register-command{width:100%;min-height:76px;padding:10px;border-radius:var(--radius-xs);
+      background:rgba(0,0,0,.34);color:var(--cyan);font:700 12px/1.6 var(--font-mono);
+      border:1px solid var(--border);resize:vertical}
+    .auth-switch{display:flex;align-items:center;justify-content:center;gap:8px;
+      color:var(--text-secondary);font-size:13px;flex-wrap:wrap}
+    .auth-link{height:auto;padding:0;color:var(--cyan);font-weight:800;text-decoration:underline;
+      text-underline-offset:3px;background:none;border:0}
+    .login-input-group{position:relative}
+    .login-input-group .input{height:48px;padding:0 16px;font-size:15px;
+      border-radius:var(--radius);background:rgba(0,0,0,.35)}
+    .login-footer{display:flex;align-items:center;justify-content:space-between;
+      color:var(--text-tertiary);font-size:12px;margin-top:4px}
+    .login-particles{position:absolute;inset:0;z-index:1;pointer-events:none;overflow:hidden}
+    .login-particle{position:absolute;width:3px;height:3px;background:rgba(255,255,255,.2);
+      border-radius:50%;animation:floatY 4s ease-in-out infinite}
+
+    /* ═══════════════════════ 6. APP SHELL ═══════════════════════ */
+    .app-shell{min-height:100vh;display:flex;flex-direction:column;position:relative;z-index:1}
+
+    /* --- Top Bar --- */
+    .topbar{position:fixed;top:0;left:0;right:0;z-index:50;height:var(--topbar-h);
+      background:rgba(9,9,15,.7);border-bottom:1px solid var(--border);
+      backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);
+      transition:transform .3s var(--ease),box-shadow .3s var(--ease)}
+    .topbar.scrolled{box-shadow:0 4px 24px rgba(0,0,0,.3)}
+    .topbar-inner{max-width:1440px;margin:0 auto;height:100%;display:flex;
+      align-items:center;gap:16px;padding:0 24px}
+    .topbar-brand{display:flex;align-items:center;gap:10px;min-width:0;flex-shrink:0}
+    .topbar-logo{width:36px;height:36px;border-radius:10px;
+      background:linear-gradient(135deg,var(--accent),#c94068);
+      display:grid;place-items:center;font-size:16px;font-weight:900;color:#fff}
+    .topbar-name{font-size:17px;font-weight:800;letter-spacing:-.01em;
+      white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .topbar-nav{display:flex;align-items:center;gap:2px;margin:0 auto}
+    .nav-item{position:relative;height:36px;padding:0 16px;display:flex;
+      align-items:center;gap:6px;border-radius:var(--radius-sm);color:var(--text-secondary);
+      font-size:13px;font-weight:600;transition:all .2s var(--ease)}
+    .nav-item:hover{color:var(--text);background:var(--glass)}
+    .nav-item.active{color:var(--text)}
+    .nav-item.active::after{content:'';position:absolute;bottom:-14px;left:50%;
+      transform:translateX(-50%);width:20px;height:2px;border-radius:2px;
+      background:var(--accent)}
+    .nav-item svg{width:16px;height:16px}
+    .topbar-actions{display:flex;align-items:center;gap:6px;flex-shrink:0}
+
+    /* ═══════════════════════ 7. MAIN CONTENT ═══════════════════════ */
+    .main-content{flex:1;padding-top:var(--topbar-h)}
+    .container{max-width:1440px;margin:0 auto;padding:0 24px}
+
+    /* --- Page Transitions --- */
+    .page{display:none;animation:fadeUp .4s var(--ease) both}
+    .page.active{display:block}
+
+    /* ═══════════════════════ 8. GALLERY PAGE ═══════════════════════ */
+    /* --- Showcase Marquee --- */
+    .showcase-section{padding:24px 0 8px;overflow:hidden;position:relative}
+    .showcase-track{display:flex;gap:12px;width:max-content;
+      animation:marquee var(--marquee-duration,60s) linear infinite}
+    .showcase-track:hover{animation-play-state:paused}
+    .showcase-item{flex-shrink:0;width:180px;height:100px;border-radius:var(--radius-sm);
+      overflow:hidden;position:relative;cursor:pointer;
+      transition:transform .3s var(--ease),box-shadow .3s var(--ease)}
+    .showcase-item:hover{transform:scale(1.05);box-shadow:0 8px 24px rgba(0,0,0,.4)}
+    .showcase-item img{width:100%;height:100%;object-fit:cover;
+      transition:transform .4s var(--ease)}
+    .showcase-item:hover img{transform:scale(1.08)}
+    .showcase-overlay{position:absolute;inset:0;
+      background:linear-gradient(to top,rgba(0,0,0,.7),transparent 60%);
+      display:flex;align-items:flex-end;padding:8px;opacity:0;
+      transition:opacity .25s var(--ease)}
+    .showcase-item:hover .showcase-overlay{opacity:1}
+    .showcase-overlay span{font-size:11px;font-weight:600;
+      text-shadow:0 1px 3px rgba(0,0,0,.5)}
+    .showcase-fade{position:absolute;top:0;bottom:0;width:80px;z-index:2;pointer-events:none}
+    .showcase-fade-l{left:0;background:linear-gradient(to right,var(--bg),transparent)}
+    .showcase-fade-r{right:0;background:linear-gradient(to left,var(--bg),transparent)}
+
+    /* --- Hero Section --- */
+    .hero-section{padding:24px 0 0}
+    .hero-grid{display:grid;grid-template-columns:1fr 340px;gap:16px}
+    .hero-card{padding:32px;border-radius:var(--radius);min-height:200px;
+      display:flex;flex-direction:column;justify-content:flex-end;gap:8px;
+      position:relative;overflow:hidden}
+    .hero-card::before{content:'';position:absolute;inset:0;
+      background:linear-gradient(135deg,rgba(224,90,122,.12),transparent 40%,
+      rgba(90,191,191,.08));z-index:0}
+    .hero-card>*{position:relative;z-index:1}
+    .hero-title{font-size:clamp(28px,5vw,48px);font-weight:900;
+      letter-spacing:-.03em;line-height:1.05}
+    .hero-desc{color:var(--text-secondary);font-size:15px;max-width:500px}
+    .hero-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;
+      border-radius:var(--radius);overflow:hidden;background:var(--border)}
+    .stat-cell{display:flex;flex-direction:column;gap:4px;padding:20px 18px;
+      background:var(--surface-solid)}
+    .stat-value{font-size:28px;font-weight:800;color:var(--text);
+      font-feature-settings:'tnum';font-variant-numeric:tabular-nums}
+    .stat-label{font-size:12px;color:var(--text-tertiary);font-weight:500}
+
+    /* --- Toolbar --- */
+    .toolbar-section{padding:20px 0 0;position:sticky;top:var(--topbar-h);z-index:10;
+      background:rgba(9,9,15,.85);backdrop-filter:blur(16px);
+      -webkit-backdrop-filter:blur(16px);margin:0 -24px;padding:16px 24px;
+      border-bottom:1px solid transparent;transition:border-color .3s}
+    .toolbar-section.stuck{border-color:var(--border)}
+    .toolbar-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    .toolbar-search{flex:1;min-width:200px}
+    .toolbar-filters{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    .role-filter-tools{display:flex;align-items:center;gap:8px;padding-top:10px}
+    .role-filter-search{width:min(280px,100%)}
+    .role-filter-search .input{height:36px;font-size:13px}
+
+    /* --- Filter Chips --- */
+    .chip-scroll{display:flex;gap:6px;flex-wrap:wrap;overflow-x:hidden;overflow-y:auto;
+      max-height:118px;padding:12px 0 4px;scrollbar-width:thin;
+      scrollbar-color:rgba(255,255,255,.18) transparent}
+    .chip-scroll::-webkit-scrollbar{width:4px;height:0}
+    .chip-scroll::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18);border-radius:99px}
+    .chip{height:32px;padding:0 14px;border-radius:99px;display:inline-flex;
+      align-items:center;gap:6px;font-size:12px;font-weight:600;white-space:nowrap;
+      border:1px solid var(--border);background:var(--glass);color:var(--text-secondary);
+      transition:all .2s var(--ease);flex-shrink:0}
+    .chip:hover{border-color:var(--border-strong);color:var(--text);background:var(--glass-hover)}
+    .chip.active{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+    .chip .chip-count{font-size:10px;opacity:.7}
+
+    /* --- Masonry Gallery --- */
+    .gallery-section{padding:16px 0 60px}
+    .masonry{column-count:4;column-gap:14px}
+    .masonry-item{break-inside:avoid;margin-bottom:14px;opacity:0;
+      transform:translateY(20px);animation:fadeUp .45s var(--ease) both;
+      animation-delay:var(--d,0s)}
+    .card{border-radius:var(--radius);overflow:hidden;background:var(--surface-solid);
+      border:1px solid var(--border);transition:transform .35s var(--ease),
+      box-shadow .35s var(--ease),border-color .35s var(--ease);cursor:pointer}
+    .card:hover{transform:translateY(-4px);box-shadow:0 12px 40px rgba(0,0,0,.35);
+      border-color:var(--border-strong)}
+    .card-image{position:relative;overflow:hidden;background:rgba(0,0,0,.3);
+      aspect-ratio:3/4;min-height:180px}
+    .card-image img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .5s var(--ease);
+      opacity:0;transition:opacity .4s var(--ease),transform .5s var(--ease)}
+    .card-image img.loaded{opacity:1}
+    .card:hover .card-image img{transform:scale(1.04)}
+    .card-image .card-hover-info{position:absolute;inset:0;
+      background:linear-gradient(to top,rgba(0,0,0,.75) 0%,transparent 50%);
+      display:flex;flex-direction:column;justify-content:flex-end;padding:14px;
+      opacity:0;transform:translateY(8px);
+      transition:opacity .3s var(--ease),transform .3s var(--ease)}
+    .card:hover .card-hover-info{opacity:1;transform:none}
+    .card-body{padding:12px 14px 14px}
+    .card-character{font-size:14px;font-weight:700;white-space:nowrap;
+      overflow:hidden;text-overflow:ellipsis}
+    .card-maker{font-size:12px;color:var(--cyan);margin-top:2px;
+      white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+      display:flex;align-items:center;gap:4px}
+    .card-maker-avatar{width:16px;height:16px;border-radius:50%;
+      display:inline-grid;place-items:center;font-size:8px;font-weight:800;
+      color:#fff;flex-shrink:0}
+    .card-prompt-preview{margin-top:8px;font-size:12px;color:var(--text-tertiary);
+      line-height:1.5;display:-webkit-box;-webkit-line-clamp:2;
+      -webkit-box-orient:vertical;overflow:hidden}
+
+    /* --- Empty State --- */
+    .empty-state{grid-column:1/-1;padding:60px 20px;text-align:center;
+      color:var(--text-tertiary);border:1px dashed var(--border);
+      border-radius:var(--radius)}
+    .empty-state svg{width:48px;height:48px;margin:0 auto 12px;opacity:.4}
+
+    /* --- Load More --- */
+    .load-more{display:flex;justify-content:center;padding:32px 0}
+
+    /* ═══════════════════════ 9. RANKING PAGE ═══════════════════════ */
+    .rank-header{padding:24px 0 16px}
+    .rank-header-card{padding:32px;border-radius:var(--radius);position:relative;overflow:hidden}
+    .rank-header-card::before{content:'';position:absolute;inset:0;
+      background:linear-gradient(135deg,var(--gold-soft),transparent 40%,var(--accent-soft))}
+    .rank-header-card>*{position:relative;z-index:1}
+    .rank-header-card h1{font-size:clamp(24px,4vw,36px);font-weight:900}
+    .rank-controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+      padding:8px 0 16px}
+    .rank-list{display:flex;flex-direction:column;gap:10px;padding-bottom:60px}
+    .rank-card{display:flex;align-items:center;gap:16px;padding:16px 20px;
+      border-radius:var(--radius);transition:all .25s var(--ease);
+      animation:fadeUp .4s var(--ease) both;animation-delay:var(--d,0s)}
+    .rank-card:hover{background:var(--glass-hover);transform:translateX(4px)}
+    .rank-medal{width:44px;height:44px;border-radius:var(--radius-sm);
+      display:grid;place-items:center;font-size:16px;font-weight:900;flex-shrink:0;
+      border:1px solid var(--border);background:var(--glass);color:var(--text-tertiary)}
+    .rank-card[data-rank="1"] .rank-medal{background:linear-gradient(135deg,#ffd700,#ffb800);
+      color:#1a1200;border-color:rgba(255,215,0,.3);box-shadow:0 4px 16px rgba(255,215,0,.2)}
+    .rank-card[data-rank="2"] .rank-medal{background:linear-gradient(135deg,#c0c0c0,#a8a8a8);
+      color:#1a1a1a;border-color:rgba(192,192,192,.3)}
+    .rank-card[data-rank="3"] .rank-medal{background:linear-gradient(135deg,#cd7f32,#b06c28);
+      color:#1a1200;border-color:rgba(205,127,50,.3)}
+    .rank-info{flex:1;min-width:0}
+    .rank-name{font-size:15px;font-weight:700;display:flex;align-items:center;gap:8px}
+    .rank-avatar{width:28px;height:28px;border-radius:50%;display:inline-grid;
+      place-items:center;font-size:12px;font-weight:800;color:#fff;flex-shrink:0}
+    .rank-bar{height:6px;border-radius:99px;background:rgba(255,255,255,.05);
+      margin-top:10px;overflow:hidden}
+    .rank-bar-fill{height:100%;border-radius:99px;
+      background:linear-gradient(90deg,var(--accent),var(--gold));
+      animation:barGrow .8s var(--ease) both;animation-delay:var(--d,0s)}
+    .rank-count{font-size:18px;font-weight:800;color:var(--text);
+      font-feature-settings:'tnum';white-space:nowrap;flex-shrink:0}
+    .rank-count small{font-size:12px;font-weight:500;color:var(--text-tertiary);margin-left:2px}
+
+    /* ═══════════════════════ 10. ADMIN CONSOLE ═══════════════════════ */
+    .admin-section{padding:24px 0 70px}
+    .admin-hero{display:grid;grid-template-columns:1.2fr .8fr;gap:14px;margin-bottom:16px}
+    .admin-panel{padding:20px;border-radius:var(--radius);background:var(--surface);
+      border:1px solid var(--border);backdrop-filter:blur(24px)}
+    .admin-title{font-size:22px;font-weight:900;letter-spacing:-.01em}
+    .admin-muted{color:var(--text-secondary);font-size:13px}
+    .admin-stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:14px}
+    .admin-stat{padding:14px;border-radius:var(--radius-sm);background:rgba(255,255,255,.04);
+      border:1px solid var(--border)}
+    .admin-stat b{display:block;font-size:22px;line-height:1.1}
+    .admin-stat span{font-size:12px;color:var(--text-tertiary)}
+    .admin-layout{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:14px;align-items:start}
+    .admin-tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+    .admin-tab{height:34px;padding:0 12px;border-radius:var(--radius-xs);
+      background:rgba(255,255,255,.04);border:1px solid var(--border);font-size:12px;font-weight:700}
+    .admin-tab.active{background:var(--accent);border-color:var(--accent);color:#fff}
+    .admin-list{display:grid;gap:10px}
+    .admin-row{display:grid;grid-template-columns:28px 58px minmax(0,1fr) auto;gap:12px;align-items:center;
+      padding:10px;border-radius:var(--radius-sm);background:rgba(255,255,255,.035);border:1px solid var(--border)}
+    .admin-row.clickable{cursor:pointer}
+    .admin-row.selected{background:rgba(236,96,130,.12);border-color:rgba(236,96,130,.42)}
+    .admin-row.is-unrecognized{background:rgba(255,201,103,.06);border-color:rgba(255,201,103,.32)}
+    .admin-check{width:22px;height:22px;display:grid!important;place-items:center;cursor:pointer}
+    .admin-check input{width:18px;height:18px;accent-color:var(--accent)}
+    .admin-thumb{width:58px;height:76px;border-radius:var(--radius-xs);object-fit:cover;background:#07070d}
+    .admin-row-title{font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .admin-row-sub{font-size:12px;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .admin-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+    .admin-bulk-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;
+      padding:10px;border-radius:var(--radius-sm);background:rgba(255,255,255,.035);border:1px solid var(--border)}
+    .admin-bulk-meta{display:flex;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--text-secondary);font-weight:700}
+    .admin-bulk-panel{margin-top:14px;padding-top:14px;border-top:1px solid var(--border)}
+    .admin-lora-index{width:58px;height:42px;border-radius:var(--radius-xs);display:grid;place-items:center;
+      background:rgba(255,255,255,.055);border:1px solid var(--border);font-size:13px;font-weight:900;
+      font-feature-settings:'tnum';color:var(--gold)}
+    .admin-row.is-disabled{opacity:.58}
+    .admin-lora-status{display:inline-flex;height:22px;align-items:center;padding:0 8px;border-radius:99px;
+      background:var(--gold-soft);color:var(--gold);font-size:11px;font-weight:900}
+    .admin-inline-check{display:flex!important;grid-template-columns:none!important;flex-direction:row;
+      align-items:center;gap:8px}
+    .admin-inline-check input{width:16px;height:16px;accent-color:var(--accent)}
+    .admin-form{display:grid;gap:10px}
+    .admin-form label{display:grid;gap:5px;font-size:12px;color:var(--text-secondary);font-weight:700}
+    .admin-table{display:grid;gap:8px}
+    .admin-account{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;
+      padding:12px;border-radius:var(--radius-sm);background:rgba(255,255,255,.035);border:1px solid var(--border)}
+    .admin-role{display:inline-flex;height:22px;align-items:center;padding:0 8px;border-radius:99px;
+      background:var(--cyan-soft);color:var(--cyan);font-size:11px;font-weight:800}
+    .admin-role.admin{background:var(--gold-soft);color:var(--gold)}
+    .access-log{max-height:360px;overflow:auto;display:grid;gap:8px}
+    .access-log-item{padding:10px;border-radius:var(--radius-xs);background:rgba(0,0,0,.18);
+      border:1px solid var(--border);font-size:12px;color:var(--text-secondary)}
+    @media(max-width:980px){
+      .admin-hero,.admin-layout{grid-template-columns:1fr}
+      .admin-stat-grid{grid-template-columns:repeat(2,1fr)}
+    }
+
+    /* ═══════════════════════ 11. MODAL / LIGHTBOX ═══════════════════════ */
+    .lightbox{position:fixed;inset:0;z-index:200;display:flex;align-items:center;
+      justify-content:center;padding:20px;opacity:0;pointer-events:none;
+      transition:opacity .3s var(--ease)}
+    .lightbox.open{opacity:1;pointer-events:auto}
+    .lightbox-backdrop{position:absolute;inset:0;
+      background:rgba(0,0,0,.82);backdrop-filter:blur(20px);
+      -webkit-backdrop-filter:blur(20px)}
+    .lightbox-container{position:relative;z-index:1;width:min(1200px,100%);
+      max-height:calc(100vh - 40px);display:grid;grid-template-columns:minmax(0,1fr) 360px;
+      border-radius:16px;overflow:hidden;background:var(--surface-solid);
+      border:1px solid var(--border);box-shadow:var(--shadow-lg);
+      transform:scale(.94) translateY(12px);
+      transition:transform .35s var(--ease-spring)}
+    .lightbox.open .lightbox-container{transform:none}
+    .lightbox-image{position:relative;display:flex;align-items:center;justify-content:center;
+      background:#080810;min-height:300px;max-height:calc(100vh - 40px);overflow:auto}
+    .lightbox-image img{max-width:100%;max-height:calc(100vh - 40px);object-fit:contain;
+      transition:transform .3s var(--ease);cursor:zoom-in}
+    .lightbox-image img.zoomed{transform:scale(2);cursor:zoom-out}
+    .lightbox-nav{position:absolute;top:50%;transform:translateY(-50%);
+      width:44px;height:44px;border-radius:50%;background:rgba(0,0,0,.5);
+      border:1px solid rgba(255,255,255,.1);color:#fff;display:grid;place-items:center;
+      z-index:5;backdrop-filter:blur(8px);transition:all .2s var(--ease)}
+    .lightbox-nav:hover{background:rgba(0,0,0,.7);border-color:rgba(255,255,255,.2)}
+    .lightbox-prev{left:12px}
+    .lightbox-next{right:12px}
+    .lightbox-sidebar{display:flex;flex-direction:column;gap:16px;padding:24px;
+      overflow-y:auto;max-height:calc(100vh - 40px);border-left:1px solid var(--border)}
+    .lightbox-close{position:absolute;top:12px;right:12px;z-index:10}
+    .lightbox-character{font-size:22px;font-weight:800;letter-spacing:-.01em}
+    .lightbox-maker{font-size:13px;color:var(--cyan);display:flex;align-items:center;gap:6px}
+    .lightbox-maker-avatar{width:22px;height:22px;border-radius:50%;display:inline-grid;
+      place-items:center;font-size:9px;font-weight:800;color:#fff}
+    .lightbox-prompt{padding:16px;border-radius:var(--radius-sm);
+      background:rgba(248,239,224,.95);color:#28221c;font-size:13px;line-height:1.8;
+      max-height:40vh;overflow-y:auto;overflow-wrap:anywhere;
+      border:1px solid rgba(0,0,0,.08)}
+    .lightbox-prompt::-webkit-scrollbar-thumb{background:rgba(0,0,0,.15)}
+    .lightbox-tags{display:flex;flex-wrap:wrap;gap:4px}
+    .lightbox-actions{display:flex;gap:8px;margin-top:auto;padding-top:12px;
+      border-top:1px solid var(--border)}
+    .lightbox-counter{position:absolute;bottom:12px;left:50%;transform:translateX(-50%);
+      padding:4px 12px;border-radius:99px;background:rgba(0,0,0,.6);
+      backdrop-filter:blur(8px);font-size:12px;color:rgba(255,255,255,.7);z-index:5}
+
+    /* ═══════════════════════ 11. BACK TO TOP ═══════════════════════ */
+    .back-top{position:fixed;bottom:24px;right:24px;z-index:40;
+      width:44px;height:44px;border-radius:50%;background:var(--surface-solid);
+      border:1px solid var(--border);backdrop-filter:blur(12px);color:var(--text);
+      display:grid;place-items:center;box-shadow:var(--shadow);
+      opacity:0;transform:translateY(12px);pointer-events:none;
+      transition:all .3s var(--ease)}
+    .back-top.visible{opacity:1;transform:none;pointer-events:auto}
+    .back-top:hover{border-color:var(--accent);background:var(--accent-soft);
+      transform:translateY(-2px)}
+
+    /* ═══════════════════════ 12. SIDEBAR DRAWER (MOBILE) ═══════════════════════ */
+    .drawer-overlay{position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.6);
+      backdrop-filter:blur(8px);opacity:0;pointer-events:none;
+      transition:opacity .3s var(--ease)}
+    .drawer-overlay.open{opacity:1;pointer-events:auto}
+    .drawer{position:fixed;top:0;right:0;bottom:0;z-index:101;width:min(320px,85vw);
+      background:var(--surface-solid);border-left:1px solid var(--border);
+      padding:20px;overflow-y:auto;transform:translateX(100%);
+      transition:transform .35s var(--ease)}
+    .drawer-overlay.open .drawer{transform:none}
+    .drawer-header{display:flex;align-items:center;justify-content:space-between;
+      margin-bottom:20px}
+
+    /* ═══════════════════════ 13. RESPONSIVE ═══════════════════════ */
+    @media(max-width:1200px){
+      .masonry{column-count:3}
+      .hero-grid{grid-template-columns:1fr}
+      .hero-stats{grid-template-columns:repeat(3,1fr)}
+    }
+    @media(max-width:860px){
+      .masonry{column-count:2}
+      .lightbox-container{grid-template-columns:1fr;max-height:100vh}
+      .lightbox-sidebar{max-height:50vh;border-left:none;border-top:1px solid var(--border)}
+      .lightbox-image{max-height:50vh}
+      .lightbox-image img{max-height:50vh}
+      .topbar-nav{display:none}
+      .container{padding:0 16px}
+      .topbar-inner{padding:0 16px}
+      .toolbar-section{margin:0 -16px;padding:12px 16px}
+    }
+    @media(max-width:640px){
+      :root{--topbar-h:54px}
+      .login-page{place-items:start center;padding:calc(14px + env(safe-area-inset-top)) 14px calc(18px + env(safe-area-inset-bottom))}
+      .login-card{width:min(420px,100%);padding:22px;gap:14px;margin:auto 0;border-radius:16px}
+      .login-logo{width:48px;height:48px;border-radius:14px;font-size:20px}
+      .login-title{font-size:23px}
+      .login-subtitle{font-size:13px;line-height:1.6}
+      .login-form{gap:10px}
+      .login-input-group .input{height:46px;font-size:16px}
+      .register-box{gap:9px}
+      .register-command{min-height:118px;font-size:11px}
+      .login-footer{font-size:11px}
+      .role-filter-tools{width:100%}
+      .role-filter-search{width:100%}
+      .chip-scroll{max-height:104px}
+      .masonry{column-count:2;column-gap:10px}
+      .masonry-item{margin-bottom:10px}
+      .hero-card{padding:24px;min-height:160px}
+      .hero-stats{grid-template-columns:repeat(3,1fr)}
+      .stat-cell{padding:14px 12px}
+      .stat-value{font-size:22px}
+      .card-body{padding:10px 12px 12px}
+      .card-character{font-size:13px}
+      .rank-card{padding:12px 14px;gap:12px}
+      .rank-medal{width:36px;height:36px;font-size:14px}
+      .rank-count{font-size:16px}
+      .showcase-item{width:140px;height:78px}
+      .lightbox{padding:0}
+      .lightbox-container{border-radius:0;max-height:100vh;height:100vh}
+      .lightbox-sidebar{padding:16px}
+    }
+    @media(max-width:380px){
+      .masonry{column-count:1}
+      .hero-stats{grid-template-columns:1fr 1fr 1fr}
+    }
+
+    /* ═══════════════════════ 14. MOBILE NAV ═══════════════════════ */
+    .mobile-nav{display:none;position:fixed;bottom:0;left:0;right:0;z-index:50;
+      height:56px;background:rgba(9,9,15,.9);border-top:1px solid var(--border);
+      backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+      padding:0 8px;padding-bottom:env(safe-area-inset-bottom)}
+    .mobile-nav-inner{display:flex;align-items:center;justify-content:space-around;
+      height:100%;max-width:480px;margin:0 auto}
+    .mobile-nav-item{display:flex;flex-direction:column;align-items:center;gap:2px;
+      padding:6px 10px;border-radius:var(--radius-sm);color:var(--text-tertiary);
+      font-size:10px;font-weight:600;transition:all .2s var(--ease)}
+    .mobile-nav-item svg{width:20px;height:20px}
+    .mobile-nav-item.active{color:var(--accent)}
+    @media(max-width:860px){
+      .mobile-nav{display:block}
+      .main-content{padding-bottom:calc(56px + env(safe-area-inset-bottom))}
+    }
+
+    /* ═══════════════════════ 15. PRINT HIDDEN ═══════════════════════ */
+    @media print{
+      .topbar,.mobile-nav,.back-top,.lightbox,.drawer-overlay,
+      .showcase-section,.toolbar-section{display:none!important}
+      .main-content{padding-top:0!important}
+      .masonry{column-count:3!important}
+    }
+  </style>
+</head>
+<body class="age-locked">
+  <!-- Background Orbs -->
+  <div class="bg-orb bg-orb-1" aria-hidden="true"></div>
+  <div class="bg-orb bg-orb-2" aria-hidden="true"></div>
+  <div class="bg-orb bg-orb-3" aria-hidden="true"></div>
+
+  <div id="ageGate" class="age-gate" role="dialog" aria-modal="true" aria-labelledby="ageTitle">
+    <div class="age-card">
+      <div>
+        <div id="ageTitle" class="age-title">请确认你已满 18 岁</div>
+        <div class="age-text">本页面包含 AI 图片展示、图片生成入口、历史记录和可能需要主动显示的敏感内容。继续使用前，请确认你已达到所在地法律允许的年龄。</div>
+      </div>
+      <div class="age-list">
+        <div><b>免责声明：</b>本工具仅提供 AI 图片生成、收藏展示和本地管理能力，不鼓励也不授权任何违法或侵权用途。</div>
+        <div>你承诺不会生成、上传、传播违法内容，或涉及未成年人、非自愿隐私、侵权、骚扰、暴力伤害等内容。</div>
+        <div>AI 生成和收藏内容由用户提示词、模型输出和人工操作共同决定，页面会进行审核、遮罩和记录，但不保证覆盖全部风险。</div>
+        <div>你需要自行判断内容是否适合查看、保存、下载、展示或传播，并承担相应责任。</div>
+      </div>
+      <label class="age-check">
+        <input id="ageCheck" type="checkbox">
+        <span>我确认已满 18 岁，已阅读并同意以上免责声明。</span>
+      </label>
+      <div class="age-actions">
+        <button id="ageConfirmBtn" class="btn btn-primary" type="button" disabled>进入 Gallery</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div id="toasts" aria-live="polite"></div>
+  <div id="privacyWatermark" class="privacy-watermark" aria-hidden="true"></div>
+  <div id="privacyShield" class="privacy-shield" aria-live="polite">
+    <div class="privacy-shield-card">
+      <b>图库已遮罩</b>
+      <span>为了减少截图泄露，离开页面、打印或异常截取时会自动遮罩。</span>
+    </div>
+  </div>
+  <div id="pageLoader" class="page-loader" aria-live="polite">
+    <div class="page-loader-card">
+      <div class="spinner"></div>
+      <span id="pageLoaderText">正在加载...</span>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ LOGIN ═══════════════════════ -->
+  <section id="loginPage" class="login-page">
+    <div class="login-bg">
+      <img id="loginBg" alt="" crossorigin="anonymous">
+    </div>
+    <div class="login-particles" id="loginParticles"></div>
+    <form class="login-card" onsubmit="doLogin(event)" autocomplete="on">
+      <div class="login-logo">狐</div>
+      <div>
+        <h1 class="login-title" id="loginBrand">酒狐 Gallery</h1>
+        <p class="login-subtitle">私人收藏图库 · 必须使用已注册账号登录</p>
+      </div>
+      <div class="login-form">
+        <div class="login-input-group">
+          <input id="loginUser" class="input" type="text"
+            autocomplete="username" placeholder="用户名" required>
+        </div>
+        <div class="login-input-group">
+          <input id="loginPwd" class="input" type="password"
+            autocomplete="current-password" placeholder="密码" required>
+        </div>
+        <button class="btn btn-primary" type="submit" style="height:48px;font-size:15px;border-radius:var(--radius)">
+          进入图库
+        </button>
+      </div>
+      <div class="login-divider"></div>
+      <div class="auth-switch">
+        <span>还没有账号？</span>
+        <button class="auth-link" type="button" onclick="showRegister()">去注册</button>
+      </div>
+      <div class="login-footer">
+        <span>Powered by 酒狐</span>
+        <span id="loginTime"></span>
+      </div>
+    </form>
+  </section>
+
+  <!-- ═══════════════════════ REGISTER ═══════════════════════ -->
+  <section id="registerPage" class="login-page hidden">
+    <div class="login-bg">
+      <img id="registerBg" alt="" crossorigin="anonymous">
+    </div>
+    <div class="login-particles" id="registerParticles"></div>
+    <form class="login-card" onsubmit="event.preventDefault();doWebRegister()" autocomplete="on">
+      <div class="login-logo">狐</div>
+      <div>
+        <h1 class="login-title">注册酒狐 Gallery</h1>
+        <p class="login-subtitle">先生成验证字符串，再发给酒狐完成绑定激活。</p>
+      </div>
+      <div class="register-box">
+        <div class="login-input-group">
+          <input id="registerUser" class="input" type="text" autocomplete="username" placeholder="新用户名" required>
+        </div>
+        <div class="login-input-group">
+          <input id="registerPwd" class="input" type="password" autocomplete="new-password" placeholder="设置密码，至少 8 位" required>
+        </div>
+        <div class="login-input-group">
+          <input id="registerPwd2" class="input" type="password" autocomplete="new-password" placeholder="再次输入密码" required>
+        </div>
+        <button class="btn btn-primary" type="submit" style="height:48px;font-size:15px;border-radius:var(--radius)">
+          生成验证字符串
+        </button>
+        <div id="registerOutput" class="register-output">
+          <p class="register-hint">复制下面整段发给酒狐，15 分钟内有效。</p>
+          <textarea id="registerCommand" class="register-command" readonly></textarea>
+          <button class="btn btn-sm btn-primary" type="button" onclick="copyRegisterCommand()">复制命令</button>
+        </div>
+      </div>
+      <div class="login-divider"></div>
+      <div class="auth-switch">
+        <span>已经激活账号？</span>
+        <button class="auth-link" type="button" onclick="showLogin()">返回登录</button>
+      </div>
+      <div class="login-footer">
+        <span>Powered by 酒狐</span>
+        <span id="registerTime"></span>
+      </div>
+    </form>
+  </section>
+
+  <!-- ═══════════════════════ APP ═══════════════════════ -->
+  <section id="appShell" class="app-shell hidden">
+    <!-- Top Bar -->
+    <header class="topbar" id="topbar">
+      <div class="topbar-inner">
+        <div class="topbar-brand">
+          <div class="topbar-logo">狐</div>
+          <span class="topbar-name" id="topbarBrand">酒狐 Gallery</span>
+        </div>
+        <nav class="topbar-nav" id="desktopNav">
+          <a class="nav-item draw-nav-item" href="/draw.html" title="Web 绘图">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+            画图
+          </a>
+          <button class="nav-item active" data-page="gallery">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+            作品墙
+          </button>
+          <button class="nav-item" data-page="rank">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
+            排行榜
+          </button>
+          <button class="nav-item admin-only hidden" data-page="admin">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 4v5c0 4-3 7-7 9-4-2-7-5-7-9V7l7-4z"/><path d="M9 12l2 2 4-5"/></svg>
+            管理台
+          </button>
+        </nav>
+        <div class="topbar-actions">
+          <button class="btn btn-ghost btn-sm" onclick="refreshAll()" title="刷新数据">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+          </button>
+          <button class="btn btn-ghost btn-sm" onclick="confirmLogout()" title="退出登录">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <div class="main-content">
+      <!-- ═══ GALLERY PAGE ═══ -->
+      <div id="pageGallery" class="page active">
+        <!-- Showcase Marquee -->
+        <div class="showcase-section" id="showcaseSection">
+          <div class="showcase-fade showcase-fade-l"></div>
+          <div class="showcase-fade showcase-fade-r"></div>
+          <div class="showcase-track" id="showcaseTrack"></div>
+        </div>
+
+        <div class="container">
+          <!-- Hero -->
+          <section class="hero-section" data-reveal>
+            <div class="hero-grid">
+              <div class="hero-card glass-solid">
+                <h1 class="hero-title" id="heroTitle">酒狐 Gallery</h1>
+                <p class="hero-desc" id="heroDesc">正在加载收藏数据…</p>
+              </div>
+              <div class="hero-stats glass-solid" id="heroStats">
+                <div class="stat-cell">
+                  <span class="stat-value" id="statTotal">-</span>
+                  <span class="stat-label">收藏作品</span>
+                </div>
+                <div class="stat-cell">
+                  <span class="stat-value" id="statChars">-</span>
+                  <span class="stat-label">角色</span>
+                </div>
+                <div class="stat-cell">
+                  <span class="stat-value" id="statMakers">-</span>
+                  <span class="stat-label">制作人</span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- Toolbar -->
+          <div class="toolbar-section" id="toolbarSection">
+            <div class="toolbar-row">
+              <div class="toolbar-search search-wrap">
+                <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                  stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+                  <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                <input id="searchInput" class="input" placeholder="搜索角色、制作人…" oninput="handleSearch()">
+              </div>
+              <div class="toolbar-filters">
+                <div class="select-wrap">
+                  <select id="makerSelect" onchange="renderGallery()">
+                    <option value="all">全部制作人</option>
+                  </select>
+                </div>
+                <div class="select-wrap">
+                  <select id="sortSelect" onchange="loadGallery()">
+                    <option value="default">最新收藏</option>
+                    <option value="oldest">最早收藏</option>
+                    <option value="character">角色名称</option>
+                    <option value="maker">制作人</option>
+                  </select>
+                </div>
+                <button class="btn btn-sm btn-ghost mobile-filter-btn" onclick="openDrawer()" style="display:none">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="8" y1="12" x2="20" y2="12"/><line x1="12" y1="18" x2="20" y2="18"/></svg>
+                  筛选
+                </button>
+              </div>
+            </div>
+            <div class="role-filter-tools">
+              <div class="role-filter-search search-wrap">
+                <svg class="search-icon" width="15" height="15" viewBox="0 0 24 24" fill="none"
+                  stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+                  <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                <input id="roleFilterInput" class="input" placeholder="筛选角色标签，例如：卡提"
+                  oninput="handleRoleFilter('main')">
+              </div>
+            </div>
+            <!-- Chip Filter -->
+            <div class="chip-scroll" id="chipScroll"></div>
+          </div>
+
+          <!-- Gallery Grid -->
+          <section class="gallery-section">
+            <div class="masonry" id="galleryGrid"></div>
+          </section>
+        </div>
+      </div>
+
+      <!-- ═══ RANK PAGE ═══ -->
+      <div id="pageRank" class="page">
+        <div class="container">
+          <section class="rank-header" data-reveal>
+            <div class="rank-header-card glass-solid">
+              <h1>画图排行榜</h1>
+              <p class="hero-desc" id="rankSummary" style="margin-top:6px">加载排行数据中…</p>
+            </div>
+          </section>
+          <div class="rank-controls">
+            <div class="select-wrap" style="width:160px">
+              <select id="rankScope" onchange="loadRank()">
+                <option value="today">今日</option>
+                <option value="yesterday">昨日</option>
+                <option value="all">总榜</option>
+              </select>
+            </div>
+          </div>
+          <div class="rank-list" id="rankList"></div>
+        </div>
+      </div>
+
+      <!-- ═══ ADMIN PAGE ═══ -->
+      <div id="pageAdmin" class="page admin-only hidden">
+        <div class="container">
+          <section class="admin-section">
+            <div class="admin-hero">
+              <div class="admin-panel">
+                <h1 class="admin-title">WineFox 管理台</h1>
+                <p class="admin-muted" id="adminSummaryText">管理账号、收藏图分类、提示词和设计总结。</p>
+                <div class="admin-stat-grid">
+                  <div class="admin-stat"><b id="adminStatGallery">-</b><span>作品</span></div>
+                  <div class="admin-stat"><b id="adminStatAccounts">-</b><span>账号</span></div>
+                  <div class="admin-stat"><b id="adminStatVisitors">-</b><span>今日用户</span></div>
+                  <div class="admin-stat"><b id="adminStatRequests">-</b><span>今日访问</span></div>
+                </div>
+              </div>
+              <div class="admin-panel">
+                <div class="admin-form">
+                  <label>新增账号
+                    <input id="adminNewUser" class="input" placeholder="用户名">
+                  </label>
+                  <label>备注/制作人名
+                    <input id="adminNewOwner" class="input" placeholder="可选">
+                  </label>
+                  <button class="btn btn-primary" onclick="adminCreateAccount()">创建账号</button>
+                  <p class="admin-muted" id="adminCreateResult"></p>
+                </div>
+              </div>
+            </div>
+
+            <div class="admin-tabs">
+              <button class="admin-tab active" data-admin-tab="gallery" onclick="switchAdminTab('gallery')">收藏管理</button>
+              <button class="admin-tab" data-admin-tab="accounts" onclick="switchAdminTab('accounts')">用户账号</button>
+              <button class="admin-tab" data-admin-tab="balance" onclick="switchAdminTab('balance')">额度管理</button>
+              <button class="admin-tab" data-admin-tab="lora" onclick="switchAdminTab('lora')">LoRA 角色</button>
+              <button class="admin-tab" data-admin-tab="import" onclick="switchAdminTab('import')">导入图片</button>
+              <button class="admin-tab" data-admin-tab="access" onclick="switchAdminTab('access')">访问记录</button>
+            </div>
+
+            <div class="admin-layout">
+              <div class="admin-panel">
+                <div id="adminTabGallery">
+                  <div class="toolbar-row" style="margin-bottom:12px">
+                    <div class="toolbar-search search-wrap">
+                      <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+                        <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                      <input id="adminGallerySearch" class="input" placeholder="搜索角色、制作人、提示词" oninput="renderAdminGallery()">
+                    </div>
+                  </div>
+                  <div class="admin-bulk-bar">
+                    <div class="admin-bulk-meta">
+                      <span id="adminGallerySelectionCount">已选择 0 张</span>
+                      <span id="adminGalleryVisibleCount">当前筛选 0 张</span>
+                    </div>
+                    <div class="admin-actions">
+                      <button class="btn btn-sm" onclick="adminSelectVisibleGalleryItems()">全选当前</button>
+                      <button class="btn btn-sm btn-ghost" onclick="adminInvertVisibleGalleryItems()">反选</button>
+                      <button class="btn btn-sm btn-ghost" onclick="adminClearGallerySelection()">清空</button>
+                    </div>
+                  </div>
+                  <div class="admin-list" id="adminGalleryList"></div>
+                </div>
+                <div id="adminTabAccounts" class="hidden">
+                  <div class="admin-table" id="adminAccountList"></div>
+                </div>
+                <div id="adminTabBalance" class="hidden">
+                  <div class="admin-bulk-bar">
+                    <div class="admin-bulk-meta">
+                      <span id="adminBalanceTotal">总余额 -</span>
+                      <span id="adminBalanceSpent">累计消费 -</span>
+                      <span id="adminBalancePrice">单价 -</span>
+                    </div>
+                  </div>
+                  <div class="admin-panel" style="margin-bottom:14px">
+                    <div class="admin-title" style="font-size:16px;margin-bottom:4px">API 视频（1.8）配置</div>
+                    <p class="admin-muted" style="margin-bottom:12px">触发词「酒狐来点魔法视频 / 酒狐来点视频魔法」走官方兼容 API 1.8 生成视频。仅在此处配置，无需改 AstrBot 配置页。</p>
+                    <div class="admin-form">
+                      <label class="admin-inline-check"><input id="videoCfgEnable" type="checkbox"> 启用 API 视频</label>
+                      <label>API 接口地址 (base_url)
+                        <input id="videoCfgBaseUrl" class="input" placeholder="https://api.dealonhorizon.us">
+                      </label>
+                      <label>API Key
+                        <input id="videoCfgApiKey" class="input" type="password" placeholder="留空表示不修改（已保存的 key 不变）">
+                        <span class="admin-muted" id="videoCfgKeyState"></span>
+                      </label>
+                      <label>代理地址（可选）
+                        <input id="videoCfgProxy" class="input" placeholder="留空则沿用下载代理">
+                      </label>
+                      <label>模型名
+                        <input id="videoCfgModel" class="input" placeholder="grok-imagine-video-10s-720p">
+                      </label>
+                      <label>画面方向
+                        <select id="videoCfgAspectRatio" class="input">
+                          <option value="auto">自动识别参考图</option>
+                          <option value="16:9">横屏 16:9</option>
+                          <option value="9:16">竖屏 9:16</option>
+                        </select>
+                      </label>
+                      <label>最多参考图数量 (1-7)
+                        <input id="videoCfgMaxImages" class="input" type="number" min="1" max="7">
+                      </label>
+                      <label>超时时间（秒）
+                        <input id="videoCfgTimeout" class="input" type="number" min="30" max="3600">
+                      </label>
+                      <label>视频时长（秒）
+                        <input id="videoCfgDuration" class="input" type="number" min="1" max="30">
+                      </label>
+                      <label>提示词增强
+                        <select id="videoCfgPromptEnhance" class="input">
+                          <option value="none">不增强（只用用户原话）</option>
+                          <option value="light">轻量（默认，补运镜/流畅度）</option>
+                          <option value="full">完整（补全套质量词）</option>
+                        </select>
+                      </label>
+                      <label>默认运动提示词
+                        <input id="videoCfgPrompt" class="input" placeholder="subtle natural motion, cinematic camera movement">
+                      </label>
+                      <button class="btn btn-primary" onclick="adminSaveVideoConfig()">保存配置</button>
+                      <p class="admin-muted" id="videoCfgResult"></p>
+                    </div>
+                  </div>
+                  <div class="admin-panel" style="margin-bottom:14px">
+                    <div class="admin-title" style="font-size:16px;margin-bottom:4px">额度与扣费</div>
+                    <div class="admin-form">
+                      <label>新用户默认额度（元）
+                        <input id="billingTrialBalance" class="input" type="number" min="0" step="0.01">
+                      </label>
+                      <label>本地视频扣费（元/次）
+                        <input id="billingLocalPrice" class="input" type="number" min="0" step="0.01">
+                      </label>
+                      <label>API 魔法视频扣费（元/次）
+                        <input id="billingApiPrice" class="input" type="number" min="0" step="0.01">
+                      </label>
+                      <button class="btn btn-primary" onclick="adminSaveBilling()">保存额度与价格</button>
+                      <p class="admin-muted" id="billingResult"></p>
+                    </div>
+                  </div>
+                  <div class="admin-panel" style="margin-bottom:14px">
+                    <div class="admin-title" style="font-size:16px;margin-bottom:4px">批量额度管理</div>
+                    <div class="admin-form">
+                      <label>用户名列表
+                        <textarea id="adminBalanceBatchUsers" class="textarea" placeholder="一行一个；留空则使用当前筛选结果里的非管理员账号"></textarea>
+                      </label>
+                      <label>操作
+                        <select id="adminBalanceBatchMode" class="input">
+                          <option value="add">增减额度</option>
+                          <option value="set">设为固定额度</option>
+                        </select>
+                      </label>
+                      <label>金额（元）
+                        <input id="adminBalanceBatchAmount" class="input" type="number" step="0.01" placeholder="例如 5 或 -2">
+                      </label>
+                      <label>备注
+                        <input id="adminBalanceBatchReason" class="input" placeholder="批量充值 / 活动赠送 / 管理员扣减">
+                      </label>
+                      <button class="btn btn-primary" onclick="adminBatchBalance()">执行批量修改</button>
+                      <p class="admin-muted" id="adminBalanceBatchResult"></p>
+                    </div>
+                  </div>
+                  <div class="toolbar-row" style="margin-bottom:12px">
+                    <div class="toolbar-search search-wrap">
+                      <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+                        <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                      <input id="adminBalanceSearch" class="input" placeholder="搜索用户名 / QQ / 备注" oninput="renderAdminBalance()">
+                    </div>
+                  </div>
+                  <div class="admin-table" id="adminBalanceList"></div>
+                </div>
+                <div id="adminTabLora" class="hidden">
+                  <div class="toolbar-row" style="margin-bottom:12px">
+                    <div class="toolbar-search search-wrap">
+                      <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+                        <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                      <input id="adminLoraSearch" class="input" placeholder="搜索角色、别名、LoRA 文件" oninput="renderAdminLoraProfiles()">
+                    </div>
+                    <div class="select-wrap" style="width:170px">
+                      <select id="adminLoraFamily" onchange="adminLoadLoraFamily(this.value)">
+                        <option value="current">当前模型族</option>
+                        <option value="anima">Anima</option>
+                        <option value="illustrious">Illustrious</option>
+                        <option value="all">全部</option>
+                      </select>
+                    </div>
+                    <button class="btn btn-sm btn-ghost" onclick="adminRefreshLoraProfiles()">刷新</button>
+                  </div>
+                  <div class="admin-bulk-bar">
+                    <div class="admin-bulk-meta">
+                      <span id="adminLoraSelectionCount">已选择 0 个</span>
+                      <span id="adminLoraVisibleCount">当前筛选 0 个</span>
+                    </div>
+                    <div class="admin-actions">
+                      <button class="btn btn-sm" onclick="adminSelectVisibleLoraProfiles()">全选当前</button>
+                      <button class="btn btn-sm btn-ghost" onclick="adminInvertVisibleLoraProfiles()">反选</button>
+                      <button class="btn btn-sm btn-ghost" onclick="adminClearLoraSelection()">清空</button>
+                    </div>
+                  </div>
+                  <div class="admin-list" id="adminLoraList"></div>
+                </div>
+                <div id="adminTabImport" class="hidden">
+                  <div class="admin-form">
+                    <label>图片 URL
+                      <input id="adminImportUrl" class="input" placeholder="https://...">
+                    </label>
+                    <label>角色/分类
+                      <input id="adminImportCharacter" class="input" placeholder="未分类">
+                    </label>
+                    <label>制作人
+                      <input id="adminImportMaker" class="input" placeholder="后台导入">
+                    </label>
+                    <label>提示词
+                      <textarea id="adminImportPrompt" class="textarea"></textarea>
+                    </label>
+                    <label>设计总结
+                      <textarea id="adminImportSummary" class="textarea"></textarea>
+                    </label>
+                    <button class="btn btn-primary" onclick="adminImportImage()">导入收藏</button>
+                  </div>
+                </div>
+                <div id="adminTabAccess" class="hidden">
+                  <div class="access-log" id="adminAccessLog"></div>
+                </div>
+              </div>
+              <aside class="admin-panel">
+                <div class="admin-form" id="adminGalleryEditor">
+                  <p class="admin-muted">当前选中</p>
+                  <h2 class="admin-title" id="adminEditTitle" style="font-size:18px">未选择作品</h2>
+                  <label>角色/分类
+                    <input id="adminEditCharacter" class="input">
+                  </label>
+                  <label>制作人
+                    <input id="adminEditMaker" class="input">
+                  </label>
+                  <label>提示词
+                    <textarea id="adminEditPrompt" class="textarea"></textarea>
+                  </label>
+                  <label>设计总结
+                    <textarea id="adminEditSummary" class="textarea"></textarea>
+                  </label>
+                  <div class="admin-actions">
+                    <button class="btn btn-primary" onclick="adminSaveSelected()">保存修改</button>
+                    <button class="btn" onclick="adminDeleteSelected()">删除作品</button>
+                  </div>
+                  <div class="admin-form admin-bulk-panel">
+                    <p class="admin-muted">批量修改只覆盖已填写字段，留空不会改动。</p>
+                    <label>批量角色/分类
+                      <input id="adminBatchCharacter" class="input" placeholder="留空不修改">
+                    </label>
+                    <label>批量制作人
+                      <input id="adminBatchMaker" class="input" placeholder="留空不修改">
+                    </label>
+                    <label>批量提示词
+                      <textarea id="adminBatchPrompt" class="textarea" placeholder="留空不修改"></textarea>
+                    </label>
+                    <label>批量设计总结
+                      <textarea id="adminBatchSummary" class="textarea" placeholder="留空不修改"></textarea>
+                    </label>
+                    <div class="admin-actions">
+                      <button class="btn btn-primary" onclick="adminBatchUpdateSelected()">批量保存</button>
+                      <button class="btn btn-ghost" onclick="adminBatchDeleteSelected()">批量删除</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="admin-form hidden" id="adminLoraEditor">
+                  <p class="admin-muted">当前选中</p>
+                  <h2 class="admin-title" id="adminLoraEditTitle" style="font-size:18px">未选择 LoRA 角色</h2>
+                  <label>角色名
+                    <input id="adminLoraCharacter" class="input">
+                  </label>
+                  <label>LoRA 文件
+                    <input id="adminLoraFile" class="input" disabled>
+                  </label>
+                  <label>主别名
+                    <textarea id="adminLoraAliases" class="textarea" placeholder="一行一个，或用逗号分隔"></textarea>
+                  </label>
+                  <label>搜索别名
+                    <textarea id="adminLoraSearchAliases" class="textarea" placeholder="用于匹配用户说法"></textarea>
+                  </label>
+                  <label>触发词
+                    <textarea id="adminLoraTrigger" class="textarea"></textarea>
+                  </label>
+                  <label class="admin-inline-check">
+                    <input id="adminLoraDisabled" type="checkbox" onchange="adminToggleLoraDisabledReason()">
+                    停用这个角色档案
+                  </label>
+                  <label id="adminLoraDisabledReasonWrap" class="hidden">停用原因
+                    <input id="adminLoraDisabledReason" class="input" placeholder="管理员手动停用">
+                  </label>
+                  <div class="admin-actions">
+                    <button class="btn btn-primary" onclick="adminSaveSelectedLoraProfile()">保存角色</button>
+                    <button class="btn" onclick="adminDeleteSelectedLoraProfile()">删除角色</button>
+                  </div>
+                  <div class="admin-form admin-bulk-panel">
+                    <p class="admin-muted">批量修改只作用于当前筛选结果里已勾选的 LoRA，留空字段不会改动。</p>
+                    <label>批量状态
+                      <select id="adminLoraBatchDisabled" class="input">
+                        <option value="keep">保持不变</option>
+                        <option value="false">启用档案</option>
+                        <option value="true">停用档案</option>
+                      </select>
+                    </label>
+                    <label>批量停用原因
+                      <input id="adminLoraBatchDisabledReason" class="input" placeholder="留空不修改">
+                    </label>
+                    <label>批量主别名
+                      <textarea id="adminLoraBatchAliases" class="textarea" placeholder="留空不修改，一行一个"></textarea>
+                    </label>
+                    <label>批量搜索别名
+                      <textarea id="adminLoraBatchSearchAliases" class="textarea" placeholder="留空不修改，一行一个"></textarea>
+                    </label>
+                    <label>批量触发词
+                      <textarea id="adminLoraBatchTrigger" class="textarea" placeholder="留空不修改"></textarea>
+                    </label>
+                    <div class="admin-actions">
+                      <button class="btn btn-primary" onclick="adminBatchUpdateSelectedLoras()">批量保存</button>
+                      <button class="btn btn-ghost" onclick="adminBatchDeleteSelectedLoras()">批量删除</button>
+                    </div>
+                  </div>
+                </div>
+              </aside>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <!-- Mobile Bottom Nav -->
+    <nav class="mobile-nav">
+      <div class="mobile-nav-inner">
+        <a class="mobile-nav-item" href="/draw.html">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+          画图
+        </a>
+        <button class="mobile-nav-item active" data-page="gallery">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+          作品墙
+        </button>
+        <button class="mobile-nav-item" data-page="rank">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
+          排行榜
+        </button>
+        <button class="mobile-nav-item admin-only hidden" data-page="admin">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3l7 4v5c0 4-3 7-7 9-4-2-7-5-7-9V7l7-4z"/></svg>
+          管理
+        </button>
+        <button class="mobile-nav-item" onclick="refreshAll()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+          刷新
+        </button>
+        <button class="mobile-nav-item" onclick="confirmLogout()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          退出
+        </button>
+      </div>
+    </nav>
+  </section>
+
+  <!-- ═══════════════════════ LIGHTBOX ═══════════════════════ -->
+  <div class="lightbox" id="lightbox">
+    <div class="lightbox-backdrop" onclick="closeLightbox()"></div>
+    <div class="lightbox-container">
+      <div class="lightbox-image" id="lbImageWrap">
+        <div class="image-loader lightbox-loader"><div class="spinner spinner-lg"></div></div>
+        <img id="lbImg" alt="收藏图片" onclick="toggleZoom()">
+        <button class="lightbox-nav lightbox-prev" onclick="lbNav(-1)" title="上一张">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <button class="lightbox-nav lightbox-next" onclick="lbNav(1)" title="下一张">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+        <div class="lightbox-counter" id="lbCounter"></div>
+      </div>
+      <aside class="lightbox-sidebar">
+        <div style="display:flex;justify-content:flex-end">
+          <button class="btn btn-ghost btn-sm" onclick="closeLightbox()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            关闭
+          </button>
+        </div>
+        <div>
+          <h2 class="lightbox-character" id="lbCharacter"></h2>
+          <div class="lightbox-maker" id="lbMaker" style="margin-top:6px"></div>
+        </div>
+        <div>
+          <p style="font-size:12px;color:var(--text-tertiary);margin-bottom:6px;font-weight:600">提示词</p>
+          <div class="lightbox-prompt" id="lbPrompt"></div>
+        </div>
+        <div id="lbTagsWrap" class="hidden">
+          <p style="font-size:12px;color:var(--text-tertiary);margin-bottom:6px;font-weight:600">标签</p>
+          <div class="lightbox-tags" id="lbTags"></div>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ DRAWER (Mobile Filter) ═══════════════════════ -->
+  <div class="drawer-overlay" id="drawerOverlay" onclick="closeDrawer()">
+    <div class="drawer" onclick="event.stopPropagation()">
+      <div class="drawer-header">
+        <h3>角色筛选</h3>
+        <button class="btn btn-ghost btn-sm btn-icon" onclick="closeDrawer()">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="search-wrap" style="margin-bottom:10px">
+        <svg class="search-icon" width="15" height="15" viewBox="0 0 24 24" fill="none"
+          stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+          <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        <input id="drawerRoleFilterInput" class="input" placeholder="搜索角色"
+          oninput="handleRoleFilter('drawer')">
+      </div>
+      <div id="drawerChips" class="chip-list" style="display:grid;gap:6px"></div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ LOGOUT CONFIRM ═══════════════════════ -->
+  <div class="lightbox" id="logoutModal">
+    <div class="lightbox-backdrop" onclick="cancelLogout()"></div>
+    <div style="position:relative;z-index:1;width:min(380px,90vw);padding:28px;
+      border-radius:16px;background:var(--surface-solid);border:1px solid var(--border);
+      box-shadow:var(--shadow-lg);text-align:center;display:flex;flex-direction:column;gap:16px;
+      transform:scale(.94);transition:transform .3s var(--ease-spring)">
+      <div style="font-size:36px">👋</div>
+      <h3 style="font-size:18px;font-weight:800">确认退出？</h3>
+      <p style="color:var(--text-secondary);font-size:14px">退出后需要重新输入密码登录</p>
+      <div style="display:flex;gap:10px">
+        <button class="btn" style="flex:1" onclick="cancelLogout()">取消</button>
+        <button class="btn btn-primary" style="flex:1" onclick="doLogout()">确认退出</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Back to Top -->
+  <button class="back-top" id="backTop" onclick="window.scrollTo({top:0,behavior:'smooth'})" title="回到顶部">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="18 15 12 9 6 15"/></svg>
+  </button>
+
+  <script>
+    /* ═══════════════════════ CONFIG ═══════════════════════ */
+    const GALLERY_API = __GALLERY_API_MANIFEST_JSON__;
+    const BRAND = __GALLERY_NAME_JSON__;
+    const LOLI_API = 'https://www.loliapi.com/acg/';
+    const AGE_KEY = 'winefox_gallery_age_confirmed_v1';
+    const AGE_TTL = 30 * 24 * 60 * 60 * 1000;
+
+    /* ═══════════════════════ STATE ═══════════════════════ */
+    const state = {
+      items: [],
+      preview: [],
+      stats: {},
+      facets: { characters: [], makers: [] },
+      rank: null,
+      role: 'all',
+      roleFilter: '',
+      currentPage: 'gallery',
+      user: null,
+      isAdmin: false,
+      adminTab: 'gallery',
+      adminLoraFamily: 'current',
+      admin: null,
+      selectedAdminItem: null,
+      adminGallerySelectedIds: new Set(),
+      adminGalleryVisibleIds: [],
+      adminLoraSelectedIds: new Set(),
+      adminLoraVisibleIds: [],
+      selectedAdminLora: null,
+      privacyGuardReady: false,
+      lbIndex: 0,
+      searchTimer: null,
+      appStarted: false
+    };
+
+    /* ═══════════════════════ UTILS ═══════════════════════ */
+    const $ = id => document.getElementById(id);
+    const esc = v => String(v ?? '').replace(/[&<>"']/g, c =>
+      ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+
+    function endpoint(name) {
+      return (GALLERY_API.endpoints && GALLERY_API.endpoints[name] && GALLERY_API.endpoints[name].path) || '';
+    }
+
+    async function api(url, opts = {}) {
+      const r = await fetch(url, {
+        credentials: 'same-origin', ...opts,
+        headers: { 'content-type': 'application/json', ...(opts.headers || {}) }
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        const err = new Error(d.error || '请求失败');
+        err.status = r.status;
+        err.payload = d;
+        err.authRequired = r.status === 401;
+        throw err;
+      }
+      return d;
+    }
+
+    function isAuthError(err) {
+      return !!(err && (err.authRequired || err.status === 401));
+    }
+
+    function showLogin(message) {
+      state.appStarted = false;
+      applyAuthState(null);
+      $('appShell').classList.add('hidden');
+      $('registerPage').classList.add('hidden');
+      $('loginPage').classList.remove('hidden');
+      $('loginPage').style.opacity = '';
+      $('loginPage').style.transition = '';
+      if (message) toast(message, 'error');
+      setTimeout(() => {
+        try { $('loginPwd').focus(); } catch (_) {}
+      }, 60);
+    }
+
+    function showRegister() {
+      applyAuthState(null);
+      $('appShell').classList.add('hidden');
+      $('loginPage').classList.add('hidden');
+      $('registerPage').classList.remove('hidden');
+      $('registerPage').style.opacity = '';
+      $('registerPage').style.transition = '';
+      setTimeout(() => {
+        try { $('registerUser').focus(); } catch (_) {}
+      }, 60);
+    }
+
+    function showApp() {
+      $('loginPage').classList.add('hidden');
+      $('registerPage').classList.add('hidden');
+      $('loginPage').style.opacity = '';
+      $('loginPage').style.transition = '';
+      $('registerPage').style.opacity = '';
+      $('registerPage').style.transition = '';
+      $('appShell').classList.remove('hidden');
+    }
+
+    function handleAuthExpired(err) {
+      if (!isAuthError(err)) return false;
+      showLogin('登录已过期，请重新登录');
+      return true;
+    }
+
+    function privacyLabel() {
+      const user = (state.user && state.user.username) || 'locked';
+      const ts = new Date().toLocaleString();
+      return `${BRAND || 'WineFox'} · ${user} · ${ts}`;
+    }
+
+    function renderPrivacyWatermark() {
+      const wrap = $('privacyWatermark');
+      if (!wrap) return;
+      const label = privacyLabel();
+      wrap.innerHTML = Array.from({ length: 56 }, () => `<span>${esc(label)}</span>`).join('');
+    }
+
+    function showPrivacyShield(visible, text) {
+      const shield = $('privacyShield');
+      if (!shield) return;
+      if (text) {
+        const label = shield.querySelector('span');
+        if (label) label.textContent = text;
+      }
+      shield.classList.toggle('visible', !!visible);
+    }
+
+    function installPrivacyGuards() {
+      if (state.privacyGuardReady) return;
+      state.privacyGuardReady = true;
+      setInterval(() => { if (state.user) renderPrivacyWatermark(); }, 30000);
+      ['contextmenu','selectstart','dragstart','copy','cut'].forEach(type => {
+        document.addEventListener(type, e => {
+          if (!state.user) return;
+          e.preventDefault();
+          if (type === 'contextmenu') toast('已禁用长按/右键保存', 'info', 1600);
+        }, { capture: true });
+      });
+      document.addEventListener('keydown', e => {
+        if (!state.user) return;
+        const key = String(e.key || '').toLowerCase();
+        const blocked = key === 'printscreen' || key === 'f12' ||
+          ((e.ctrlKey || e.metaKey) && ['p','s','u','c','x','i','j'].includes(key));
+        if (!blocked) return;
+        e.preventDefault();
+        showPrivacyShield(true, '已拦截打印、保存、复制或开发者工具快捷键。');
+        setTimeout(() => showPrivacyShield(false), 1200);
+      }, { capture: true });
+      document.addEventListener('visibilitychange', () => {
+        if (!state.user) return;
+        if (document.hidden) showPrivacyShield(true, '页面离开前台，已自动遮罩图库内容。');
+        else setTimeout(() => showPrivacyShield(false), 350);
+      });
+      window.addEventListener('blur', () => {
+        if (state.user) showPrivacyShield(true, '窗口失焦，已自动遮罩图库内容。');
+      });
+      window.addEventListener('focus', () => {
+        if (state.user) setTimeout(() => showPrivacyShield(false), 250);
+      });
+      window.addEventListener('beforeprint', e => {
+        if (!state.user) return;
+        e.preventDefault();
+        showPrivacyShield(true, '图库禁止打印。');
+      });
+      window.addEventListener('afterprint', () => showPrivacyShield(false));
+    }
+
+    function applyAuthState(user) {
+      state.user = user || null;
+      state.isAdmin = !!(user && user.is_admin) || String((user || {}).role || '') === 'admin';
+      document.body.classList.toggle('secure-gallery', !!state.user);
+      if (state.user) {
+        installPrivacyGuards();
+        renderPrivacyWatermark();
+        $('privacyWatermark').classList.add('visible');
+      } else {
+        $('privacyWatermark').classList.remove('visible');
+        showPrivacyShield(false);
+      }
+      document.querySelectorAll('.admin-only').forEach(el => {
+        el.classList.toggle('hidden', !state.isAdmin);
+      });
+      if (!state.isAdmin && state.currentPage === 'admin') switchPage('gallery');
+    }
+
+    function setPageLoading(visible, text = '正在加载...') {
+      const loader = $('pageLoader');
+      if (!loader) return;
+      $('pageLoaderText').textContent = text;
+      loader.classList.toggle('visible', !!visible);
+    }
+
+    function markImageLoaded(img) {
+      if (!img) return;
+      img.classList.add('loaded');
+      const wrap = img.closest('.card-image,.showcase-item,.lightbox-image');
+      if (wrap) {
+        wrap.classList.remove('image-loading', 'image-error');
+        wrap.classList.add('image-loaded');
+      }
+    }
+
+    function markImageError(img) {
+      if (!img) return;
+      const wrap = img.closest('.card-image,.showcase-item,.lightbox-image');
+      if (wrap) {
+        wrap.classList.remove('image-loading', 'image-loaded');
+        wrap.classList.add('image-error');
+      }
+      img.classList.remove('loaded');
+    }
+
+    /* Clean CQ codes and other noise from prompts */
+    function cleanPrompt(raw) {
+      if (!raw) return '';
+      let t = raw
+        .replace(/\[CQ:[^\]]*\]/g, '')
+        .replace(/https?:\/\/\S+/g, '')
+        .replace(/file=[^\s,\]]+/g, '')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+      return t || '';
+    }
+
+    /* Extract tags from prompt for display */
+    function extractTags(prompt) {
+      const clean = cleanPrompt(prompt);
+      if (!clean) return [];
+      if (clean.includes(',')) {
+        return clean.split(',').map(t => t.trim()).filter(t => t.length > 0 && t.length < 60).slice(0, 30);
+      }
+      return [];
+    }
+
+    /* Generate consistent color from name */
+    function nameHue(name) {
+      let h = 0;
+      for (let i = 0; i < (name||'').length; i++) h = name.charCodeAt(i) + ((h << 5) - h);
+      return Math.abs(h) % 360;
+    }
+
+    function nameColor(name) {
+      return `hsl(${nameHue(name)}, 55%, 50%)`;
+    }
+
+    function nameGradient(name) {
+      const h = nameHue(name);
+      return `linear-gradient(135deg, hsl(${h},60%,45%), hsl(${(h+40)%360},55%,55%))`;
+    }
+
+    function nameInitial(name) {
+      if (!name) return '?';
+      return name.charAt(0).toUpperCase();
+    }
+
+    /* Animate a number counter */
+    function animateValue(el, target, duration = 600) {
+      const start = parseInt(el.textContent) || 0;
+      if (start === target) { el.textContent = target; return; }
+      const startTime = performance.now();
+      const step = ts => {
+        const p = Math.min((ts - startTime) / duration, 1);
+        const eased = 1 - Math.pow(1 - p, 3);
+        el.textContent = Math.round(start + (target - start) * eased);
+        if (p < 1) requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    }
+
+    /* ═══════════════════════ TOAST SYSTEM ═══════════════════════ */
+    function toast(msg, type = 'info', duration = 3500) {
+      const icons = { success: '✓', error: '✕', info: 'i' };
+      const el = document.createElement('div');
+      el.className = `toast toast-${type}`;
+      el.innerHTML = `<div class="toast-icon">${icons[type] || 'i'}</div><span>${esc(msg)}</span>`;
+      $('toasts').appendChild(el);
+      setTimeout(() => {
+        el.classList.add('leaving');
+        el.addEventListener('animationend', () => el.remove());
+      }, duration);
+    }
+
+    /* ═══════════════════════ LOGIN ═══════════════════════ */
+    function initAuthBg(id) {
+      const img = $(id);
+      if (!img) return;
+      img.onload = () => img.classList.add('loaded');
+      img.onerror = () => { img.style.display = 'none'; };
+      img.src = LOLI_API;
+    }
+
+    function initAuthParticles(id) {
+      const wrap = $(id);
+      if (!wrap || wrap.dataset.ready) return;
+      wrap.dataset.ready = '1';
+      for (let i = 0; i < 20; i++) {
+        const p = document.createElement('div');
+        p.className = 'login-particle';
+        p.style.cssText = `left:${Math.random()*100}%;top:${Math.random()*100}%;
+          opacity:${.1+Math.random()*.3};width:${2+Math.random()*3}px;height:${2+Math.random()*3}px;
+          animation-delay:${Math.random()*4}s;animation-duration:${3+Math.random()*4}s`;
+        wrap.appendChild(p);
+      }
+    }
+
+    async function doLogin(e) {
+      e.preventDefault();
+      try {
+        if (!($('loginUser').value || '').trim()) {
+          toast('请先输入注册用户名', 'error');
+          $('loginUser').focus();
+          return;
+        }
+        const data = await api(endpoint('login') || '/api/login', {
+          method: 'POST', body: JSON.stringify({ username: ($('loginUser').value || '').trim(), password: $('loginPwd').value })
+        });
+        if (data.api) Object.assign(GALLERY_API, data.api);
+        applyAuthState(data.user || (data.api && data.api.user));
+        $('loginPage').style.opacity = '0';
+        $('loginPage').style.transition = 'opacity .4s ease';
+        setTimeout(async () => {
+          showApp();
+          await initApp();
+        }, 400);
+      } catch (err) {
+        toast(err.message || '密码错误', 'error');
+        $('loginPwd').focus();
+      }
+    }
+
+    async function doWebRegister() {
+      const username = ($('registerUser').value || '').trim();
+      const password = $('registerPwd').value || '';
+      const confirm = $('registerPwd2').value || '';
+      if (!username) {
+        toast('请输入用户名', 'error');
+        $('registerUser').focus();
+        return;
+      }
+      if (password.length < 8) {
+        toast('密码至少 8 位', 'error');
+        $('registerPwd').focus();
+        return;
+      }
+      if (password !== confirm) {
+        toast('两次密码不一致', 'error');
+        $('registerPwd2').focus();
+        return;
+      }
+      try {
+        const data = await api(endpoint('register') || '/api/register', {
+          method: 'POST',
+          body: JSON.stringify({ username, password })
+        });
+        const command = data.command || ('酒狐注册 ' + data.verify_token);
+        $('registerCommand').value = command;
+        $('registerOutput').classList.add('visible');
+        $('loginUser').value = username;
+        toast('验证字符串已生成，发给酒狐完成激活', 'success', 2600);
+      } catch (err) {
+        toast(err.message || '注册失败', 'error');
+      }
+    }
+
+    async function copyRegisterCommand() {
+      const text = $('registerCommand').value || '';
+      if (!text) return;
+      try {
+        await navigator.clipboard.writeText(text);
+        toast('已复制', 'success', 1200);
+      } catch (_) {
+        $('registerCommand').focus();
+        $('registerCommand').select();
+        toast('请手动复制文本框内容', 'info', 1800);
+      }
+    }
+
+    /* ═══════════════════════ LOGOUT ═══════════════════════ */
+    function confirmLogout() {
+      $('logoutModal').classList.add('open');
+    }
+    function cancelLogout() {
+      $('logoutModal').classList.remove('open');
+    }
+    async function doLogout() {
+      cancelLogout();
+      await fetch(endpoint('logout') || '/api/logout', {
+        method: 'POST', credentials: 'same-origin'
+      }).catch(() => {});
+      toast('已退出登录', 'success', 1500);
+      setTimeout(() => location.reload(), 600);
+    }
+
+    /* ═══════════════════════ NAVIGATION ═══════════════════════ */
+    function switchPage(page) {
+      if (page === 'admin' && !state.isAdmin) {
+        toast('需要管理员账号', 'error');
+        return;
+      }
+      state.currentPage = page;
+      document.querySelectorAll('.page').forEach(p => {
+        p.classList.toggle('active', p.id === `page${page.charAt(0).toUpperCase()+page.slice(1)}`);
+      });
+      document.querySelectorAll('.nav-item, .mobile-nav-item').forEach(b => {
+        b.classList.toggle('active', b.dataset.page === page);
+      });
+      if (page === 'rank' && !state.rank) loadRank();
+      if (page === 'admin') loadAdmin();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    document.querySelectorAll('[data-page]').forEach(btn => {
+      btn.addEventListener('click', () => switchPage(btn.dataset.page));
+    });
+
+    /* ═══════════════════════ GALLERY DATA ═══════════════════════ */
+    function buildQuery() {
+      const p = new URLSearchParams();
+      const sort = $('sortSelect').value;
+      if (sort !== 'default') p.set('sort', sort);
+      if (state.role && state.role !== 'all') p.set('role', state.role);
+      const q = ($('searchInput').value || '').trim();
+      if (q) p.set('q', q);
+      return p.toString();
+    }
+
+    async function loadGallery() {
+      const q = buildQuery();
+      const url = (endpoint('gallery') || '/api/gallery') + (q ? '?' + q : '');
+      setPageLoading(true, '正在加载作品...');
+      try {
+        const data = await api(url);
+        state.items = data.favorites || [];
+        state.stats = data.stats || {};
+        state.facets = data.facets || { characters: [], makers: [] };
+        if (data.rank) state.rank = data.rank;
+        renderStats();
+        renderFilters();
+        renderGallery();
+        renderShowcase();
+        if (state.rank) renderRankData(state.rank);
+      } catch (err) {
+        if (handleAuthExpired(err)) throw err;
+        toast('加载失败：' + err.message, 'error');
+        throw err;
+      } finally {
+        setPageLoading(false);
+      }
+    }
+
+    async function loadRank() {
+      const scope = $('rankScope').value || 'today';
+      setPageLoading(true, '正在加载排行榜...');
+      try {
+        const data = await api((endpoint('rank') || '/api/rank') + '?scope=' + encodeURIComponent(scope));
+        state.rank = data.rank || null;
+        renderRankData(state.rank);
+      } catch (err) {
+        if (handleAuthExpired(err)) throw err;
+        $('rankSummary').textContent = err.message;
+        toast('排行加载失败', 'error');
+        throw err;
+      } finally {
+        setPageLoading(false);
+      }
+    }
+
+    async function refreshAll() {
+      toast('正在刷新数据…', 'info', 1500);
+      try {
+        await loadGallery();
+        if (state.currentPage === 'rank') await loadRank();
+        toast('刷新成功', 'success', 1500);
+      } catch (err) {
+        if (!isAuthError(err)) toast('刷新失败：' + err.message, 'error');
+      }
+    }
+
+    /* ═══════════════════════ RENDER STATS ═══════════════════════ */
+    function renderStats() {
+      $('heroTitle').textContent = BRAND || '酒狐 Gallery';
+      $('topbarBrand').textContent = (BRAND || '酒狐') + ' Gallery';
+      $('loginBrand').textContent = (BRAND || '酒狐') + ' Gallery';
+      const total = state.stats.all_total || state.stats.total || state.items.length || 0;
+      const chars = (state.facets.characters || []).length || state.stats.characters || 0;
+      const makers = (state.facets.makers || []).length || state.stats.makers || 0;
+      $('heroDesc').textContent = total ? `已收录 ${total} 件作品 · ${chars} 位角色 · ${makers} 位制作人` : '暂无收藏作品';
+      animateValue($('statTotal'), total);
+      animateValue($('statChars'), chars);
+      animateValue($('statMakers'), makers);
+    }
+
+    /* ═══════════════════════ RENDER FILTERS ═══════════════════════ */
+    function syncRoleFilterInputs() {
+      ['roleFilterInput', 'drawerRoleFilterInput'].forEach(id => {
+        const el = $(id);
+        if (el && el.value !== state.roleFilter) el.value = state.roleFilter;
+      });
+    }
+
+    function roleNameMatches(name, query) {
+      return String(name || '').toLowerCase().includes(String(query || '').toLowerCase());
+    }
+
+    function roleFacetList() {
+      const raw = (state.facets.characters || []).slice();
+      const explicitQuery = String(state.roleFilter || '').trim().toLowerCase();
+      const galleryQuery = String(($('searchInput') || {}).value || '').trim().toLowerCase();
+      const boostQuery = explicitQuery || galleryQuery;
+      const roles = raw.map((role, index) => ({
+        name: role.name,
+        count: role.count,
+        _index: index,
+        _match: boostQuery ? roleNameMatches(role.name, boostQuery) : false
+      }));
+      let visible = explicitQuery ? roles.filter(role => role._match) : roles;
+      if (boostQuery) {
+        visible = visible.sort((a, b) =>
+          Number(b._match) - Number(a._match) || a._index - b._index);
+      }
+      if (state.role !== 'all' && !visible.some(role => role.name === state.role)) {
+        const active = roles.find(role => role.name === state.role);
+        if (active) visible.unshift(active);
+      }
+      return visible.map(({ name, count }) => ({ name, count }));
+    }
+
+    function renderFilters() {
+      syncRoleFilterInputs();
+      const allCharacters = state.facets.characters || [];
+      const chars = [{ name: 'all', count: state.stats.all_total || state.items.length || 0 },
+        ...roleFacetList()];
+      if (state.role !== 'all' && !allCharacters.some(c => c.name === state.role)) state.role = 'all';
+
+      const chipHTML = chars.map(c => {
+        const label = c.name === 'all' ? '全部' : c.name;
+        const active = state.role === c.name ? ' active' : '';
+        return `<button class="chip${active}" data-role="${esc(c.name)}">
+          ${esc(label)}<span class="chip-count">${c.count}</span></button>`;
+      }).join('');
+
+      $('chipScroll').innerHTML = chipHTML;
+      $('drawerChips').innerHTML = chipHTML;
+
+      [$('chipScroll'), $('drawerChips')].forEach(wrap => {
+        wrap.querySelectorAll('.chip').forEach(btn => {
+          btn.onclick = () => {
+            state.role = btn.dataset.role || 'all';
+            closeDrawer();
+            loadGallery();
+          };
+        });
+      });
+
+      // Maker select
+      const currentMaker = $('makerSelect').value || 'all';
+      const mkrs = [{ name: 'all', count: state.items.length }, ...(state.facets.makers || [])];
+      $('makerSelect').innerHTML = mkrs.map(m => {
+        const lbl = m.name === 'all' ? '全部制作人' : `${m.name} (${m.count})`;
+        return `<option value="${esc(m.name)}">${esc(lbl)}</option>`;
+      }).join('');
+      $('makerSelect').value = mkrs.some(m => m.name === currentMaker) ? currentMaker : 'all';
+    }
+
+    /* ═══════════════════════ RENDER GALLERY ═══════════════════════ */
+    function filteredItems() {
+      const q = ($('searchInput').value || '').trim().toLowerCase();
+      const maker = $('makerSelect').value || 'all';
+      return state.items.filter(item => {
+        if (maker !== 'all' && item.maker !== maker) return false;
+        if (!q) return true;
+        return [item.character, item.maker, item.prompt].some(v =>
+          String(v || '').toLowerCase().includes(q));
+      });
+    }
+
+    function renderGallery() {
+      const items = filteredItems();
+      state.preview = items;
+      const grid = $('galleryGrid');
+
+      if (!items.length) {
+        grid.innerHTML = `<div class="empty-state">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+            <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/>
+            <path d="m21 15-5-5L5 21"/></svg>
+          <p style="font-size:15px;font-weight:600;margin-bottom:4px">暂无匹配作品</p>
+          <p style="font-size:13px">尝试调整筛选条件或关键词</p>
+        </div>`;
+        return;
+      }
+
+      grid.innerHTML = items.map((item, i) => {
+        const cleaned = cleanPrompt(item.prompt);
+        const initial = nameInitial(item.maker);
+        const gradient = nameGradient(item.maker);
+        const delay = Math.min(i * 0.04, 0.6);
+        return `<div class="masonry-item" style="--d:${delay}s">
+          <article class="card glass-solid" onclick="openLightbox(${i})">
+            <div class="card-image image-loading">
+              <div class="image-loader"><div class="spinner"></div></div>
+              <img data-src="${esc(item.image_url)}" alt="${esc(item.character || '作品')}"
+                onload="markImageLoaded(this)" onerror="markImageError(this)">
+              <div class="card-hover-info">
+                <span style="font-weight:700;font-size:13px">${esc(item.character || '未分类')}</span>
+              </div>
+            </div>
+            <div class="card-body">
+              <div class="card-character">${esc(item.character || '未分类')}</div>
+              <div class="card-maker">
+                <span class="card-maker-avatar" style="background:${gradient}">${esc(initial)}</span>
+                ${esc(item.maker || '匿名制作人')}
+              </div>
+              ${cleaned ? `<div class="card-prompt-preview">${esc(cleaned)}</div>` : ''}
+            </div>
+          </article>
+        </div>`;
+      }).join('');
+
+      lazyLoadImages(grid);
+    }
+
+    /* ═══════════════════════ LAZY LOADING ═══════════════════════ */
+    function lazyLoadImages(container) {
+      const imgs = container.querySelectorAll('img[data-src]');
+      const activate = img => {
+        const src = img.dataset.src || '';
+        if (!src) {
+          markImageError(img);
+          return;
+        }
+        const wrap = img.closest('.card-image,.showcase-item,.lightbox-image');
+        if (wrap) {
+          wrap.classList.add('image-loading');
+          wrap.classList.remove('image-loaded', 'image-error');
+        }
+        img.src = src;
+        img.removeAttribute('data-src');
+        if (img.complete && img.naturalWidth > 0) markImageLoaded(img);
+      };
+      if (!('IntersectionObserver' in window)) {
+        imgs.forEach(activate);
+        return;
+      }
+      const observer = new IntersectionObserver((entries, obs) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            activate(entry.target);
+            obs.unobserve(entry.target);
+          }
+        });
+      }, { rootMargin: '200px 0px' });
+      imgs.forEach(img => observer.observe(img));
+    }
+
+    /* ═══════════════════════ SHOWCASE MARQUEE ═══════════════════════ */
+    function renderShowcase() {
+      const items = state.items.slice();
+      if (items.length < 3) {
+        $('showcaseSection').classList.add('hidden');
+        return;
+      }
+      $('showcaseSection').classList.remove('hidden');
+
+      // Shuffle and pick up to 20
+      const shuffled = items.sort(() => Math.random() - .5).slice(0, 20);
+      // Double for seamless loop
+      const all = [...shuffled, ...shuffled];
+      const speed = Math.max(30, shuffled.length * 3);
+      $('showcaseTrack').style.setProperty('--marquee-duration', speed + 's');
+
+      $('showcaseTrack').innerHTML = all.map((item, i) => `
+        <div class="showcase-item image-loading" onclick="openLightboxByItem('${esc(item.image_url)}')">
+          <div class="image-loader"><div class="spinner"></div></div>
+          <img src="${esc(item.image_url)}" alt="${esc(item.character||'')}" loading="lazy"
+            onload="markImageLoaded(this)" onerror="markImageError(this)">
+          <div class="showcase-overlay"><span>${esc(item.character||'')}</span></div>
+        </div>
+      `).join('');
+    }
+
+    function openLightboxByItem(url) {
+      const idx = state.preview.findIndex(it => it.image_url === url);
+      if (idx >= 0) openLightbox(idx);
+    }
+
+    /* ═══════════════════════ SEARCH ═══════════════════════ */
+    function handleSearch() {
+      clearTimeout(state.searchTimer);
+      state.searchTimer = setTimeout(() => {
+        renderFilters();
+        renderGallery();
+      }, 200);
+    }
+
+    function handleRoleFilter(source) {
+      const id = source === 'drawer' ? 'drawerRoleFilterInput' : 'roleFilterInput';
+      state.roleFilter = String(($(id) || {}).value || '');
+      renderFilters();
+    }
+
+    /* ═══════════════════════ RENDER RANK ═══════════════════════ */
+    function renderRankData(rank) {
+      rank = rank || { top_rows: [], total: 0, total_users: 0, label: '今日' };
+      $('rankSummary').textContent =
+        `${rank.label||'今日'} · ${rank.total||0} 张作品 · ${rank.total_users||0} 位制作人`;
+
+      const rows = rank.top_rows || [];
+      if (!rows.length) {
+        $('rankList').innerHTML = `<div class="empty-state"><p>暂无排行数据</p></div>`;
+        return;
+      }
+
+      const maxCount = Math.max(...rows.map(r => r.count || 0), 1);
+
+      $('rankList').innerHTML = rows.map((row, i) => {
+        const pct = Math.max(4, ((row.count || 0) / maxCount) * 100);
+        const medalText = row.rank === 1 ? '🥇' : row.rank === 2 ? '🥈' : row.rank === 3 ? '🥉'
+          : String(row.rank || i + 1).padStart(2, '0');
+        const gradient = nameGradient(row.name);
+        const initial = nameInitial(row.name);
+        const delay = Math.min(i * 0.06, 0.5);
+        return `<article class="rank-card glass-solid" data-rank="${row.rank||i+1}" style="--d:${delay}s">
+          <div class="rank-medal">${medalText}</div>
+          <div class="rank-info">
+            <div class="rank-name">
+              <span class="rank-avatar" style="background:${gradient}">${esc(initial)}</span>
+              ${esc(row.name || '匿名制作人')}
+            </div>
+            <div class="rank-bar">
+              <div class="rank-bar-fill" style="--bar-w:${pct}%;--d:${delay + .2}s"></div>
+            </div>
+          </div>
+          <div class="rank-count">${row.count || 0}<small>张</small></div>
+        </article>`;
+      }).join('');
+    }
+
+    /* ═══════════════════════ ADMIN CONSOLE ═══════════════════════ */
+    async function loadAdmin(force = false) {
+      if (!state.isAdmin) return;
+      if (state.admin && !force) {
+        renderAdmin();
+        return;
+      }
+      setPageLoading(true, '正在加载管理台...');
+      try {
+        const data = await api(endpoint('admin_summary') || '/api/admin/summary');
+        state.admin = data;
+        await loadAdminLoraProfiles(false, false);
+        renderAdmin();
+      } catch (err) {
+        if (handleAuthExpired(err)) throw err;
+        toast('管理台加载失败：' + err.message, 'error');
+      } finally {
+        setPageLoading(false);
+      }
+    }
+
+    function switchAdminTab(tab) {
+      state.adminTab = tab;
+      document.querySelectorAll('.admin-tab').forEach(b => b.classList.toggle('active', b.dataset.adminTab === tab));
+      ['Gallery','Accounts','Balance','Lora','Import','Access'].forEach(name => {
+        const el = $('adminTab' + name);
+        if (el) el.classList.toggle('hidden', name.toLowerCase() !== tab);
+      });
+      if ($('adminGalleryEditor')) $('adminGalleryEditor').classList.toggle('hidden', tab === 'lora');
+      if ($('adminLoraEditor')) $('adminLoraEditor').classList.toggle('hidden', tab !== 'lora');
+      if (tab === 'lora') loadAdminLoraProfiles(false, true);
+      if (tab === 'balance') { renderAdminBalance(); loadAdminVideoConfig(); }
+    }
+
+    function renderAdmin() {
+      const data = state.admin || {};
+      const stats = data.stats || {};
+      const access = data.access || {};
+      const loraCounts = ((data.lora || data.loraSummary || {}).counts) || {};
+      const loraTotal = Object.values(loraCounts).reduce((sum, n) => sum + Number(n || 0), 0);
+      $('adminStatGallery').textContent = stats.gallery || 0;
+      $('adminStatAccounts').textContent = stats.accounts || 0;
+      $('adminStatVisitors').textContent = access.today_visitors || 0;
+      $('adminStatRequests').textContent = access.today_requests || 0;
+      $('adminSummaryText').textContent =
+        `已收录 ${stats.gallery || 0} 件作品，${stats.accounts || 0} 个账号，${loraTotal || 0} 个 LoRA 角色档案。`;
+      renderAdminGallery();
+      renderAdminAccounts();
+      renderAdminBalance();
+      renderAdminLoraProfiles();
+      renderAdminAccess();
+    }
+
+    function adminGallerySelection() {
+      if (!(state.adminGallerySelectedIds instanceof Set)) state.adminGallerySelectedIds = new Set();
+      return state.adminGallerySelectedIds;
+    }
+
+    function adminGalleryFilteredItems() {
+      const data = state.admin || {};
+      const q = (($('adminGallerySearch') || {}).value || '').trim().toLowerCase();
+      return (data.gallery || []).filter(item => !q || [item.character, item.maker, item.prompt, item.summary].some(v => String(v || '').toLowerCase().includes(q)));
+    }
+
+    function adminVisibleGalleryIdSet() {
+      return new Set((state.adminGalleryVisibleIds || []).map(id => String(id || '')).filter(Boolean));
+    }
+
+    function adminSyncGallerySelection(visibleOnly = false) {
+      const existing = new Set(((state.admin || {}).gallery || []).map(item => String(item.id || '')));
+      const visible = visibleOnly ? adminVisibleGalleryIdSet() : null;
+      const selected = adminGallerySelection();
+      Array.from(selected).forEach(id => {
+        id = String(id || '');
+        if (!existing.has(id) || (visible && !visible.has(id))) selected.delete(id);
+      });
+      return selected;
+    }
+
+    function adminSelectedGalleryIds(visibleOnly = false) {
+      return Array.from(adminSyncGallerySelection(visibleOnly)).filter(Boolean);
+    }
+
+    function adminUpdateGallerySelectionMeta() {
+      const selectedCount = adminSelectedGalleryIds(true).length;
+      const visibleCount = (state.adminGalleryVisibleIds || []).length;
+      if ($('adminGallerySelectionCount')) $('adminGallerySelectionCount').textContent = `已选择 ${selectedCount} 张`;
+      if ($('adminGalleryVisibleCount')) $('adminGalleryVisibleCount').textContent = `当前筛选 ${visibleCount} 张`;
+    }
+
+    function adminToggleGalleryItem(id, checked) {
+      const selected = adminGallerySelection();
+      if (checked) selected.add(String(id));
+      else selected.delete(String(id));
+      renderAdminGallery();
+    }
+
+    function adminSelectVisibleGalleryItems() {
+      const selected = adminGallerySelection();
+      (state.adminGalleryVisibleIds || []).forEach(id => selected.add(String(id)));
+      renderAdminGallery();
+    }
+
+    function adminInvertVisibleGalleryItems() {
+      const selected = adminGallerySelection();
+      (state.adminGalleryVisibleIds || []).forEach(id => {
+        id = String(id);
+        if (selected.has(id)) selected.delete(id);
+        else selected.add(id);
+      });
+      renderAdminGallery();
+    }
+
+    function adminClearGallerySelection() {
+      adminGallerySelection().clear();
+      renderAdminGallery();
+    }
+
+    function renderAdminGallery() {
+      const items = adminGalleryFilteredItems();
+      state.adminGalleryVisibleIds = items.map(item => String(item.id || '')).filter(Boolean);
+      adminSyncGallerySelection(true);
+      adminUpdateGallerySelectionMeta();
+      if (!items.length) {
+        $('adminGalleryList').innerHTML = `<div class="empty-state"><p>暂无收藏数据</p></div>`;
+        return;
+      }
+      const selected = adminGallerySelection();
+      $('adminGalleryList').innerHTML = items.map(item => {
+        const id = String(item.id || '');
+        const isSelected = selected.has(id);
+        return `
+        <article class="admin-row${isSelected ? ' selected' : ''}">
+          <label class="admin-check" title="选择">
+            <input type="checkbox" ${isSelected ? 'checked' : ''} onchange="adminToggleGalleryItem('${esc(id)}', this.checked)">
+          </label>
+          <img class="admin-thumb" src="${esc(item.image_url)}" loading="lazy" alt="${esc(item.character || '')}">
+          <div>
+            <div class="admin-row-title">${esc(item.character || '未分类')}</div>
+            <div class="admin-row-sub">${esc(item.maker || '匿名制作人')} · ${esc(cleanPrompt(item.prompt || '').slice(0, 90) || '无提示词')}</div>
+          </div>
+          <div class="admin-actions">
+            <button class="btn btn-sm" onclick="adminSelectItem('${esc(id)}')">编辑</button>
+            <button class="btn btn-sm btn-ghost" onclick="adminDeleteItem('${esc(id)}')">删除</button>
+          </div>
+        </article>
+      `}).join('');
+      adminUpdateGallerySelectionMeta();
+    }
+
+    function adminSelectItem(id) {
+      const item = ((state.admin || {}).gallery || []).find(x => x.id === id);
+      if (!item) return;
+      state.selectedAdminItem = item;
+      adminGallerySelection().add(String(id));
+      $('adminEditTitle').textContent = item.character || '未分类';
+      $('adminEditCharacter').value = item.character || '';
+      $('adminEditMaker').value = item.maker || '';
+      $('adminEditPrompt').value = item.prompt || '';
+      $('adminEditSummary').value = item.summary || '';
+      renderAdminGallery();
+    }
+
+    async function adminSaveSelected() {
+      const item = state.selectedAdminItem;
+      if (!item) {
+        toast('请先选择一张作品', 'error');
+        return;
+      }
+      const body = {
+        character: $('adminEditCharacter').value,
+        maker: $('adminEditMaker').value,
+        prompt: $('adminEditPrompt').value,
+        summary: $('adminEditSummary').value
+      };
+      await api(`/api/admin/gallery/${encodeURIComponent(item.id)}`, {
+        method: 'PATCH', body: JSON.stringify(body)
+      });
+      toast('已保存作品信息', 'success');
+      state.admin = null;
+      await loadAdmin(true);
+      await loadGallery();
+    }
+
+    async function adminDeleteSelected() {
+      const item = state.selectedAdminItem;
+      if (item) await adminDeleteItem(item.id);
+    }
+
+    async function adminDeleteItem(id) {
+      if (!confirm('确认删除这张收藏图？')) return;
+      await api(`/api/admin/gallery/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      toast('已删除收藏图', 'success');
+      state.selectedAdminItem = null;
+      adminGallerySelection().delete(String(id));
+      $('adminEditTitle').textContent = '未选择作品';
+      state.admin = null;
+      await loadAdmin(true);
+      await loadGallery();
+    }
+
+    function adminGalleryBatchEndpoint() {
+      return endpoint('admin_gallery_batch') || '/api/admin/gallery/batch';
+    }
+
+    function adminBatchPatchFromInputs() {
+      const fields = {
+        character: $('adminBatchCharacter')?.value || '',
+        maker: $('adminBatchMaker')?.value || '',
+        prompt: $('adminBatchPrompt')?.value || '',
+        summary: $('adminBatchSummary')?.value || ''
+      };
+      return Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, String(v || '').trim()]).filter(([, v]) => v));
+    }
+
+    async function adminRefreshAfterBatch(result, message) {
+      const missing = ((result || {}).not_found || []).length;
+      const failed = ((result || {}).failed || []).length;
+      state.selectedAdminItem = null;
+      adminGallerySelection().clear();
+      state.admin = null;
+      await loadAdmin(true);
+      await loadGallery();
+      adminSyncGallerySelection(true);
+      renderAdminGallery();
+      const suffix = missing || failed ? `，跳过 ${missing}，失败 ${failed}` : '';
+      toast(message + suffix, failed ? 'error' : 'success');
+    }
+
+    async function adminBatchUpdateSelected() {
+      const ids = adminSelectedGalleryIds(true);
+      if (!ids.length) {
+        toast('请先在当前筛选结果里选择要修改的收藏图', 'error');
+        return;
+      }
+      const patch = adminBatchPatchFromInputs();
+      if (!Object.keys(patch).length) {
+        toast('请至少填写一个批量修改字段', 'error');
+        return;
+      }
+      const data = await api(adminGalleryBatchEndpoint(), {
+        method: 'POST',
+        body: JSON.stringify({ action: 'update', ids, patch })
+      });
+      const result = data.result || {};
+      await adminRefreshAfterBatch(result, `已批量修改 ${result.updated || 0} 张`);
+    }
+
+    async function adminBatchDeleteSelected() {
+      const ids = adminSelectedGalleryIds(true);
+      if (!ids.length) {
+        toast('请先在当前筛选结果里选择要删除的收藏图', 'error');
+        return;
+      }
+      if (!confirm(`确认删除已选择的 ${ids.length} 张收藏图？`)) return;
+      const data = await api(adminGalleryBatchEndpoint(), {
+        method: 'POST',
+        body: JSON.stringify({ action: 'delete', ids })
+      });
+      const result = data.result || {};
+      await adminRefreshAfterBatch(result, `已批量删除 ${result.deleted || 0} 张`);
+    }
+
+    async function loadAdminLoraProfiles(force = false, shouldRender = true, refreshLive = false) {
+      if (!state.isAdmin) return;
+      if (!state.admin) state.admin = {};
+      const family = state.adminLoraFamily || 'current';
+      if (!force && !refreshLive && state.admin.lora_profiles && state.admin.lora_loaded_family === family) {
+        if (shouldRender) renderAdminLoraProfiles();
+        return;
+      }
+      try {
+        const data = await api(`/api/admin/lora/profiles?family=${encodeURIComponent(family)}${refreshLive ? '&refresh=1' : ''}`);
+        state.admin.lora_profiles = data.profiles || [];
+        state.admin.lora = data.summary || state.admin.lora || {};
+        state.admin.loraSummary = data.summary || state.admin.loraSummary || {};
+        state.admin.loraStats = data.stats || {};
+        state.admin.lora_warning = data.warning || '';
+        state.admin.lora_loaded_family = family;
+        state.admin.lora_resolved_family = data.family || family;
+        delete state.admin.lora_error;
+      } catch (err) {
+        state.admin.lora_profiles = [];
+        state.admin.lora_error = err.message || 'LoRA 角色加载失败';
+        if (shouldRender) toast('LoRA 角色加载失败：' + err.message, 'error');
+      }
+      if (shouldRender) renderAdminLoraProfiles();
+    }
+
+    async function adminLoadLoraFamily(family) {
+      state.adminLoraFamily = family || 'current';
+      state.selectedAdminLora = null;
+      adminLoraSelection().clear();
+      clearAdminLoraEditor();
+      await loadAdminLoraProfiles(true, true);
+      renderAdmin();
+    }
+
+    async function adminRefreshLoraProfiles() {
+      await loadAdminLoraProfiles(true, true, true);
+      const stats = ((state.admin || {}).loraStats) || {};
+      toast(`LoRA 已刷新：档案 ${stats.recognized || 0}，未识别 ${stats.unrecognized || 0}`, 'success');
+    }
+
+    function adminLoraItemId(item) {
+      return `${String(item?.family || '')}::${String(item?.key || '')}`;
+    }
+
+    function adminLoraSelection() {
+      if (!(state.adminLoraSelectedIds instanceof Set)) state.adminLoraSelectedIds = new Set();
+      return state.adminLoraSelectedIds;
+    }
+
+    function adminLoraFilteredItems() {
+      const data = state.admin || {};
+      const q = (($('adminLoraSearch') || {}).value || '').trim().toLowerCase();
+      return (data.lora_profiles || []).filter(item => {
+        if (!q) return true;
+        return [
+          item.display_name, item.character, item.lora, item.lora_path, item.status_label, item.profile_status,
+          ...(item.aliases || []), ...(item.official_aliases || []),
+          ...(item.nickname_aliases || []), ...(item.search_aliases || []),
+          ...(item.match_terms || [])
+        ].some(v => String(v || '').toLowerCase().includes(q));
+      });
+    }
+
+    function adminVisibleLoraIdSet() {
+      return new Set((state.adminLoraVisibleIds || []).map(id => String(id || '')).filter(Boolean));
+    }
+
+    function adminSyncLoraSelection(visibleOnly = false) {
+      const existing = new Set(((state.admin || {}).lora_profiles || []).map(item => adminLoraItemId(item)));
+      const visible = visibleOnly ? adminVisibleLoraIdSet() : null;
+      const selected = adminLoraSelection();
+      Array.from(selected).forEach(id => {
+        id = String(id || '');
+        if (!existing.has(id) || (visible && !visible.has(id))) selected.delete(id);
+      });
+      return selected;
+    }
+
+    function adminSelectedLoraIds(visibleOnly = false) {
+      return Array.from(adminSyncLoraSelection(visibleOnly)).filter(Boolean);
+    }
+
+    function adminUpdateLoraSelectionMeta() {
+      const selectedCount = adminSelectedLoraIds(true).length;
+      const visibleCount = (state.adminLoraVisibleIds || []).length;
+      if ($('adminLoraSelectionCount')) $('adminLoraSelectionCount').textContent = `已选择 ${selectedCount} 个`;
+      if ($('adminLoraVisibleCount')) $('adminLoraVisibleCount').textContent = `当前筛选 ${visibleCount} 个`;
+    }
+
+    function adminToggleLoraProfile(id, checked) {
+      const selected = adminLoraSelection();
+      if (checked) selected.add(String(id));
+      else selected.delete(String(id));
+      renderAdminLoraProfiles();
+    }
+
+    function adminSelectVisibleLoraProfiles() {
+      const selected = adminLoraSelection();
+      (state.adminLoraVisibleIds || []).forEach(id => selected.add(String(id)));
+      renderAdminLoraProfiles();
+    }
+
+    function adminInvertVisibleLoraProfiles() {
+      const selected = adminLoraSelection();
+      (state.adminLoraVisibleIds || []).forEach(id => {
+        id = String(id);
+        if (selected.has(id)) selected.delete(id);
+        else selected.add(id);
+      });
+      renderAdminLoraProfiles();
+    }
+
+    function adminClearLoraSelection() {
+      adminLoraSelection().clear();
+      renderAdminLoraProfiles();
+    }
+
+    function adminSelectedLoraBatchItems() {
+      const selected = new Set(adminSelectedLoraIds(true));
+      return ((state.admin || {}).lora_profiles || [])
+        .filter(item => selected.has(adminLoraItemId(item)))
+        .map(item => ({
+          family: item.family,
+          key: item.key,
+          lora: item.lora_path || item.lora || ''
+        }));
+    }
+
+    function renderAdminLoraProfiles() {
+      const data = state.admin || {};
+      if ($('adminLoraFamily')) $('adminLoraFamily').value = state.adminLoraFamily || 'current';
+      if (!$('adminLoraList')) return;
+      if (data.lora_error) {
+        state.adminLoraVisibleIds = [];
+        adminSyncLoraSelection(true);
+        $('adminLoraList').innerHTML = `<div class="empty-state"><p>${esc(data.lora_error)}</p></div>`;
+        adminUpdateLoraSelectionMeta();
+        return;
+      }
+      const items = adminLoraFilteredItems();
+      state.adminLoraVisibleIds = items.map(item => adminLoraItemId(item)).filter(id => !id.endsWith('::'));
+      adminSyncLoraSelection(true);
+      adminUpdateLoraSelectionMeta();
+      if (!items.length) {
+        $('adminLoraList').innerHTML = `<div class="empty-state"><p>暂无 LoRA 角色档案</p></div>`;
+        return;
+      }
+      const selectedIds = adminLoraSelection();
+      $('adminLoraList').innerHTML = items.map(item => {
+        const disabled = item.disabled ? ' · 已停用' : '';
+        const aliasText = (item.aliases || []).slice(0, 4).join(' / ');
+        const reason = item.conflict_reason ? ` · ${String(item.conflict_reason).slice(0, 32)}` : '';
+        const active = state.selectedAdminLora && state.selectedAdminLora.key === item.key && state.selectedAdminLora.family === item.family;
+        const id = adminLoraItemId(item);
+        const checked = selectedIds.has(id);
+        const status = item.unrecognized ? `<span class="admin-lora-status">未识别</span>` : '';
+        return `<article class="admin-row clickable ${checked ? 'selected' : ''} ${item.disabled ? 'is-disabled' : ''} ${item.unrecognized ? 'is-unrecognized' : ''}" style="${active ? 'border-color:var(--accent)' : ''}" onclick="adminSelectLoraProfile('${esc(item.family)}','${esc(item.key)}')">
+          <label class="admin-check" title="选择" onclick="event.stopPropagation()">
+            <input type="checkbox" ${checked ? 'checked' : ''} onchange="adminToggleLoraProfile('${esc(id)}', this.checked)">
+          </label>
+          <div class="admin-lora-index">#${String(item.index || 0).padStart(3, '0')}</div>
+          <div>
+            <div class="admin-row-title">${esc(item.display_name || item.character || item.key || '未命名')} <span class="admin-role">${esc(item.family_label || item.family || '')}</span> ${status}</div>
+            <div class="admin-row-sub">${esc(item.lora || '无 LoRA 文件')}${aliasText ? ' · ' + esc(aliasText) : ''}${disabled}${reason ? esc(reason) : ''}</div>
+          </div>
+          <div class="admin-actions" onclick="event.stopPropagation()">
+            <button class="btn btn-sm" onclick="adminSelectLoraProfile('${esc(item.family)}','${esc(item.key)}')">编辑</button>
+            <button class="btn btn-sm btn-ghost" onclick="adminDeleteLoraProfile('${esc(item.family)}','${esc(item.key)}')">删除</button>
+          </div>
+        </article>`;
+      }).join('');
+      adminUpdateLoraSelectionMeta();
+    }
+
+    function clearAdminLoraEditor() {
+      if (!$('adminLoraEditTitle')) return;
+      $('adminLoraEditTitle').textContent = '未选择 LoRA 角色';
+      ['adminLoraCharacter','adminLoraFile','adminLoraAliases','adminLoraSearchAliases','adminLoraTrigger','adminLoraDisabledReason'].forEach(id => {
+        if ($(id)) $(id).value = '';
+      });
+      if ($('adminLoraDisabled')) $('adminLoraDisabled').checked = false;
+      adminToggleLoraDisabledReason();
+    }
+
+    function adminSelectLoraProfile(family, key) {
+      const item = ((state.admin || {}).lora_profiles || []).find(x => x.family === family && x.key === key);
+      if (!item) return;
+      state.selectedAdminLora = item;
+      adminLoraSelection().add(adminLoraItemId(item));
+      $('adminLoraEditTitle').textContent = item.display_name || item.character || item.key || 'LoRA 角色';
+      $('adminLoraCharacter').value = item.character || item.display_name || '';
+      $('adminLoraFile').value = item.lora_path || item.lora || '';
+      $('adminLoraAliases').value = (item.aliases || []).join('\n');
+      $('adminLoraSearchAliases').value = (item.search_aliases || []).join('\n');
+      $('adminLoraTrigger').value = item.trigger_prompt || '';
+      $('adminLoraDisabled').checked = !!item.disabled;
+      $('adminLoraDisabledReason').value = item.disabled_reason || item.conflict_reason || '';
+      adminToggleLoraDisabledReason();
+      renderAdminLoraProfiles();
+    }
+
+    function adminToggleLoraDisabledReason() {
+      if ($('adminLoraDisabledReasonWrap')) {
+        $('adminLoraDisabledReasonWrap').classList.toggle('hidden', !$('adminLoraDisabled')?.checked);
+      }
+    }
+
+    async function adminSaveSelectedLoraProfile() {
+      const item = state.selectedAdminLora;
+      if (!item) {
+        toast('请先选择一个 LoRA 角色', 'error');
+        return;
+      }
+      const body = {
+        character: $('adminLoraCharacter').value,
+        lora: item.lora_path || item.lora || $('adminLoraFile').value,
+        aliases: $('adminLoraAliases').value,
+        search_aliases: $('adminLoraSearchAliases').value,
+        trigger_prompt: $('adminLoraTrigger').value,
+        disabled: $('adminLoraDisabled').checked,
+        disabled_reason: $('adminLoraDisabledReason').value
+      };
+      const data = await api(`/api/admin/lora/profiles/${encodeURIComponent(item.key)}?family=${encodeURIComponent(item.family)}`, {
+        method: 'PATCH',
+        body: JSON.stringify(body)
+      });
+      toast(`已保存 LoRA 角色：${data.profile?.display_name || body.character || item.key}`, 'success');
+      const nextKey = data.key || data.profile?.key || item.key;
+      const nextFamily = data.profile?.family || item.family;
+      state.admin = null;
+      await loadAdmin(true);
+      state.selectedAdminLora = null;
+      adminSelectLoraProfile(nextFamily, nextKey);
+    }
+
+    async function adminDeleteSelectedLoraProfile() {
+      const item = state.selectedAdminLora;
+      if (item) await adminDeleteLoraProfile(item.family, item.key);
+    }
+
+    async function adminDeleteLoraProfile(family, key) {
+      const item = ((state.admin || {}).lora_profiles || []).find(x => x.family === family && x.key === key) || state.selectedAdminLora;
+      const name = item?.display_name || item?.character || key;
+      if (!confirm(`确认删除 LoRA 角色「${name}」？\n会清理当前模型族档案、别名、角色词和对应本地 LoRA 文件。`)) return;
+      const loraQuery = item ? `&lora=${encodeURIComponent(item.lora_path || item.lora || '')}` : '';
+      await api(`/api/admin/lora/profiles/${encodeURIComponent(key)}?family=${encodeURIComponent(family)}${loraQuery}`, { method: 'DELETE' });
+      toast(`已删除 LoRA 角色：${name}`, 'success');
+      state.selectedAdminLora = null;
+      adminLoraSelection().delete(`${family}::${key}`);
+      clearAdminLoraEditor();
+      state.admin = null;
+      await loadAdmin(true);
+    }
+
+    function adminLoraBatchEndpoint() {
+      return endpoint('admin_lora_batch') || '/api/admin/lora/profiles/batch';
+    }
+
+    function adminLoraBatchPatchFromInputs() {
+      const patch = {};
+      const disabled = String($('adminLoraBatchDisabled')?.value || 'keep').trim();
+      if (disabled && disabled !== 'keep') patch.disabled = disabled === 'true';
+      const reason = String($('adminLoraBatchDisabledReason')?.value || '').trim();
+      const aliases = String($('adminLoraBatchAliases')?.value || '').trim();
+      const searchAliases = String($('adminLoraBatchSearchAliases')?.value || '').trim();
+      const trigger = String($('adminLoraBatchTrigger')?.value || '').trim();
+      if (reason) patch.disabled_reason = reason;
+      if (aliases) patch.aliases = aliases;
+      if (searchAliases) patch.search_aliases = searchAliases;
+      if (trigger) patch.trigger_prompt = trigger;
+      return patch;
+    }
+
+    async function adminRefreshAfterLoraBatch(result, message) {
+      const missing = ((result || {}).not_found || []).length;
+      const failed = ((result || {}).failed || []).length;
+      state.selectedAdminLora = null;
+      adminLoraSelection().clear();
+      clearAdminLoraEditor();
+      await loadAdminLoraProfiles(true, true, true);
+      const suffix = missing || failed ? `，跳过 ${missing}，失败 ${failed}` : '';
+      toast(message + suffix, failed ? 'error' : 'success');
+    }
+
+    async function adminBatchUpdateSelectedLoras() {
+      const items = adminSelectedLoraBatchItems();
+      if (!items.length) {
+        toast('请先在当前筛选结果里选择要修改的 LoRA', 'error');
+        return;
+      }
+      const patch = adminLoraBatchPatchFromInputs();
+      if (!Object.keys(patch).length) {
+        toast('请至少填写一个批量修改字段', 'error');
+        return;
+      }
+      const data = await api(adminLoraBatchEndpoint(), {
+        method: 'POST',
+        body: JSON.stringify({ action: 'update', items, patch })
+      });
+      const result = data.result || {};
+      await adminRefreshAfterLoraBatch(result, `已批量修改 ${result.updated || 0} 个 LoRA`);
+    }
+
+    async function adminBatchDeleteSelectedLoras() {
+      const items = adminSelectedLoraBatchItems();
+      if (!items.length) {
+        toast('请先在当前筛选结果里选择要删除的 LoRA', 'error');
+        return;
+      }
+      if (!confirm(`确认删除已选择的 ${items.length} 个 LoRA？\n会清理档案、别名、角色词和对应本地 LoRA 文件。`)) return;
+      const data = await api(adminLoraBatchEndpoint(), {
+        method: 'POST',
+        body: JSON.stringify({ action: 'delete', items })
+      });
+      const result = data.result || {};
+      await adminRefreshAfterLoraBatch(result, `已批量删除 ${result.deleted || 0} 个 LoRA`);
+    }
+
+    function renderAdminAccounts() {
+      const accounts = ((state.admin || {}).accounts || []);
+      if (!accounts.length) {
+        $('adminAccountList').innerHTML = `<div class="empty-state"><p>暂无账号</p></div>`;
+        return;
+      }
+      $('adminAccountList').innerHTML = accounts.map(acc => {
+        const role = acc.role === 'admin' ? 'admin' : 'user';
+        const disabled = acc.disabled ? ' · 已停用' : '';
+        const pending = acc.activated === false ? ' · 未激活' : '';
+        return `<div class="admin-account">
+          <div>
+            <div class="admin-row-title">${esc(acc.username || '')} <span class="admin-role ${role === 'admin' ? 'admin' : ''}">${role}</span> <span style="color:var(--accent);font-weight:800">${fmtMoney(acc.balance)}</span></div>
+            <div class="admin-row-sub">${esc(acc.owner_name || acc.owner_user_id || '无绑定')} · 登录 ${acc.login_count || 0} 次${disabled}${pending}</div>
+          </div>
+          <div class="admin-actions">
+            <button class="btn btn-sm" onclick="adminResetPassword('${esc(acc.username)}')">重置密码</button>
+            ${role === 'admin' ? '' : `<button class="btn btn-sm btn-ghost" onclick="adminToggleAccount('${esc(acc.username)}', ${acc.disabled ? 'false' : 'true'})">${acc.disabled ? '启用' : '停用'}</button>
+            <button class="btn btn-sm btn-ghost" onclick="adminDeleteAccount('${esc(acc.username)}')">删除</button>`}
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    async function adminCreateAccount() {
+      const username = $('adminNewUser').value.trim();
+      if (!username) {
+        toast('请输入用户名', 'error');
+        return;
+      }
+      const data = await api('/api/admin/accounts', {
+        method: 'POST',
+        body: JSON.stringify({ username, owner_name: $('adminNewOwner').value.trim() })
+      });
+      $('adminCreateResult').textContent = `用户名：${data.account.username} / 密码：${data.password}`;
+      toast('账号已创建', 'success');
+      $('adminNewUser').value = '';
+      $('adminNewOwner').value = '';
+      state.admin = null;
+      await loadAdmin(true);
+    }
+
+    async function adminResetPassword(username) {
+      const data = await api(`/api/admin/accounts/${encodeURIComponent(username)}`, {
+        method: 'PATCH', body: JSON.stringify({ reset_password: true })
+      });
+      toast(`新密码：${data.password}`, 'success', 7000);
+      state.admin = null;
+      await loadAdmin(true);
+    }
+
+    async function adminToggleAccount(username, disabled) {
+      await api(`/api/admin/accounts/${encodeURIComponent(username)}`, {
+        method: 'PATCH', body: JSON.stringify({ disabled })
+      });
+      toast(disabled ? '账号已停用' : '账号已启用', 'success');
+      state.admin = null;
+      await loadAdmin(true);
+    }
+
+    async function adminDeleteAccount(username) {
+      if (!confirm('确认删除这个账号？')) return;
+      await api(`/api/admin/accounts/${encodeURIComponent(username)}`, { method: 'DELETE' });
+      toast('账号已删除', 'success');
+      state.admin = null;
+      await loadAdmin(true);
+    }
+
+    function fmtMoney(v) { return '¥' + (Math.round((Number(v) || 0) * 100) / 100).toFixed(2); }
+
+    function adminBalanceFilteredAccounts() {
+      const accounts = (((state.admin || {}).accounts) || []);
+      const q = (($('adminBalanceSearch') || {}).value || '').trim().toLowerCase();
+      return accounts.filter(a =>
+        !q || [a.username, a.owner_user_id, a.owner_name].some(v => String(v || '').toLowerCase().includes(q)));
+    }
+
+    function renderAdminBalance() {
+      const data = state.admin || {};
+      const stats = data.stats || {};
+      const billing = data.billing || {};
+      if ($('adminBalanceTotal')) $('adminBalanceTotal').textContent = '总余额 ' + fmtMoney(stats.total_balance || 0);
+      if ($('adminBalanceSpent')) $('adminBalanceSpent').textContent = '累计消费 ' + fmtMoney(stats.total_spent || 0);
+      if ($('adminBalancePrice')) $('adminBalancePrice').textContent =
+        `本地 ${fmtMoney(billing.video_local_price || 0)} / API ${fmtMoney(billing.video_api_price || 0)} 一次`;
+      if ($('billingTrialBalance') && document.activeElement !== $('billingTrialBalance')) $('billingTrialBalance').value = Number(billing.trial_balance ?? 5);
+      if ($('billingLocalPrice') && document.activeElement !== $('billingLocalPrice')) $('billingLocalPrice').value = Number(billing.video_local_price ?? 0.5);
+      if ($('billingApiPrice') && document.activeElement !== $('billingApiPrice')) $('billingApiPrice').value = Number(billing.video_api_price ?? 0.5);
+      const box = $('adminBalanceList');
+      if (!box) return;
+      const list = adminBalanceFilteredAccounts();
+      if (!list.length) {
+        box.innerHTML = `<div class="empty-state"><p>暂无账号</p></div>`;
+        return;
+      }
+      box.innerHTML = list.map(acc => {
+        const u = esc(acc.username || '');
+        const bound = acc.owner_user_id ? ('QQ ' + esc(acc.owner_user_id)) : '<span style="color:var(--gold)">未绑定QQ</span>';
+        const role = acc.role === 'admin' ? '<span class="admin-role admin">admin</span>' : '';
+        return `<div class="admin-account">
+          <div>
+            <div class="admin-row-title">${u} ${role} <span style="color:var(--accent);font-weight:900">${fmtMoney(acc.balance)}</span></div>
+            <div class="admin-row-sub">${bound} · ${esc(acc.owner_name || '无备注')} · 已消费 ${fmtMoney(acc.total_spent || 0)}</div>
+          </div>
+          <div class="admin-actions">
+            <button class="btn btn-sm btn-primary" onclick="adminRecharge('${u}')">充值</button>
+            <button class="btn btn-sm btn-ghost" onclick="adminSetBalance('${u}', ${Number(acc.balance) || 0})">设额度</button>
+            <button class="btn btn-sm btn-ghost" onclick="adminBalanceLedger('${u}')">流水</button>
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    async function adminSaveBilling() {
+      const body = {
+        video_trial_balance: Number($('billingTrialBalance').value || 0),
+        video_local_price: Number($('billingLocalPrice').value || 0),
+        video_api_price: Number($('billingApiPrice').value || 0)
+      };
+      if ([body.video_trial_balance, body.video_local_price, body.video_api_price].some(v => !isFinite(v) || v < 0)) {
+        toast('请输入不小于 0 的金额', 'error');
+        return;
+      }
+      const data = await api('/api/admin/billing', { method: 'POST', body: JSON.stringify(body) });
+      if (state.admin) state.admin.billing = data.billing || state.admin.billing || {};
+      $('billingResult').textContent = `已保存：默认 ${fmtMoney((data.billing || {}).trial_balance)}，本地 ${fmtMoney((data.billing || {}).video_local_price)}，API ${fmtMoney((data.billing || {}).video_api_price)}`;
+      toast('额度与扣费价格已保存', 'success');
+      state.admin = null;
+      await loadAdmin(true);
+    }
+
+    async function adminBatchBalance() {
+      const raw = ($('adminBalanceBatchUsers').value || '').trim();
+      let usernames = raw
+        ? raw.split(/[\s,，;；]+/).map(v => v.trim()).filter(Boolean)
+        : adminBalanceFilteredAccounts().filter(a => a.role !== 'admin').map(a => a.username).filter(Boolean);
+      usernames = [...new Set(usernames)];
+      const mode = $('adminBalanceBatchMode').value || 'add';
+      const amount = Number($('adminBalanceBatchAmount').value || 0);
+      if (!usernames.length) { toast('请选择要修改的用户', 'error'); return; }
+      if (!isFinite(amount) || (mode === 'add' && amount === 0) || (mode === 'set' && amount < 0)) {
+        toast(mode === 'set' ? '设额度金额不能小于 0' : '增减额度不能为 0', 'error');
+        return;
+      }
+      if (!confirm(`确认对 ${usernames.length} 个账号${mode === 'set' ? '设额度为' : '增减额度'} ${fmtMoney(amount)}？`)) return;
+      const data = await api('/api/admin/balance/batch', {
+        method: 'POST',
+        body: JSON.stringify({
+          usernames,
+          mode,
+          amount,
+          reason: $('adminBalanceBatchReason').value.trim()
+        })
+      });
+      const result = data.result || {};
+      $('adminBalanceBatchResult').textContent = `已更新 ${result.updated || 0}/${result.requested || usernames.length} 个账号${(result.failed || []).length ? '，失败：' + result.failed.join(', ') : ''}`;
+      toast('批量额度已更新', 'success');
+      state.admin = null;
+      await loadAdmin(true);
+    }
+
+    async function adminRecharge(username) {
+      const raw = prompt(`给 ${username} 充值多少元？（可输入负数扣减）`, '5');
+      if (raw === null) return;
+      const amount = Number(raw);
+      if (!isFinite(amount) || amount === 0) { toast('请输入有效金额', 'error'); return; }
+      const reason = prompt('备注（可选）', amount >= 0 ? '群主充值' : '管理员扣减') || '';
+      const data = await api(`/api/admin/accounts/${encodeURIComponent(username)}/balance`, {
+        method: 'POST', body: JSON.stringify({ mode: 'add', amount, reason })
+      });
+      toast(`已更新，当前余额 ${fmtMoney(data.account.balance)}`, 'success');
+      state.admin = null;
+      await loadAdmin(true);
+    }
+
+    async function adminSetBalance(username, current) {
+      const raw = prompt(`把 ${username} 的余额设为多少元？`, String(current || 0));
+      if (raw === null) return;
+      const amount = Number(raw);
+      if (!isFinite(amount) || amount < 0) { toast('请输入不小于 0 的金额', 'error'); return; }
+      const reason = prompt('备注（可选）', '管理员设置余额') || '';
+      const data = await api(`/api/admin/accounts/${encodeURIComponent(username)}/balance`, {
+        method: 'POST', body: JSON.stringify({ mode: 'set', amount, reason })
+      });
+      toast(`已设置，当前余额 ${fmtMoney(data.account.balance)}`, 'success');
+      state.admin = null;
+      await loadAdmin(true);
+    }
+
+    async function adminBalanceLedger(username) {
+      const data = await api(`/api/admin/accounts/${encodeURIComponent(username)}/ledger?limit=50`, { method: 'GET' });
+      const rows = (data.ledger || []);
+      if (!rows.length) { alert(`${username} 暂无额度流水`); return; }
+      const kindMap = { consume: '消费', refund: '退回', recharge: '充值', deduct: '扣减', set: '设置', trial: '试用赠送' };
+      const lines = rows.map(r => {
+        const t = new Date(r.at || 0).toLocaleString();
+        const k = kindMap[r.kind] || r.kind;
+        const amt = (r.amount >= 0 ? '+' : '') + (Math.round((r.amount || 0) * 100) / 100).toFixed(2);
+        return `${t}  ${k} ${amt}  余额${(Math.round((r.balance_after || 0) * 100) / 100).toFixed(2)}  ${r.reason || ''}`;
+      });
+      alert(`${username} 最近额度流水：\n\n` + lines.join('\n'));
+    }
+
+    async function loadAdminVideoConfig() {
+      try {
+        const data = await api('/api/admin/video-config', { method: 'GET' });
+        const c = data.config || {};
+        $('videoCfgEnable').checked = !!c.enable;
+        $('videoCfgBaseUrl').value = c.base_url || '';
+        $('videoCfgModel').value = c.model || '';
+        $('videoCfgProxy').value = c.proxy || '';
+        $('videoCfgMaxImages').value = c.max_images || 1;
+        $('videoCfgTimeout').value = c.timeout || 900;
+        $('videoCfgDuration').value = c.duration || 6;
+        $('videoCfgAspectRatio').value = c.aspect_ratio || 'auto';
+        $('videoCfgPromptEnhance').value = c.prompt_enhance || 'light';
+        $('videoCfgPrompt').value = c.default_prompt || '';
+        $('videoCfgApiKey').value = '';
+        $('videoCfgKeyState').textContent = c.api_key_set ? `当前已配置：${c.api_key_masked || '已设置'}（留空不修改）` : '尚未配置 API Key';
+      } catch (e) { /* 非管理员或未登录，忽略 */ }
+    }
+
+    async function adminSaveVideoConfig() {
+      const body = {
+        enable: $('videoCfgEnable').checked,
+        base_url: $('videoCfgBaseUrl').value.trim(),
+        model: $('videoCfgModel').value.trim(),
+        proxy: $('videoCfgProxy').value.trim(),
+        max_images: Number($('videoCfgMaxImages').value || 1),
+        timeout: Number($('videoCfgTimeout').value || 900),
+        duration: Number($('videoCfgDuration').value || 6),
+        aspect_ratio: $('videoCfgAspectRatio').value || 'auto',
+        prompt_enhance: $('videoCfgPromptEnhance').value || 'light',
+        default_prompt: $('videoCfgPrompt').value.trim(),
+      };
+      const key = $('videoCfgApiKey').value.trim();
+      if (key) body.api_key = key;
+      const data = await api('/api/admin/video-config', { method: 'POST', body: JSON.stringify(body) });
+      const c = data.config || {};
+      $('videoCfgResult').textContent = '已保存 · ' + (c.enable ? '已启用' : '已停用');
+      $('videoCfgApiKey').value = '';
+      $('videoCfgKeyState').textContent = c.api_key_set ? `当前已配置：${c.api_key_masked || '已设置'}（留空不修改）` : '尚未配置 API Key';
+      toast('API 视频配置已保存', 'success');
+    }
+
+    async function adminImportImage() {
+      const url = $('adminImportUrl').value.trim();
+      if (!url) {
+        toast('请输入图片 URL', 'error');
+        return;
+      }
+      await api('/api/admin/gallery/import', {
+        method: 'POST',
+        body: JSON.stringify({
+          image_url: url,
+          character: $('adminImportCharacter').value,
+          maker: $('adminImportMaker').value,
+          prompt: $('adminImportPrompt').value,
+          summary: $('adminImportSummary').value
+        })
+      });
+      toast('图片已导入收藏', 'success');
+      ['adminImportUrl','adminImportCharacter','adminImportMaker','adminImportPrompt','adminImportSummary'].forEach(id => $(id).value = '');
+      state.admin = null;
+      await loadAdmin(true);
+      await loadGallery();
+    }
+
+    function renderAdminAccess() {
+      const logs = (((state.admin || {}).access || {}).recent || []);
+      if (!logs.length) {
+        $('adminAccessLog').innerHTML = `<div class="empty-state"><p>暂无访问记录</p></div>`;
+        return;
+      }
+      $('adminAccessLog').innerHTML = logs.map(item => {
+        const time = item.at ? new Date(item.at).toLocaleString() : '';
+        return `<div class="access-log-item">
+          <b>${esc(item.action || '')}</b> · ${esc(item.username || '未登录')} · ${esc(item.ip || '')}
+          <br><span>${esc(time)} · ${item.ok ? '成功' : '失败'} ${item.detail ? '· ' + esc(item.detail) : ''}</span>
+        </div>`;
+      }).join('');
+    }
+
+    /* ═══════════════════════ LIGHTBOX ═══════════════════════ */
+    function openLightbox(index) {
+      const item = state.preview[index];
+      if (!item) return;
+      state.lbIndex = index;
+      const lb = $('lightbox');
+      const lbWrap = $('lbImageWrap');
+      const lbImg = $('lbImg');
+
+      lbWrap.classList.remove('image-loaded', 'image-error');
+      lbWrap.classList.add('image-loading');
+      lbImg.onload = () => markImageLoaded(lbImg);
+      lbImg.onerror = () => markImageError(lbImg);
+      lbImg.src = item.image_url;
+      lbImg.classList.remove('zoomed', 'loaded');
+      if (lbImg.complete && lbImg.naturalWidth > 0) markImageLoaded(lbImg);
+      $('lbCharacter').textContent = item.character || '未分类';
+
+      const gradient = nameGradient(item.maker);
+      const initial = nameInitial(item.maker);
+      $('lbMaker').innerHTML = `<span class="lightbox-maker-avatar" style="background:${gradient}">${esc(initial)}</span> ${esc(item.maker || '匿名制作人')}`;
+
+      const cleaned = cleanPrompt(item.prompt);
+      $('lbPrompt').textContent = cleaned || '暂无提示词记录';
+
+      const tags = extractTags(item.prompt);
+      if (tags.length > 1) {
+        $('lbTagsWrap').classList.remove('hidden');
+        $('lbTags').innerHTML = tags.map(t =>
+          `<span class="tag tag-pink">${esc(t)}</span>`
+        ).join('');
+      } else {
+        $('lbTagsWrap').classList.add('hidden');
+      }
+
+      $('lbCounter').textContent = `${index + 1} / ${state.preview.length}`;
+      lb.classList.add('open');
+      document.body.style.overflow = 'hidden';
+    }
+
+    function closeLightbox() {
+      $('lightbox').classList.remove('open');
+      document.body.style.overflow = '';
+      setTimeout(() => { $('lbImg').src = ''; }, 350);
+    }
+
+    function lbNav(dir) {
+      let idx = state.lbIndex + dir;
+      if (idx < 0) idx = state.preview.length - 1;
+      if (idx >= state.preview.length) idx = 0;
+      openLightbox(idx);
+    }
+
+    function toggleZoom() {
+      $('lbImg').classList.toggle('zoomed');
+    }
+
+    /* Keyboard & Touch */
+    document.addEventListener('keydown', e => {
+      if ($('lightbox').classList.contains('open')) {
+        if (e.key === 'Escape') closeLightbox();
+        if (e.key === 'ArrowLeft') lbNav(-1);
+        if (e.key === 'ArrowRight') lbNav(1);
+      }
+    });
+
+    /* Touch swipe for lightbox */
+    (function() {
+      let startX = 0, startY = 0, swiping = false;
+      const wrap = $('lbImageWrap');
+      if (!wrap) return;
+      wrap.addEventListener('touchstart', e => {
+        if ($('lbImg').classList.contains('zoomed')) return;
+        startX = e.touches[0].clientX;
+        startY = e.touches[0].clientY;
+        swiping = true;
+      }, { passive: true });
+      wrap.addEventListener('touchend', e => {
+        if (!swiping) return;
+        swiping = false;
+        const dx = e.changedTouches[0].clientX - startX;
+        const dy = e.changedTouches[0].clientY - startY;
+        if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) {
+          lbNav(dx < 0 ? 1 : -1);
+        }
+      }, { passive: true });
+    })();
+
+    /* ═══════════════════════ DRAWER ═══════════════════════ */
+    function openDrawer() { $('drawerOverlay').classList.add('open'); }
+    function closeDrawer() { $('drawerOverlay').classList.remove('open'); }
+
+    /* ═══════════════════════ SCROLL EFFECTS ═══════════════════════ */
+    function initScrollEffects() {
+      const topbar = $('topbar');
+      const backTop = $('backTop');
+      let lastY = 0;
+      const onScroll = () => {
+        const y = window.scrollY;
+        topbar.classList.toggle('scrolled', y > 20);
+        backTop.classList.toggle('visible', y > 400);
+        lastY = y;
+      };
+      window.addEventListener('scroll', onScroll, { passive: true });
+      onScroll();
+
+      // Reveal animations
+      const revealObs = new IntersectionObserver(entries => {
+        entries.forEach(e => {
+          if (e.isIntersecting) {
+            e.target.classList.add('revealed');
+            revealObs.unobserve(e.target);
+          }
+        });
+      }, { threshold: 0.1 });
+      document.querySelectorAll('[data-reveal]').forEach(el => revealObs.observe(el));
+
+      // Toolbar sticky detection
+      const toolbar = $('toolbarSection');
+      if (toolbar) {
+        const stickyObs = new IntersectionObserver(([e]) => {
+          toolbar.classList.toggle('stuck', e.intersectionRatio < 1);
+        }, { threshold: [1], rootMargin: `-${parseInt(getComputedStyle(document.documentElement).getPropertyValue('--topbar-h'))+1}px 0px 0px 0px` });
+        stickyObs.observe(toolbar);
+      }
+    }
+
+    /* ═══════════════════════ BUTTON RIPPLE EFFECT ═══════════════════════ */
+    document.addEventListener('mousemove', e => {
+      const btn = e.target.closest('.btn');
+      if (btn) {
+        const rect = btn.getBoundingClientRect();
+        btn.style.setProperty('--mx', ((e.clientX - rect.left) / rect.width * 100) + '%');
+        btn.style.setProperty('--my', ((e.clientY - rect.top) / rect.height * 100) + '%');
+      }
+    });
+
+    /* ═══════════════════════ RESPONSIVE CHECK ═══════════════════════ */
+    function checkResponsive() {
+      const mobile = window.innerWidth <= 860;
+      document.querySelectorAll('.mobile-filter-btn').forEach(b => {
+        b.style.display = mobile ? 'inline-flex' : 'none';
+      });
+    }
+    window.addEventListener('resize', checkResponsive);
+    checkResponsive();
+
+    /* ═══════════════════════ INIT ═══════════════════════ */
+    async function initApp() {
+      if (state.appStarted) return;
+      state.appStarted = true;
+      initScrollEffects();
+      try {
+        await loadGallery();
+      } catch (err) {
+        state.appStarted = false;
+        if (!isAuthError(err)) throw err;
+      }
+    }
+
+    async function hasValidSession() {
+      const metaUrl = endpoint('meta') || '/api/meta';
+      try {
+        const meta = await api(metaUrl);
+        if (meta) Object.assign(GALLERY_API, meta);
+        applyAuthState(meta.user || null);
+        return !!meta.authenticated;
+      } catch (_) {
+        applyAuthState(null);
+        return false;
+      }
+    }
+
+    function ageConfirmed() {
+      try {
+        const stamp = Number(localStorage.getItem(AGE_KEY) || 0);
+        return stamp && Date.now() - stamp < AGE_TTL;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    function unlockAgeGate() {
+      document.body.classList.remove('age-locked');
+      $('ageGate').classList.add('hidden');
+    }
+
+    function initAgeGate(onReady) {
+      const gate = $('ageGate');
+      const check = $('ageCheck');
+      const confirm = $('ageConfirmBtn');
+      const ready = () => {
+        unlockAgeGate();
+        if (typeof onReady === 'function') onReady();
+      };
+      if (ageConfirmed()) {
+        ready();
+        return;
+      }
+      gate.classList.remove('hidden');
+      document.body.classList.add('age-locked');
+      check.addEventListener('change', () => {
+        confirm.disabled = !check.checked;
+      });
+      confirm.addEventListener('click', () => {
+        if (!check.checked) return;
+        try { localStorage.setItem(AGE_KEY, String(Date.now())); } catch (_) {}
+        ready();
+      });
+    }
+
+    async function continueStartup() {
+      if (await hasValidSession()) {
+        showApp();
+        await initApp();
+      } else {
+        showLogin();
+      }
+    }
+
+    /* Startup auth gate */
+    (async () => {
+      initAuthBg('loginBg');
+      initAuthBg('registerBg');
+      initAuthParticles('loginParticles');
+      initAuthParticles('registerParticles');
+      // Update login time
+      const now = new Date();
+      const dateText = `${now.getFullYear()}/${String(now.getMonth()+1).padStart(2,'0')}/${String(now.getDate()).padStart(2,'0')}`;
+      $('loginTime').textContent = dateText;
+      $('registerTime').textContent = dateText;
+
+      initAgeGate(() => { continueStartup(); });
+    })();
+  </script>
+</body>
+</html>

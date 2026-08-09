@@ -1,0 +1,256 @@
+{
+  "1": {
+    "inputs": {
+      "ckpt_name": "waiIllustriousSDXL_v170.safetensors"
+    },
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": {
+      "title": "AstrBot Illustrious HQ Safe Flow v5.2.2 - Checkpoint"
+    }
+  },
+  "2": {
+    "inputs": {
+      "stop_at_clip_layer": -2,
+      "clip": [
+        "1",
+        1
+      ]
+    },
+    "class_type": "CLIPSetLastLayer",
+    "_meta": {
+      "title": "CLIP Skip -2"
+    }
+  },
+  "99": {
+    "inputs": {
+      "model": [
+        "1",
+        0
+      ],
+      "clip": [
+        "2",
+        0
+      ],
+      "lora_name": "anima-preview-3-masterpieces-v5.safetensors",
+      "strength_model": 0,
+      "strength_clip": 0
+    },
+    "class_type": "LoraLoader",
+    "_meta": {
+      "title": "Character LoRA 99"
+    }
+  },
+  "11": {
+    "inputs": {
+      "text": "masterpiece, best quality, high quality, anime illustration, full color, colored anime illustration, vibrant but stable colors, clean anime contours, sharp focus, stable anatomy, clean character shape, consistent character design, consistent character colors, balanced color palette, detailed eyes, clean eye shape, solo, single character",
+      "clip": [
+        "99",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Positive Prompt 11"
+    }
+  },
+  "12": {
+    "inputs": {
+      "text": "extra hands, extra hand, third hand, many hands, additional hands, random hands, stray hand, phantom hand, floating hand, floating hands, disembodied hand, detached hand, disconnected hand, hand from nowhere, hand not attached to body, extra arms, extra arm, third arm, random arm, floating arm, disembodied arm, detached arm, disconnected arm, arm from nowhere, arm not attached to body, random body part, jagged edges, edge artifacts, edge spikes, stray lines, stray strokes, stray black lines, broken outline, torn edges, spiky silhouette, floating fragments, duplicated outline, contour artifacts, halo artifacts, worst quality, low quality, bad anatomy, bad hands, bad fingers, malformed hands, poorly drawn hands, extra fingers, missing fingers, fused fingers, uneven fingers, long fingers, deformed hands, mutated hands, broken fingers, dislocated fingers, too many fingers, extra digits, fewer digits, wrong finger count, malformed wrists, broken wrists, malformed limbs, extra limbs, duplicate body, duplicate character, cloned face, cloned body, identical duplicate, repeated character, blurry face, blurry eyes, distorted eyes, bad eyes, low detail face, low detail eyes, tiny distorted face, tiny malformed hands, blurry hands, low detail hands, bad feet, bad toes, malformed toes, deformed toes, fused toes, melted toes, extra toes, missing toes, broken toes, wrong toe count, mutated feet, deformed feet, tiny malformed feet, blurry feet, low detail feet, low detail toes, monochrome, grayscale, greyscale, black and white, single color, single-color palette, colorless, desaturated, blue monochrome, lineart only, sketch, rough sketch, unfinished, wrong hair color, wrong fur color, changed hair color, inconsistent hair color, color shift, wrong colors, neon color cast, rainbow color cast, oversaturated, overexposed, chromatic aberration, cropped, watermark, text, signature, partial extra body, cropped extra body, body out of frame, disembodied limb, floating limb, detached limb, random limb, extra face, extra head, too many toes, too few toes, duplicated toes, webbed toes, extra toenails, aliasing, stair-step edges, zipper artifacts",
+      "clip": [
+        "99",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Negative Prompt 12"
+    }
+  },
+  "13": {
+    "inputs": {
+      "width": 1024,
+      "height": 1440,
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": {
+      "title": "Flow Base Latent"
+    }
+  },
+  "14": {
+    "inputs": {
+      "seed": 529027640026575,
+      "steps": 44,
+      "cfg": 6.0,
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "normal",
+      "denoise": 1.0,
+      "model": [
+        "99",
+        0
+      ],
+      "positive": [
+        "11",
+        0
+      ],
+      "negative": [
+        "12",
+        0
+      ],
+      "latent_image": [
+        "13",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "Base KSampler"
+    }
+  },
+  "15": {
+    "inputs": {
+      "upscale_method": "nearest-exact",
+      "scale_by": 1.0,
+      "samples": [
+        "14",
+        0
+      ]
+    },
+    "class_type": "LatentUpscaleBy",
+    "_meta": {
+      "title": "Latent Polish 1.00"
+    }
+  },
+  "16": {
+    "inputs": {
+      "seed": 529027640026576,
+      "steps": 18,
+      "cfg": 5.8,
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "normal",
+      "denoise": 0.16,
+      "model": [
+        "99",
+        0
+      ],
+      "positive": [
+        "11",
+        0
+      ],
+      "negative": [
+        "12",
+        0
+      ],
+      "latent_image": [
+        "15",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "Flow Refine KSampler"
+    }
+  },
+  "17": {
+    "inputs": {
+      "samples": [
+        "16",
+        0
+      ],
+      "vae": [
+        "1",
+        2
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "20": {
+    "inputs": {
+      "text": "high quality anime image, clean anime contours, crisp linework, refined shading, subtle material texture, stable colors, balanced color palette, sharp focus, preserve original image structure",
+      "clip": [
+        "2",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "HQ Tile-Safe Positive"
+    }
+  },
+  "21": {
+    "inputs": {
+      "text": "extra hands, extra hand, third hand, many hands, additional hands, random hands, stray hand, phantom hand, floating hand, floating hands, disembodied hand, detached hand, disconnected hand, hand from nowhere, hand not attached to body, extra arms, extra arm, third arm, random arm, floating arm, disembodied arm, detached arm, disconnected arm, arm from nowhere, arm not attached to body, random body part, new object, extra object, extra person, background person, duplicate person, partial extra body, cropped extra body, extra head, extra face, extra finger, extra fingers, extra digits, wrong finger count, malformed fingers, long fingers, fused fingers, extra leg, extra foot, extra toes, wrong toe count, disembodied limb, detached limb, floating limb, random limb, broken anatomy, distorted anatomy, hallucinated details, face in texture, person in texture, jagged edges, broken outline, zipper artifacts, chromatic aberration, color cast, oversharpened, noisy skin, skin spots",
+      "clip": [
+        "2",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "HQ Tile-Safe Negative"
+    }
+  },
+  "19": {
+    "inputs": {
+      "upscaled_image": [
+        "17",
+        0
+      ],
+      "model": [
+        "1",
+        0
+      ],
+      "positive": [
+        "20",
+        0
+      ],
+      "negative": [
+        "21",
+        0
+      ],
+      "vae": [
+        "1",
+        2
+      ],
+      "seed": 529027640026577,
+      "steps": 8,
+      "cfg": 3.0,
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "normal",
+      "denoise": 0.055,
+      "mode_type": "Linear",
+      "tile_width": 1024,
+      "tile_height": 1024,
+      "mask_blur": 24,
+      "tile_padding": 128,
+      "seam_fix_mode": "None",
+      "seam_fix_denoise": 0.0,
+      "seam_fix_width": 64,
+      "seam_fix_mask_blur": 16,
+      "seam_fix_padding": 32,
+      "force_uniform_tiles": true,
+      "tiled_decode": false,
+      "batch_size": 1
+    },
+    "class_type": "UltimateSDUpscaleNoUpscale",
+    "_meta": {
+      "title": "HQ Safe Tile Polish"
+    }
+  },
+  "66": {
+    "inputs": {
+      "filename_prefix": "AstrBot_Illustrious_HQ_Safe",
+      "images": [
+        "19",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Output 66"
+    }
+  }
+}

@@ -1,0 +1,183 @@
+{
+  "1": {
+    "inputs": {
+      "ckpt_name": "waiIllustriousSDXL_v170.safetensors"
+    },
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": {
+      "title": "AstrBot Illustrious Txt2Img Flow v5.8.0 - Checkpoint"
+    }
+  },
+  "2": {
+    "inputs": {
+      "stop_at_clip_layer": -2,
+      "clip": [
+        "1",
+        1
+      ]
+    },
+    "class_type": "CLIPSetLastLayer",
+    "_meta": {
+      "title": "CLIP Skip -2"
+    }
+  },
+  "99": {
+    "inputs": {
+      "model": [
+        "1",
+        0
+      ],
+      "clip": [
+        "2",
+        0
+      ],
+      "lora_name": "anima-preview-3-masterpieces-v5.safetensors",
+      "strength_model": 0,
+      "strength_clip": 0
+    },
+    "class_type": "LoraLoader",
+    "_meta": {
+      "title": "Character LoRA 99"
+    }
+  },
+  "11": {
+    "inputs": {
+      "text": "masterpiece, best quality, high quality, anime illustration, detailed eyes, clean eye shape",
+      "clip": [
+        "99",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Positive Prompt 11"
+    }
+  },
+  "12": {
+    "inputs": {
+      "text": "worst quality, low quality, bad anatomy, bad hands, bad feet, extra fingers, missing fingers, extra limbs, distorted face, blurry, watermark, text, signature",
+      "clip": [
+        "99",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Negative Prompt 12"
+    }
+  },
+  "13": {
+    "inputs": {
+      "width": 896,
+      "height": 1344,
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": {
+      "title": "Flow Base Latent"
+    }
+  },
+  "14": {
+    "inputs": {
+      "seed": 529027640026575,
+      "steps": 60,
+      "cfg": 5.15,
+      "sampler_name": "euler_ancestral",
+      "scheduler": "normal",
+      "denoise": 1.0,
+      "model": [
+        "99",
+        0
+      ],
+      "positive": [
+        "11",
+        0
+      ],
+      "negative": [
+        "12",
+        0
+      ],
+      "latent_image": [
+        "13",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "Base Pass KSampler"
+    }
+  },
+  "15": {
+    "inputs": {
+      "upscale_method": "nearest-exact",
+      "scale_by": 1.5,
+      "samples": [
+        "14",
+        0
+      ]
+    },
+    "class_type": "LatentUpscaleBy",
+    "_meta": {
+      "title": "Hi-Res Latent Upscale"
+    }
+  },
+  "16": {
+    "inputs": {
+      "seed": 529027640026575,
+      "steps": 24,
+      "cfg": 5.0,
+      "sampler_name": "euler_ancestral",
+      "scheduler": "normal",
+      "denoise": 0.45,
+      "model": [
+        "99",
+        0
+      ],
+      "positive": [
+        "11",
+        0
+      ],
+      "negative": [
+        "12",
+        0
+      ],
+      "latent_image": [
+        "15",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "Hi-Res Refine KSampler"
+    }
+  },
+  "17": {
+    "inputs": {
+      "samples": [
+        "16",
+        0
+      ],
+      "vae": [
+        "1",
+        2
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "66": {
+    "inputs": {
+      "filename_prefix": "AstrBot_Illustrious_Flow",
+      "images": [
+        "17",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Output 66"
+    }
+  }
+}

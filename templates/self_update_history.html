@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=1180, initial-scale=1">
+  <style>
+    :root {
+      --paper: #f7f3ea;
+      --panel: #fffdf8;
+      --ink: #20242c;
+      --muted: #68717f;
+      --line: #d7cfc1;
+      --ok: #1d8f6f;
+      --ok-soft: #dff2ec;
+      --mid: #586174;
+      --mid-soft: #e9edf3;
+      --bad: #b83d4a;
+      --bad-soft: #f6e1e4;
+      --gold: #c68a2d;
+      --blue: #316ebd;
+      --shadow: rgba(32, 36, 44, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+      overflow-wrap: break-word;
+      word-break: break-word;
+    }
+
+    html {
+      min-height: 100%;
+      background: var(--paper);
+    }
+
+    body {
+      width: 1180px;
+      min-height: 100vh;
+      margin: 0 auto;
+      padding: 46px 54px 54px;
+      color: var(--ink);
+      font-family: "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", "Segoe UI", Arial, sans-serif;
+      background:
+        linear-gradient(90deg, rgba(32,36,44,0.055) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(32,36,44,0.045) 1px, transparent 1px),
+        var(--paper);
+      background-size: 28px 28px;
+    }
+
+    .shell {
+      display: grid;
+      gap: 28px;
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: end;
+      gap: 28px;
+      padding-bottom: 22px;
+      border-bottom: 3px solid var(--ink);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 46px;
+      line-height: 1.12;
+      letter-spacing: 0;
+      font-weight: 900;
+    }
+
+    .sub {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 18px;
+      line-height: 1.45;
+      font-weight: 700;
+    }
+
+    .stamp {
+      min-width: 220px;
+      padding: 12px 16px;
+      border: 2px solid var(--ink);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: 5px 5px 0 var(--shadow);
+      font-size: 17px;
+      font-weight: 800;
+      text-align: center;
+      white-space: nowrap;
+    }
+
+    .records {
+      position: relative;
+      display: grid;
+      gap: 18px;
+      padding-left: 26px;
+    }
+
+    .records::before {
+      content: "";
+      position: absolute;
+      left: 6px;
+      top: 8px;
+      bottom: 8px;
+      width: 3px;
+      background: var(--line);
+      border-radius: 3px;
+    }
+
+    .card {
+      position: relative;
+      display: grid;
+      grid-template-columns: 190px minmax(0, 1fr) auto;
+      gap: 22px;
+      align-items: start;
+      padding: 22px 24px;
+      border: 2px solid var(--line);
+      border-left: 8px solid var(--mid);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: 0 8px 22px var(--shadow);
+    }
+
+    .card::before {
+      content: "";
+      position: absolute;
+      left: -35px;
+      top: 28px;
+      width: 17px;
+      height: 17px;
+      border: 3px solid var(--panel);
+      border-radius: 50%;
+      background: var(--mid);
+      box-shadow: 0 0 0 2px var(--line);
+    }
+
+    .card.updated {
+      border-left-color: var(--ok);
+    }
+
+    .card.updated::before {
+      background: var(--ok);
+    }
+
+    .card.noop {
+      border-left-color: var(--mid);
+    }
+
+    .card.failed {
+      border-left-color: var(--bad);
+    }
+
+    .card.failed::before {
+      background: var(--bad);
+    }
+
+    .time {
+      font-size: 20px;
+      line-height: 1.35;
+      font-weight: 900;
+      font-family: "Cascadia Mono", "Consolas", "Courier New", monospace;
+    }
+
+    .meta {
+      min-width: 0;
+      display: grid;
+      gap: 10px;
+    }
+
+    .summary {
+      font-size: 22px;
+      line-height: 1.38;
+      font-weight: 900;
+    }
+
+    .version {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      color: var(--muted);
+      font-size: 16px;
+      font-weight: 750;
+    }
+
+    .version b {
+      color: var(--ink);
+      font-weight: 900;
+    }
+
+    .chip {
+      min-width: 84px;
+      padding: 8px 14px;
+      border: 2px solid currentColor;
+      border-radius: 8px;
+      color: var(--mid);
+      background: var(--mid-soft);
+      font-size: 15px;
+      font-weight: 900;
+      text-align: center;
+      white-space: nowrap;
+    }
+
+    .updated .chip {
+      color: var(--ok);
+      background: var(--ok-soft);
+    }
+
+    .failed .chip {
+      color: var(--bad);
+      background: var(--bad-soft);
+    }
+
+    .notes-title {
+      margin-top: 6px;
+      color: var(--blue);
+      font-size: 16px;
+      font-weight: 900;
+    }
+
+    .notes {
+      display: grid;
+      gap: 8px;
+      margin-top: 2px;
+      color: #303744;
+      font-size: 17px;
+      line-height: 1.58;
+      font-weight: 680;
+    }
+
+    .note {
+      position: relative;
+      padding-left: 18px;
+    }
+
+    .note::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0.72em;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--gold);
+    }
+
+    .empty {
+      padding: 52px 44px;
+      border: 2px dashed var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: 0 8px 22px var(--shadow);
+      text-align: center;
+    }
+
+    .empty-title {
+      margin-bottom: 10px;
+      font-size: 28px;
+      line-height: 1.25;
+      font-weight: 900;
+    }
+
+    .empty div:last-child {
+      color: var(--muted);
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    footer {
+      height: 3px;
+      background: var(--ink);
+      border-radius: 3px;
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div>
+        <h1>{{ title }}</h1>
+        <div class="sub">{{ subtitle }}</div>
+      </div>
+      <div class="stamp">{{ generated_at }}</div>
+    </header>
+
+    {% if items %}
+    <section class="records">
+      {% for item in items %}
+      <article class="card {{ item.status }}">
+        <div class="time">{{ item.time }}</div>
+        <div class="meta">
+          <div class="summary">{{ item.summary }}</div>
+          <div class="version"><b>版本</b><span>{{ item.version }}</span></div>
+          {% if item.notes %}
+          <div class="notes-title">{{ item.note_title }}</div>
+          <div class="notes">
+            {% for note in item.notes %}
+            <div class="note">{{ note }}</div>
+            {% endfor %}
+          </div>
+          {% endif %}
+        </div>
+        <div class="chip">{{ item.label }}</div>
+      </article>
+      {% endfor %}
+    </section>
+    {% else %}
+    <section class="empty">
+      <div class="empty-title">{{ empty_title }}</div>
+      <div>{{ empty_hint }}</div>
+    </section>
+    {% endif %}
+
+    <footer></footer>
+  </main>
+</body>
+</html>

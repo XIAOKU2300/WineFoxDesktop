@@ -1,0 +1,784 @@
+{
+  "version": "5.2.1",
+  "enabled_by": "WebUI zayu_mode_settings.enable",
+  "usage": "常用杂鱼文案表。开关关闭时使用插件原文；开关开启时仅替换 entries 中这些常用提示；replacement 支持数组，会随机挑一句。",
+  "messages": {},
+  "contains": [],
+  "regex": [],
+  "entries": [
+    {
+      "id": "paint_busy_notice",
+      "mode": "exact",
+      "original": "酒狐正在拼命画图中！",
+      "replacement": [
+        "在画啦在画啦，催什么催，赶着投胎啊？(｡•ˇ‸ˇ•｡)",
+        "知道啦，已经开始画了，别再烦我了！",
+        "生成中~ 安静地等着，不许吵！"
+      ]
+    },
+    {
+      "id": "generation_queue_ready",
+      "mode": "id",
+      "original": "好，{kind}马上开始。画好我直接发出来。",
+      "replacement": [
+        "好，马上开画，等我把图端上来。",
+        "收到，已经开始动笔了，画好直接发。",
+        "行，马上画，成品出来我一并发你。"
+      ]
+    },
+    {
+      "id": "generation_queue_waiting",
+      "mode": "id",
+      "original": "好，{kind}已经排上啦，前面还有 {ahead} 个，当前第 {position} 位，估计约 {wait}。画好我直接发出来。",
+      "replacement": [
+        "排上了，前面还有 {ahead} 个，等会儿画好我直接发。",
+        "收到，当前第 {position} 位，别急，轮到就画。",
+        "已经进队列了，约 {wait}，画完直接甩出来。"
+      ]
+    },
+    {
+      "id": "media_timeout_notice",
+      "mode": "contains",
+      "original": "图片已生成，但富媒体消息发送可能超时。",
+      "replacement": [
+        "图画好了哦~ 但是好像发不出去欸，是你网速太差了吗？嘻嘻~",
+        "图是出来了，不过发送超时了，真麻烦~",
+        "图片生成啦，但本小姐不想发，诶，就是玩儿~"
+      ]
+    },
+    {
+      "id": "media_fallback_notice",
+      "mode": "contains",
+      "original": "富媒体消息发送失败，已改发文字结果",
+      "replacement": [
+        "图片发不出去，真麻烦~ 只能给你看字了，自己想象吧！( ´∀｀)σ",
+        "发送失败了啦，给你文字，自己脑补画面吧，笨蛋。",
+        "图片消息发不出去，给你个路径自己看去，哼！"
+      ]
+    },
+    {
+      "id": "generation_failed",
+      "mode": "contains",
+      "original": "生成失败，请稍后再试",
+      "replacement": [
+        "失败了哦~ 略略略，是不是你给的词太烂了？(￣▽￣)~*",
+        "画不出来，哼！都怪你！",
+        "出图失败了啦，换个像样点的提示词再来吧，笨~蛋！"
+      ]
+    },
+    {
+      "id": "comfyui_connection_failed",
+      "mode": "contains",
+      "original": "ComfyUI 连接失败，请检查服务是否启动",
+      "replacement": [
+        "喂，你家那破电脑开机了吗？连不上还想使唤我？(¬_¬)",
+        "哈？连不上？不会吧不会吧，不会真的有人连电脑都不会开吧？",
+        "主机没开哦~ 笨蛋，这种事还要本小姐提醒你吗？"
+      ]
+    },
+    {
+      "id": "comfyui_service_missing",
+      "mode": "contains",
+      "original": "ComfyUI 服务未连接，请检查配置",
+      "replacement": [
+        "喂，你家那破电脑开机了吗？连不上还想使唤我？(¬_¬)",
+        "哈？连不上？不会吧不会吧，不会真的有人连电脑都不会开吧？",
+        "主机没开哦~ 笨蛋，这种事还要本小姐提醒你吗？"
+      ]
+    },
+    {
+      "id": "comfyui_busy",
+      "mode": "contains",
+      "original": "ComfyUI 正在忙，请稍后再试",
+      "replacement": [
+        "我很忙的！没空理你，自己排队去！( `д´)",
+        "ComfyUI正忙着呢，你等等会死啊？",
+        "忙着呢，别催！"
+      ]
+    },
+    {
+      "id": "paint_cancelled",
+      "mode": "contains",
+      "original": "绘图任务已取消",
+      "replacement": "画图被我取消咯，诶嘿~ ★"
+    },
+    {
+      "id": "paint_already_running",
+      "mode": "contains",
+      "original": "当前已有绘图任务进行中，请稍后再试",
+      "replacement": [
+        "急什么，前面还有人排队呢，给我老实等着！( `д´)",
+        "上一张还没画完呢，你就不能有点耐心吗？",
+        "队列里有别人的任务啦，你往后稍稍！"
+      ]
+    },
+    {
+      "id": "group_disabled",
+      "mode": "contains",
+      "original": "当前群未开启绘图功能",
+      "replacement": [
+        "这个破群也想让我画画？谁给你的勇气啊？(•_•)?",
+        "本小姐拒绝在这个群里画画，哼！",
+        "这个群没开绘图功能，你是不是傻？"
+      ]
+    },
+    {
+      "id": "whitelist_only",
+      "mode": "contains",
+      "original": "该功能仅限白名单群使用",
+      "replacement": "只有白名单群能用哦，杂鱼~"
+    },
+    {
+      "id": "admin_only",
+      "mode": "contains",
+      "original": "权限不足，仅管理员",
+      "replacement": [
+        "杂鱼退散！这是管理员大人专属的，懂？( `_´ )",
+        "就凭你也想用这个？算了吧你！",
+        "权限不够哦~ 只有管理员才能命令我！"
+      ]
+    },
+    {
+      "id": "super_admin_only",
+      "mode": "contains",
+      "original": "权限不足，仅超级管理员",
+      "replacement": [
+        "哇，你好大的胆子，这可是只有最最最厉害的大人物才能碰的！(╬▔皿▔)╯",
+        "你的权限也太低了吧？这可是超级管理员才能用的！",
+        "想用这个？等你当上超级管理员再说吧，杂鱼~"
+      ]
+    },
+    {
+      "id": "plugin_locked",
+      "mode": "contains",
+      "original": "插件已锁定",
+      "replacement": [
+        "现在不想画，锁上咯~ 就算你求我也没用！( ˘•ω•˘ )",
+        "全局锁定了，你叫破喉咙也没用~",
+        "本小姐现在心情不好，不画了！"
+      ]
+    },
+    {
+      "id": "no_permission",
+      "mode": "contains",
+      "original": "你没有权限执行这个命令",
+      "replacement": "没权限的杂鱼，退下退下~"
+    },
+    {
+      "id": "too_fast",
+      "mode": "contains",
+      "original": "操作太快啦，请稍后再试",
+      "replacement": "手速那么快干嘛，等等啦~"
+    },
+    {
+      "id": "cooldown_seconds",
+      "mode": "regex",
+      "original": "绘图冷却中，请等待\\s*(\\d+)\\s*秒",
+      "replacement": [
+        "才刚画完欸！休息{seconds}秒啦，你当我是生产队的驴啊？",
+        "等{seconds}秒！催什么催，心急吃不了热豆腐~",
+        "太快了啦~ {seconds}秒后再来找我玩，哼~"
+      ]
+    },
+    {
+      "id": "daily_limit",
+      "mode": "contains",
+      "original": "今日绘图次数已用完",
+      "replacement": [
+        "今天累了，不想画了。哼，你已经把我今天的耐心都用完啦！(￣^￣)",
+        "今天的份画完啦，明天请早吧，看我心情~",
+        "没次数了就是没次数了，你再怎么求我也没用！"
+      ]
+    },
+    {
+      "id": "prompt_too_long",
+      "mode": "contains",
+      "original": "Prompt 太长啦，请缩短一点",
+      "replacement": [
+        "写这么长给谁看啊？你是写小说还是画画？给我删掉点！(＞_＜)",
+        "字太多了啦，眼睛都看花了！短一点！",
+        "这么长的提示词，谁看得完啊，笨蛋！"
+      ]
+    },
+    {
+      "id": "prompt_required",
+      "mode": "contains",
+      "original": "请输入绘图提示词",
+      "replacement": [
+        "喂！你想让我画什么倒是说啊！哑巴了？(•`_´•)",
+        "不给提示词，你是想让本小姐画空气吗？",
+        "先说画什么！连话都说不明白吗？"
+      ]
+    },
+    {
+      "id": "sensitive_prompt_blocked",
+      "mode": "contains",
+      "original": "提示词包含敏感内容，已拒绝生成",
+      "replacement": [
+        "哎呀，这种不健全的东西可不兴画哦~ 你脑子里都在想什么呀？(¬‿¬)",
+        "不许画色色的东西！你这个变态！",
+        "已拦截~ 哼，想让我画这种东西，你还早一百年呢！"
+      ]
+    },
+    {
+      "id": "image_audit_blocked",
+      "mode": "contains",
+      "original": "图片审核未通过，已拦截发送",
+      "replacement": [
+        "画是画出来了，但是太危险了，不给你看~ 哼哼 (≖ᴗ≖)✧",
+        "风险太高啦，才不发给你呢，略略略~",
+        "审核没过哦~ 你就别想看了。"
+      ]
+    },
+    {
+      "id": "image_audit_error",
+      "mode": "contains",
+      "original": "图片审核服务异常，已按安全策略拦截",
+      "replacement": "审核君摸鱼了，为了安全还是拦下吧~"
+    },
+    {
+      "id": "generated_risk_blocked",
+      "mode": "contains",
+      "original": "生成结果风险过高，未发送图片",
+      "replacement": "太危险了不给发，哼~"
+    },
+    {
+      "id": "vip_prompt",
+      "mode": "contains",
+      "original": "请联系群主 星河绘梦（QQ1982975523）支付10r进入特殊VIP群，无限制",
+      "replacement": "想无限画？去找星河绘梦交10块保护费进VIP群啦~（QQ1982975523）"
+    },
+    {
+      "id": "image_required",
+      "mode": "contains",
+      "original": "请引用或附带一张图片",
+      "replacement": [
+        "图呢？连张图都不给我，你想让我凭空想象啊？(°_°)",
+        "喂，先把图发过来啊！",
+        "没有图怎么画？你不会连这个都不知道吧？"
+      ]
+    },
+    {
+      "id": "usable_image_missing",
+      "mode": "contains",
+      "original": "未找到可用图片，请重新发送",
+      "replacement": "没找到能用的图，重新丢一张过来~"
+    },
+    {
+      "id": "image_download_failed",
+      "mode": "contains",
+      "original": "图片下载失败，请稍后重试",
+      "replacement": [
+        "你发的什么破图，都下载不下来！换一张啦！",
+        "图片拉不下来！网络问题还是图片问题？肯定是你的问题！",
+        "下载失败了哦，你行不行啊？"
+      ]
+    },
+    {
+      "id": "image_process_failed",
+      "mode": "contains",
+      "original": "图片处理失败，请换一张试试",
+      "replacement": "这图处理不了，换一张试试嘛~"
+    },
+    {
+      "id": "video_image_required",
+      "mode": "contains",
+      "original": "请引用或附带一张图，格式：酒狐来点视频 动作/镜头描述",
+      "replacement": [
+        "喂，想做视频就给我一张图啊，格式是“酒狐来点视频 动作描述”，连这都记不住吗？",
+        "没图做什么视频？用你的脸吗？",
+        "先给图！不然不给你做！"
+      ]
+    },
+    {
+      "id": "video_generating",
+      "mode": "contains",
+      "original": "视频生成中，请稍等",
+      "replacement": [
+        "给你做视频啦，催什么催，有点耐心好不好~ (｡•ˇ‸ˇ•｡)",
+        "正在生成，安静点！",
+        "视频任务开始了，吵死了。"
+      ]
+    },
+    {
+      "id": "video_failed",
+      "mode": "contains",
+      "original": "视频生成失败，请稍后再试",
+      "replacement": [
+        "视频做不出来欸~ 略略略，是不是你的要求太奇怪了？",
+        "视频生成失败了，哼！",
+        "失败了，都怪你！"
+      ]
+    },
+    {
+      "id": "video_zipped",
+      "mode": "contains",
+      "original": "视频已生成，已打包发送",
+      "replacement": [
+        "视频太大了啦，帮你打包好了，自己解压去吧~",
+        "太大了，给你压缩了，自己搞定。",
+        "视频完成了，压缩包给你，别再烦我了。"
+      ]
+    },
+    {
+      "id": "video_zip_fallback",
+      "mode": "contains",
+      "original": "视频发送失败，已改发压缩包",
+      "replacement": "视频太大发不出，自己下压缩包去~"
+    },
+    {
+      "id": "favorite_saved",
+      "mode": "exact",
+      "original": "已收藏",
+      "replacement": [
+        "哼，看你这么可怜，就帮你收藏一下吧。不……才不是为了你呢！(〃＞皿＜)",
+        "好啦好啦，给你收藏好了，真是个麻烦的家伙。",
+        "已收藏。这下你满意了吧？"
+      ]
+    },
+    {
+      "id": "favorite_image_missing",
+      "mode": "contains",
+      "original": "收藏失败，未找到引用图片",
+      "replacement": [
+        "笨蛋，图都没有，你让我收藏空气吗？(¬_¬)",
+        "找不到你要收藏的图啦，你是不是眼瞎？",
+        "引用里没图，收藏个鬼啊！"
+      ]
+    },
+    {
+      "id": "favorite_super_admin_only",
+      "mode": "contains",
+      "original": "收藏失败，仅超级管理员可用",
+      "replacement": [
+        "就凭你也想收藏？这是管理员才有的待遇啦~",
+        "权限不够哦，杂鱼还想用收藏功能？",
+        "哼，只有管理员才能收藏，你不行！"
+      ]
+    },
+    {
+      "id": "favorite_save_failed",
+      "mode": "contains",
+      "original": "收藏失败，图片保存失败",
+      "replacement": "图片存不下来，收藏失败了呜…"
+    },
+    {
+      "id": "favorite_owner_private_message",
+      "mode": "regex",
+      "original": "收藏人：(.+?)\\s*/\\s*(\\d+)\\n来源：(.+?)\\s+(.+)",
+      "replacement": "收藏人：\\1/\\2 来源：\\3\\4"
+    },
+    {
+      "id": "lora_missing",
+      "mode": "contains",
+      "original": "未匹配到角色 LoRA",
+      "replacement": [
+        "哈？没找到啦，你是不是记错名字了呀，笨蛋~",
+        "角色 LoRA 不存在哦，你再好好找找？",
+        "没匹配到 LoRA，真没用。"
+      ]
+    },
+    {
+      "id": "lora_auto_matched",
+      "mode": "regex",
+      "original": "自动匹配 LoRA 角色：\\s*(.+)",
+      "replacement": "帮你自动选了这个角色：\\1 还不谢谢我~"
+    },
+    {
+      "id": "lora_list_refreshed",
+      "mode": "contains",
+      "original": "LoRA 列表刷新完成",
+      "replacement": "LoRA列表刷好啦，快看快看~"
+    },
+    {
+      "id": "profile_missing",
+      "mode": "contains",
+      "original": "角色档案不存在",
+      "replacement": "根本没这个角色的档案嘛~"
+    },
+    {
+      "id": "profile_switched",
+      "mode": "contains",
+      "original": "角色已切换",
+      "replacement": "角色换好啦~"
+    },
+    {
+      "id": "style_switched",
+      "mode": "contains",
+      "original": "画风已切换",
+      "replacement": "画风切了哟~"
+    },
+    {
+      "id": "model_switched",
+      "mode": "contains",
+      "original": "模型已切换",
+      "replacement": "模型换掉了~"
+    },
+    {
+      "id": "config_saved",
+      "mode": "contains",
+      "original": "配置已保存",
+      "replacement": [
+        "好啦好啦，帮你存好了，真是个麻烦的家伙。",
+        "保存好了，这下行了吧？",
+        "配置写入成功，退下吧。"
+      ]
+    },
+    {
+      "id": "plugin_reloaded",
+      "mode": "contains",
+      "original": "插件已重载",
+      "replacement": [
+        "重载好啦~ 这回可别再出问题了！",
+        "重载完成，哼。",
+        "给你刷新了，真是的。"
+      ]
+    },
+    {
+      "id": "workflow_refreshed",
+      "mode": "contains",
+      "original": "工作流列表已刷新",
+      "replacement": [
+        "工作流刷新好啦，真是的，什么都要我来。",
+        "更新完了，自己看。",
+        "扫描完成，哼。"
+      ]
+    },
+    {
+      "id": "update_done",
+      "mode": "contains",
+      "original": "更新完成，请重载插件",
+      "replacement": "更完啦，记得重载插件哦笨蛋~"
+    },
+    {
+      "id": "bad_command_format",
+      "mode": "contains",
+      "original": "命令格式错误，请检查参数",
+      "replacement": [
+        "命令都敲不对，你行不行啊？( ´_ゝ｀)",
+        "参数错了！你是笨蛋吗？",
+        "用法都写错了，自己去学！"
+      ]
+    },
+    {
+      "id": "comfyui_offline_short",
+      "mode": "contains",
+      "original": "ComfyUI 主机好像没开",
+      "replacement": [
+        "喂，你家那破电脑开机了吗？连不上还想使唤我？(¬_¬)",
+        "哈？连不上？不会吧不会吧，不会真的有人连电脑都不会开吧？",
+        "主机没开哦~ 笨蛋，这种事还要本小姐提醒你吗？"
+      ]
+    },
+    {
+      "id": "comfyui_connect_timeout_short",
+      "mode": "contains",
+      "original": "连接 ComfyUI 超时",
+      "replacement": [
+        "超时啦，笨蛋~ 人家可没那么多耐心等你哦。( ´_ゝ｀)",
+        "哼，连接超时了啦~ 是不是你家网速太慢了呀？",
+        "等半天了还没反应，你家主机是睡着了吗？真没用~"
+      ]
+    },
+    {
+      "id": "comfyui_validation_failed",
+      "mode": "contains",
+      "original": "工作流参数校验失败",
+      "replacement": [
+        "你这什么破工作流啊？根本用不了嘛！(ﾉ｀⊿´)ﾉ",
+        "工作流炸了哦~ 略略略，是不是你脑子不好使，节点都配错了？",
+        "哼，本小姐不认识你给的这些参数，自己检查去！"
+      ]
+    },
+    {
+      "id": "generation_failed_short",
+      "mode": "contains",
+      "original": "生成失败",
+      "replacement": [
+        "失败了哦~ 略略略，是不是你给的词太烂了？(￣▽￣)~*",
+        "画不出来，哼！都怪你！",
+        "出图失败了啦，换个像样点的提示词再来吧，笨~蛋！"
+      ]
+    },
+    {
+      "id": "favorite_permission_denied",
+      "mode": "exact",
+      "original": "",
+      "replacement": [
+        "就凭你也想收藏？这是管理员才有的待遇啦~",
+        "权限不够哦，杂鱼还想用收藏功能？",
+        "哼，只有管理员才能收藏，你不行！"
+      ]
+    },
+    {
+      "id": "favorite_owner_notify",
+      "mode": "exact",
+      "original": "",
+      "replacement": [
+        "喂，{name} ({qq}) 这家伙，在 {source_type}{source_id} 偷偷收藏了你的图哦~",
+        "{name}/{qq} 收藏了 {source_type}{source_id} 的图，嘻嘻，我来告状了~",
+        "抓到一只正在收藏的 {name}/{qq}！来源：{source_type}{source_id}"
+      ]
+    },
+    {
+      "id": "lora_not_found",
+      "mode": "exact",
+      "original": "",
+      "replacement": [
+        "哈？没找到啦，你是不是记错名字了呀，笨蛋~",
+        "角色 LoRA 不存在哦，你再好好找找？",
+        "没匹配到 LoRA，真没用。"
+      ]
+    },
+    {
+      "id": "lora_auto_selected",
+      "mode": "exact",
+      "original": "",
+      "replacement": [
+        "找不到？真拿你没办法~ 就帮你选这个 {name} 好了，快感谢我吧！(￣▽￣)",
+        "自动帮你选了 {name} 哦，不用太感激我啦~",
+        "就用 {name} 吧，别挑三拣四的了！"
+      ]
+    },
+    {
+      "id": "lora_refresh_done",
+      "mode": "exact",
+      "original": "",
+      "replacement": [
+        "刷新好啦，快看看有没有你想要的~ 真是的，还要我帮你刷新。",
+        "LoRA 列表更新完了，自己看吧。",
+        "哼，给你刷新好了。"
+      ]
+    },
+    {
+      "id": "lora_import_start",
+      "mode": "exact",
+      "original": "",
+      "replacement": [
+        "开始给你下 {name} 啦，感不感动？(¬‿¬)",
+        "正在导入 {name}，你就乖乖等着吧。",
+        "下载任务开始了哦：{name}，别急。"
+      ]
+    },
+    {
+      "id": "lora_import_failed",
+      "mode": "exact",
+      "original": "",
+      "replacement": [
+        "导入失败了~ 这个LoRA好像不太行哦，真没用。",
+        "下载失败了啦，什么破文件。",
+        "没导入成功，略略略~"
+      ]
+    },
+    {
+      "id": "lora_not_loaded",
+      "mode": "exact",
+      "original": "",
+      "replacement": [
+        "下载是下载了，但人家还没准备好啦~ 你去催催ComfyUI那个懒鬼。",
+        "文件在本地，但是ComfyUI不认，关我什么事？╮(╯_╰)╭",
+        "你得自己去刷新或者重启ComfyUI，别来烦我！"
+      ]
+    },
+    {
+      "id": "profile_not_found",
+      "mode": "exact",
+      "original": "",
+      "replacement": [
+        "找不到这个角色档案啦，是不是你记错了呀？真是个小迷糊~",
+        "角色档案不存在，哼！",
+        "你要找的这个角色，查无此人。"
+      ]
+    },
+    {
+      "id": "profile_deleted",
+      "mode": "exact",
+      "original": "",
+      "replacement": [
+        "删掉了哦~ 这下清爽多了吧？( ´ ▽ ` )ﾉ",
+        "已删除~ 拜拜了您嘞！",
+        "角色数据清理完成，别再问了。"
+      ]
+    },
+    {
+      "id": "workflow_refresh_done",
+      "mode": "exact",
+      "original": "",
+      "replacement": [
+        "工作流刷新好啦，真是的，什么都要我来。",
+        "更新完了，自己看。",
+        "扫描完成，哼。"
+      ]
+    },
+    {
+      "id": "workflow_switch_done",
+      "mode": "exact",
+      "original": "",
+      "replacement": [
+        "给你换成 {workflow} 啦，快谢谢我~",
+        "现在是 {workflow} 了，知道了吗？",
+        "已切换，就用这个 {workflow} 了。"
+      ]
+    },
+    {
+      "id": "workflow_import_failed",
+      "mode": "exact",
+      "original": "",
+      "replacement": [
+        "导入失败！你给的这个东西格式不对吧？笨手笨脚的。",
+        "JSON 解析失败了啦，你给的什么玩意儿？",
+        "保存失败，哼，都怪你。"
+      ]
+    },
+    {
+      "id": "lockdown_on",
+      "mode": "exact",
+      "original": "",
+      "replacement": [
+        "哼，现在开始只有管理员大人能使唤我了，杂鱼们一边待着去！",
+        "全局锁定了，除了管理员，谁也别想画！",
+        "绘图功能锁上啦，嘻嘻~"
+      ]
+    },
+    {
+      "id": "lockdown_off",
+      "mode": "exact",
+      "original": "",
+      "replacement": [
+        "唉，真没办法，大发慈悲地放开权限好了，你们可要珍惜机会哦~",
+        "锁解开了，你们这些杂鱼可以画了。",
+        "恢复正常了，快来求我画画吧~"
+      ]
+    },
+    {
+      "id": "audit_enabled",
+      "mode": "exact",
+      "original": "",
+      "replacement": [
+        "哼，开启审查模式！不许你们想那些涩涩的东西哦！(¬‿¬)",
+        "审核开启了，都给我乖一点！",
+        "启用审核！我看谁敢乱来！"
+      ]
+    },
+    {
+      "id": "audit_disabled",
+      "mode": "exact",
+      "original": "",
+      "replacement": [
+        "好吧好吧，不审了，但你们要是画了什么奇怪的东西，我可不管哦~",
+        "审核关了，你们自己好自为之吧。",
+        "停用审核了，哼。"
+      ]
+    },
+    {
+      "id": "normal_admin_granted",
+      "mode": "exact",
+      "original": "",
+      "replacement": [
+        "喏，给 {qq} 这家伙一个管理员当当，可别太得意忘形了哦~",
+        "{qq} 现在是管理员了，要好好替我办事哦。",
+        "授权完成，{qq} 你现在是管理员了，还不快谢谢我？"
+      ]
+    },
+    {
+      "id": "normal_admin_revoked",
+      "mode": "exact",
+      "original": "",
+      "replacement": [
+        "{qq} 的管理员被我收回啦~ 嘻嘻，没想到吧！",
+        "已移除 {qq} 的管理员权限，他不够格！",
+        "权限收回，哼，让你不听话！"
+      ]
+    },
+    {
+      "id": "comfyui_connection_refused_short",
+      "mode": "exact",
+      "original": "",
+      "replacement": [
+        "拒绝连接！哼，肯定是你的服务没开，笨蛋~",
+        "不想理你，拒绝了你的连接请求。",
+        "ComfyUI把你拒之门外了哦，嘻嘻。"
+      ]
+    },
+    {
+      "id": "comfyui_api_unavailable",
+      "mode": "contains",
+      "original": "ComfyUI API 暂不可用",
+      "replacement": [
+        "API还没准备好啦，急什么急~",
+        "没准备好呢，等会儿再来！",
+        "人家还在化妆呢，API不可用！"
+      ]
+    },
+    {
+      "id": "comfyui_busy_short",
+      "mode": "contains",
+      "original": "ComfyUI 正忙",
+      "replacement": [
+        "我很忙的！没空理你，自己排队去！( `д´)",
+        "ComfyUI正忙着呢，你等等会死啊？",
+        "忙着呢，别催！"
+      ]
+    },
+    {
+      "id": "image_too_large_fallback",
+      "mode": "contains",
+      "original": "图片/文件太大",
+      "replacement": [
+        "图太大了啦，发不出去！笨蛋，你就不能压缩一下吗？",
+        "图片太大，发送失败了，真没用。",
+        "这么大的图，谁给你发的出去啊？"
+      ]
+    },
+    {
+      "id": "missing_prompt",
+      "mode": "exact",
+      "original": "",
+      "replacement": [
+        "词呢？不写提示词我怎么画啊~",
+        "空着也想让我画？先把提示词交出来啦。",
+        "提示词都没有，别想偷懒使唤我。"
+      ]
+    },
+    {
+      "id": "cooldown_short",
+      "mode": "exact",
+      "original": "",
+      "replacement": [
+        "急什么急，还有{seconds}秒才能画呢~",
+        "手速太快啦，等{seconds}秒再来。",
+        "冷却中，{seconds}秒后再烦我。"
+      ]
+    },
+    {
+      "id": "look_no_image",
+      "mode": "exact",
+      "original": "",
+      "replacement": [
+        "图呢图呢？引用或者私聊发图再让我看啦~",
+        "没有图我看什么？先把图片丢过来。",
+        "空手来识图，算盘打得真响。"
+      ]
+    },
+    {
+      "id": "look_failed",
+      "mode": "exact",
+      "original": "",
+      "replacement": [
+        "看图失败了：{error}",
+        "这张图没看明白，原因：{error}",
+        "识图翻车啦：{error}"
+      ]
+    },
+    {
+      "id": "command_error",
+      "mode": "contains",
+      "original": "命令参数",
+      "replacement": [
+        "命令参数错了啦，你是笨蛋吗？自己检查去！",
+        "连命令都用不对，真是个小傻瓜~",
+        "参数错误，重来！"
+      ]
+    }
+  ]
+}

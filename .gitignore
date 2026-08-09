@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+*.whl
+
+# 虚拟环境
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.settings/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 插件运行时生成的缓存/数据
+html_render_cache/
+*.png
+*.gif
+*.jpg
+*.jpeg
+!assets/
+!assets/jiuhu_watermark_huizhi.png
+
+# 日志
+*.log
+
+# 环境变量/密钥
+.env
+.env.*
+# Git 提交脚本（不需要提交）
+git提交.py
+git提交.py

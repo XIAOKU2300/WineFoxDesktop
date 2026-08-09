@@ -1,0 +1,263 @@
+{
+  "1": {
+    "inputs": {
+      "ckpt_name": "waiIllustriousSDXL_v170.safetensors"
+    },
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": {
+      "title": "AstrBot Illustrious PVC Flow v4.0.4 - WAI Checkpoint"
+    }
+  },
+  "2": {
+    "inputs": {
+      "stop_at_clip_layer": -2,
+      "clip": [
+        "1",
+        1
+      ]
+    },
+    "class_type": "CLIPSetLastLayer",
+    "_meta": {
+      "title": "CLIP Skip -2"
+    }
+  },
+  "50": {
+    "inputs": {
+      "model": [
+        "1",
+        0
+      ],
+      "clip": [
+        "2",
+        0
+      ],
+      "lora_name": "PVC.safetensors",
+      "strength_model": 0.6,
+      "strength_clip": 0.48
+    },
+    "class_type": "LoraLoader",
+    "_meta": {
+      "title": "PVC Style LoRA 50"
+    }
+  },
+  "51": {
+    "inputs": {
+      "model": [
+        "50",
+        0
+      ],
+      "clip": [
+        "50",
+        1
+      ],
+      "lora_name": "3d_style.safetensors",
+      "strength_model": 0.34,
+      "strength_clip": 0.24
+    },
+    "class_type": "LoraLoader",
+    "_meta": {
+      "title": "3D Figure Style LoRA 51"
+    }
+  },
+  "52": {
+    "inputs": {
+      "model": [
+        "51",
+        0
+      ],
+      "clip": [
+        "51",
+        1
+      ],
+      "lora_name": "AnimeFigure_ANIMA.safetensors",
+      "strength_model": 0.28,
+      "strength_clip": 0.2
+    },
+    "class_type": "LoraLoader",
+    "_meta": {
+      "title": "Anime Figure Style LoRA 52"
+    }
+  },
+  "53": {
+    "inputs": {
+      "model": [
+        "52",
+        0
+      ],
+      "clip": [
+        "52",
+        1
+      ],
+      "lora_name": "XDetail_light.safetensors",
+      "strength_model": 0.08,
+      "strength_clip": 0.04
+    },
+    "class_type": "LoraLoader",
+    "_meta": {
+      "title": "Quality Detail Style LoRA 53"
+    }
+  },
+  "99": {
+    "inputs": {
+      "model": [
+        "53",
+        0
+      ],
+      "clip": [
+        "53",
+        1
+      ],
+      "lora_name": "PVC.safetensors",
+      "strength_model": 0,
+      "strength_clip": 0
+    },
+    "class_type": "LoraLoader",
+    "_meta": {
+      "title": "Character LoRA 99"
+    }
+  },
+  "11": {
+    "inputs": {
+      "text": "masterpiece, best quality, amazing quality, absurdres, ultra detailed, 3d, rendered, anime figurine, PVC figure, collectible figure, glossy skin, smooth plastic texture, polished resin texture, detailed eyes, sharp focus, crisp contours, clean silhouette, clean sculpted hair, smooth continuous hair strands, anti-aliased hair edges, crisp molded figure details, detailed hands, detailed feet, studio product photography, softbox lighting, clean studio lighting, balanced highlights, specular highlights, rim light, 1girl, solo",
+      "clip": [
+        "99",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Positive Prompt 11 - PVC Style"
+    }
+  },
+  "12": {
+    "inputs": {
+      "text": "worst quality, low quality, normal quality, lowres, blurry, motion blur, smeared, smearing, ghosting, double image, duplicate edges, bloom, glowing blur, chromatic aberration, over-smoothed, melted details, flat color, flat shading, cel shading, sketch, lineart, painting, watercolor, cartoon, 2d, simple background, bad anatomy, bad hands, extra fingers, missing fingers, malformed hands, poorly drawn hands, bad feet, bad toes, fused toes, blurry feet, malformed shoes, extra limbs, cropped, watermark, text, signature, jpeg artifacts, deformed, disfigured, ugly, oversaturated, overexposed, jagged edges, sawtooth edges, aliasing, stair-stepping, triangular hair artifacts, broken hair silhouette, fragmented hair strands, blocky hair edges, clipped hair",
+      "clip": [
+        "99",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Negative Prompt 12 - Anti Flat 2D"
+    }
+  },
+  "13": {
+    "inputs": {
+      "width": 960,
+      "height": 1440,
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": {
+      "title": "Base Latent 960x1440"
+    }
+  },
+  "14": {
+    "inputs": {
+      "seed": 529027640026575,
+      "steps": 44,
+      "cfg": 5.0,
+      "sampler_name": "euler_ancestral",
+      "scheduler": "normal",
+      "denoise": 1.0,
+      "model": [
+        "99",
+        0
+      ],
+      "positive": [
+        "11",
+        0
+      ],
+      "negative": [
+        "12",
+        0
+      ],
+      "latent_image": [
+        "13",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "Base KSampler"
+    }
+  },
+  "15": {
+    "inputs": {
+      "upscale_method": "bicubic",
+      "scale_by": 1.15,
+      "samples": [
+        "14",
+        0
+      ]
+    },
+    "class_type": "LatentUpscaleBy",
+    "_meta": {
+      "title": "Latent Upscale 1.15"
+    }
+  },
+  "16": {
+    "inputs": {
+      "seed": 529027640026576,
+      "steps": 18,
+      "cfg": 4.8,
+      "sampler_name": "euler_ancestral",
+      "scheduler": "normal",
+      "denoise": 0.16,
+      "model": [
+        "99",
+        0
+      ],
+      "positive": [
+        "11",
+        0
+      ],
+      "negative": [
+        "12",
+        0
+      ],
+      "latent_image": [
+        "15",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "Refine KSampler"
+    }
+  },
+  "17": {
+    "inputs": {
+      "tile_size": 608,
+      "overlap": 96,
+      "temporal_size": 64,
+      "temporal_overlap": 8,
+      "samples": [
+        "16",
+        0
+      ],
+      "vae": [
+        "1",
+        2
+      ]
+    },
+    "class_type": "VAEDecodeTiled",
+    "_meta": {
+      "title": "Tiled VAE Decode"
+    }
+  },
+  "66": {
+    "inputs": {
+      "filename_prefix": "AstrBot_Illustrious_PVC",
+      "images": [
+        "17",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Output 66"
+    }
+  }
+}

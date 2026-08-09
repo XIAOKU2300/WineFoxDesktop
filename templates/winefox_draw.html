@@ -1,0 +1,904 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>__GALLERY_NAME__ Draw</title>
+  <style>
+    :root{
+      color-scheme:dark;
+      --bg:#09090f;
+      --surface:rgba(18,18,28,.72);
+      --surface-solid:#12121c;
+      --glass:rgba(255,255,255,.045);
+      --glass-hover:rgba(255,255,255,.085);
+      --glass-border:rgba(255,255,255,.075);
+      --border:rgba(255,255,255,.09);
+      --border-strong:rgba(255,255,255,.15);
+      --text:#ece8df;
+      --text-secondary:#9ea3b5;
+      --text-tertiary:#646a7d;
+      --accent:#e05a7a;
+      --accent-soft:rgba(224,90,122,.17);
+      --gold:#e8c870;
+      --gold-soft:rgba(232,200,112,.12);
+      --cyan:#5abfbf;
+      --cyan-soft:rgba(90,191,191,.12);
+      --ok:#68d49b;
+      --warn:#e8c870;
+      --danger:#ff7782;
+      --radius:12px;
+      --radius-sm:8px;
+      --radius-xs:6px;
+      --shadow:0 8px 32px rgba(0,0,0,.35);
+      --shadow-lg:0 20px 60px rgba(0,0,0,.5);
+      --topbar-h:62px;
+      --font-sans:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC","Microsoft YaHei",sans-serif;
+      --font-mono:ui-monospace,SFMono-Regular,"SF Mono",Consolas,"Liberation Mono",monospace;
+      --ease:cubic-bezier(.4,0,.2,1);
+      --ease-spring:cubic-bezier(.175,.885,.32,1.275);
+    }
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    html{min-height:100%;background:var(--bg);scroll-behavior:smooth;scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.12) transparent}
+    ::-webkit-scrollbar{width:6px;height:6px}
+    ::-webkit-scrollbar-track{background:transparent}
+    ::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:99px}
+    ::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.2)}
+    body{min-height:100vh;color:var(--text);font-family:var(--font-sans);
+      font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;overflow-x:hidden}
+    button,input{font:inherit;color:inherit;border:0;background:none}
+    button,a{cursor:pointer;-webkit-tap-highlight-color:transparent}
+    a{color:inherit;text-decoration:none}
+    img{display:block;max-width:100%}
+    .hidden{display:none!important}
+    #bgCanvas{position:fixed;inset:0;z-index:0;pointer-events:none}
+    body::before{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;
+      background:
+        linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px),
+        linear-gradient(180deg,rgba(255,255,255,.025) 1px,transparent 1px);
+      background-size:56px 56px;
+      mask-image:linear-gradient(to bottom,rgba(0,0,0,.9),rgba(0,0,0,.16) 72%,transparent)}
+    body::after{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;
+      background:linear-gradient(135deg,rgba(224,90,122,.08),transparent 36%,rgba(90,191,191,.07) 74%,transparent);
+      animation:bgShift 16s var(--ease) infinite alternate}
+    @keyframes bgShift{from{filter:hue-rotate(0deg);opacity:.8}to{filter:hue-rotate(12deg);opacity:1}}
+    @keyframes fadeUp{from{opacity:0;transform:translateY(22px)}to{opacity:1;transform:none}}
+    @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+    @keyframes scan{0%{transform:translateX(-120%)}100%{transform:translateX(120%)}}
+    @keyframes pulse{0%,100%{opacity:.42;transform:scaleY(.55)}50%{opacity:1;transform:scaleY(1)}}
+    @keyframes dot{0%,80%,100%{opacity:.22;transform:translateY(0)}40%{opacity:1;transform:translateY(-4px)}}
+    @keyframes lineFlow{0%{background-position:0 0}100%{background-position:240px 0}}
+    @keyframes shimmer{0%{background-position:-240px 0}100%{background-position:240px 0}}
+    @keyframes phraseDrift{0%{opacity:0;transform:translateY(8px);filter:blur(6px)}100%{opacity:1;transform:none;filter:blur(0)}}
+    @keyframes maskPulse{0%,100%{opacity:.52;transform:scale(1)}50%{opacity:.92;transform:scale(1.035)}}
+    @keyframes revealFade{from{opacity:1;transform:scale(1)}to{opacity:0;transform:scale(1.03);visibility:hidden}}
+    body.age-locked{overflow:hidden}
+    body.age-locked .page,body.age-locked #bgCanvas{filter:blur(16px);transform:scale(1.012)}
+    .age-gate,.preview-overlay{position:fixed;inset:0;z-index:80;display:grid;place-items:center;padding:18px;
+      background:rgba(5,5,8,.62);backdrop-filter:blur(22px)}
+    .age-card,.preview-card{width:min(560px,100%);border-radius:12px;background:rgba(18,18,28,.9);
+      border:1px solid rgba(255,255,255,.13);box-shadow:0 26px 76px rgba(0,0,0,.56);animation:fadeUp .36s var(--ease) both;overflow:hidden}
+    .age-card{display:grid;gap:16px;padding:22px}
+    .age-title{font-size:26px;line-height:1.1;font-weight:900}
+    .age-text{color:var(--text-secondary);font-size:13px;line-height:1.7}
+    .age-list{display:grid;gap:8px;padding:12px;border-radius:8px;background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.07);
+      color:var(--text-secondary);font-size:13px;line-height:1.55}
+    .age-check{display:flex;align-items:flex-start;gap:10px;color:var(--text-secondary);font-size:13px}
+    .age-check input{margin-top:4px;accent-color:var(--accent)}
+    .age-actions{display:flex;gap:10px;flex-wrap:wrap}
+    .age-actions .btn{height:42px}.age-actions .btn-primary{flex:1;min-width:210px}
+    .page{position:relative;z-index:1;min-height:100vh;padding:16px 24px 56px}
+    .shell{width:min(1280px,100%);margin:0 auto;display:grid;gap:16px}
+    .topbar{position:sticky;top:14px;z-index:20;margin:0 auto 6px;padding:10px 12px;
+      display:flex;align-items:center;justify-content:space-between;gap:12px;
+      min-height:var(--topbar-h);background:rgba(12,12,18,.78);border:1px solid var(--border);border-radius:var(--radius);
+      backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);box-shadow:0 4px 24px rgba(0,0,0,.26);animation:fadeIn .45s var(--ease) both}
+    .brand{display:flex;align-items:center;gap:10px;min-width:0}
+    .logo{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;
+      background:linear-gradient(135deg,var(--accent),#82365f);font-weight:900;box-shadow:0 8px 24px rgba(224,90,122,.22)}
+    .brand b{font-size:15px;letter-spacing:0;white-space:nowrap}
+    .brand span{display:block;color:var(--text-secondary);font-size:12px;margin-top:-2px}
+    .nav{display:flex;gap:8px;align-items:center}
+    .btn{height:40px;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:0 18px;
+      border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--glass);
+      backdrop-filter:blur(12px);color:var(--text);font-weight:600;font-size:13px;white-space:nowrap;position:relative;overflow:hidden;
+      transition:background .2s var(--ease),border-color .2s var(--ease),transform .2s var(--ease),box-shadow .2s var(--ease)}
+    .btn:hover{background:var(--glass-hover);border-color:var(--border-strong);transform:translateY(-1px);box-shadow:0 4px 16px rgba(0,0,0,.25)}
+    .btn:active{transform:translateY(0) scale(.98)}
+    .btn-primary{border-color:var(--accent);background:var(--accent);color:#fff;font-weight:700}
+    .btn-primary:hover{background:#d44f6f;border-color:#d44f6f}
+    .btn-primary:disabled{opacity:.55;transform:none}
+    .btn.favorited{border-color:rgba(104,212,155,.58);background:rgba(104,212,155,.13);color:var(--ok)}
+    .hero{position:relative;padding:22px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;align-items:end;
+      background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);
+      backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);overflow:hidden;animation:fadeUp .55s var(--ease) both}
+    .hero::before{content:"";position:absolute;inset:0;background:linear-gradient(135deg,var(--accent-soft),transparent 42%,var(--cyan-soft));opacity:.82;pointer-events:none}
+    .hero>*{position:relative;z-index:1}
+    .hero h1{font-size:clamp(28px,5vw,48px);line-height:1;font-weight:900;letter-spacing:0}
+    .hero-line{display:none}
+    .draw-stats{display:grid;grid-template-columns:repeat(3,minmax(96px,1fr));gap:1px;min-width:min(360px,100%);
+      background:rgba(0,0,0,.22);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+    .stat-pill{display:grid;gap:2px;min-width:0;padding:12px 14px;background:rgba(255,255,255,.025);border:0;border-radius:0}
+    .stat-pill b{font-size:20px;line-height:1;font-weight:900}.stat-pill span{font-size:12px;color:var(--text-tertiary);white-space:nowrap}
+    .draw-form{position:relative;display:grid;grid-template-columns:1fr auto;gap:10px;padding:10px;
+      grid-column:1/-1;background:rgba(0,0,0,.22);border:1px solid var(--border);border-radius:var(--radius);
+      box-shadow:none;backdrop-filter:blur(16px);overflow:hidden}
+    .draw-form::before{content:"";position:absolute;inset:0;background:linear-gradient(120deg,transparent,rgba(255,255,255,.08),transparent);
+      transform:translateX(-120%);animation:scan 5.6s ease-in-out infinite;pointer-events:none}
+    .prompt-input{position:relative;z-index:1;width:100%;height:48px;padding:0 14px;border-radius:var(--radius-sm);
+      background:rgba(0,0,0,.3);border:1px solid var(--border);outline:none;color:var(--text);font-size:15px;
+      transition:border-color .2s var(--ease),box-shadow .2s var(--ease),background .2s var(--ease)}
+    .prompt-input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);background:rgba(0,0,0,.36)}
+    .prompt-input::placeholder{color:rgba(236,232,223,.42)}
+    .content-grid{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:14px;align-items:start}
+    .side-stack{display:grid;gap:14px}
+    .panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+      backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);box-shadow:var(--shadow);overflow:hidden;animation:fadeUp .55s var(--ease) both}
+    .panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid var(--border)}
+    .panel-title{font-size:13px;font-weight:800;color:var(--text-secondary);letter-spacing:0}
+    .status{font-size:13px;color:var(--text-secondary)}
+    .status.ok{color:var(--ok)}.status.warn{color:var(--warn)}.status.error{color:var(--danger)}
+    .thinking{display:none;padding:16px;position:relative;overflow:hidden}
+    .thinking.visible{display:grid;gap:16px;animation:fadeUp .35s var(--ease) both}
+    .thinking::before{content:"";position:absolute;inset:0;background:linear-gradient(110deg,transparent,rgba(90,191,191,.08),transparent);
+      transform:translateX(-120%);animation:scan 2.2s linear infinite}
+    .thinking-box{position:relative;display:grid;gap:14px;padding:18px;border-radius:var(--radius-sm);
+      background:rgba(0,0,0,.22);border:1px solid var(--border);overflow:hidden}
+    .thinking-box::after{content:"";position:absolute;left:0;right:0;bottom:0;height:2px;
+      background:linear-gradient(90deg,var(--accent),var(--gold),var(--cyan),var(--accent));
+      background-size:240px 2px;animation:lineFlow 1.8s linear infinite}
+    .thinking-word{min-height:34px;font:900 26px/1.15 var(--font-sans);letter-spacing:0;white-space:normal;word-break:keep-all}
+    .thinking-word span{display:inline-block;animation:phraseDrift .78s var(--ease) both}
+    .thinking-stage{min-height:22px}
+    .thinking-stage.phrase-in{animation:phraseDrift .72s var(--ease) both}
+    .thinking-bars{display:flex;align-items:end;gap:6px;height:32px}
+    .thinking-bars i{width:7px;height:24px;border-radius:99px;background:linear-gradient(180deg,var(--cyan),var(--accent));animation:pulse 1s ease-in-out infinite}
+    .thinking-bars i:nth-child(2){animation-delay:.1s}.thinking-bars i:nth-child(3){animation-delay:.2s}.thinking-bars i:nth-child(4){animation-delay:.3s}.thinking-bars i:nth-child(5){animation-delay:.4s}
+    .thinking-meta{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+    .metric{padding:10px;border-radius:var(--radius-xs);background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.06)}
+    .metric b{display:block;font-size:16px}.metric span{color:var(--text-tertiary);font-size:12px}
+    .result{display:none}
+    .result.visible{display:block;animation:fadeUp .45s var(--ease) both}
+    .image-wrap{background:#050508;position:relative;overflow:hidden;min-height:220px;display:grid;place-items:center;padding:10px}
+    .image-wrap img{width:auto;height:auto;max-width:100%;max-height:min(74vh,900px);object-fit:contain;margin:0 auto;transition:filter .52s var(--ease),transform .52s var(--ease),opacity .28s var(--ease)}
+    .image-wrap.sensitive img{filter:blur(24px) saturate(.55) contrast(.9);transform:scale(1.02)}
+    .image-wrap.revealed img{filter:none;transform:none}
+    .sensitive-mask{position:absolute;inset:0;display:none;place-items:center;padding:22px;z-index:3;overflow:hidden;
+      background:
+        repeating-linear-gradient(0deg,rgba(255,255,255,.06) 0 1px,transparent 1px 14px),
+        repeating-linear-gradient(90deg,rgba(255,255,255,.05) 0 1px,transparent 1px 14px),
+        radial-gradient(circle at 50% 36%,rgba(224,90,122,.24),transparent 34%),
+        rgba(5,5,8,.46);
+      backdrop-filter:blur(10px)}
+    .image-wrap.sensitive .sensitive-mask{display:grid;animation:fadeIn .26s var(--ease) both}
+    .image-wrap.revealed .sensitive-mask{animation:revealFade .42s var(--ease) forwards}
+    .mask-card{width:min(420px,100%);display:grid;gap:12px;justify-items:center;text-align:center;padding:20px;border-radius:12px;
+      background:rgba(18,18,28,.82);border:1px solid rgba(255,255,255,.14);box-shadow:0 20px 48px rgba(0,0,0,.42)}
+    .mask-icon{width:54px;height:54px;border-radius:14px;display:grid;place-items:center;
+      background:linear-gradient(135deg,rgba(224,90,122,.25),rgba(90,191,191,.18));border:1px solid rgba(255,255,255,.16);
+      animation:maskPulse 1.9s ease-in-out infinite}
+    .mask-title{font-size:18px;font-weight:900}.mask-text{color:var(--text-secondary);font-size:13px;line-height:1.55}
+    .mask-risk{color:var(--danger);font:800 12px/1.4 var(--font-mono)}
+    .btn.disabled,.btn:disabled{pointer-events:none;opacity:.45;filter:saturate(.5)}
+    .result-body{display:grid;gap:12px;padding:14px}
+    .result-actions{display:flex;gap:10px;flex-wrap:wrap}
+    .info-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(142px,1fr));gap:8px}
+    .info{padding:10px;border-radius:var(--radius-xs);background:rgba(0,0,0,.22);border:1px solid var(--border)}
+    .info span{display:block;color:var(--text-tertiary);font-size:12px}.info b{display:block;margin-top:2px;word-break:break-word}
+    .prompt-card{padding:12px;border-radius:var(--radius-sm);background:rgba(0,0,0,.22);border:1px solid var(--border);
+      color:var(--text-secondary);font-size:13px;max-height:128px;overflow:auto}
+    .lora-list,.history{display:grid;gap:8px;padding:12px;overflow:auto}
+    .lora-list{max-height:300px}
+    .history{max-height:48vh}
+    .lora-card{display:grid;gap:4px;width:100%;text-align:left;padding:10px 12px;border-radius:var(--radius-sm);background:rgba(0,0,0,.22);border:1px solid var(--border);
+      transition:background .2s var(--ease),transform .2s var(--ease),border-color .2s var(--ease)}
+    .lora-card:hover{background:rgba(255,255,255,.065);border-color:var(--border-strong);transform:translateY(-1px)}
+    .lora-name{font-size:13px;font-weight:850;line-height:1.35;word-break:break-word}
+    .lora-file{font-size:12px;color:var(--text-tertiary);word-break:break-all}
+    .lora-status{display:flex;align-items:center;gap:6px;color:var(--ok);font-size:12px;font-weight:800}
+    .lora-status.warn{color:var(--warn)}
+    .history-card{display:grid;grid-template-columns:64px minmax(0,1fr);gap:10px;padding:8px;border-radius:var(--radius-sm);
+      background:rgba(0,0,0,.22);border:1px solid var(--border);transition:background .2s var(--ease),transform .2s var(--ease),border-color .2s var(--ease)}
+    .history-card:hover{background:rgba(255,255,255,.065);border-color:var(--border-strong);transform:translateY(-1px)}
+    .history-thumb{position:relative;width:64px;height:64px;border-radius:var(--radius-xs);overflow:hidden;background:#050508}
+    .history-thumb img{width:64px;height:64px;object-fit:cover;background:#050508;transition:filter .35s var(--ease),transform .35s var(--ease)}
+    .history-thumb.sensitive img{filter:blur(9px) saturate(.55);transform:scale(1.08)}
+    .history-lock{position:absolute;inset:0;display:none;place-items:center;border:1px solid rgba(255,255,255,.08);
+      background:repeating-linear-gradient(45deg,rgba(255,255,255,.12) 0 4px,rgba(0,0,0,.16) 4px 8px);
+      color:var(--text);font-size:12px;font-weight:900;text-shadow:0 1px 8px rgba(0,0,0,.9)}
+    .history-thumb.sensitive .history-lock{display:grid}
+    .history-meta{min-width:0;display:grid;gap:4px}
+    .history-prompt{font-size:13px;font-weight:760;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+    .history-sub{font-size:12px;color:var(--text-tertiary)}
+    .history-actions{display:flex;gap:8px;align-items:center}
+    .mini-link{display:inline-flex;align-items:center;background:none;border:0;padding:0;font-size:12px;color:var(--cyan);font-weight:800}
+    .mini-link.disabled{pointer-events:none;opacity:.45;color:var(--text-tertiary)}
+    .mini-link.favorited{color:var(--ok)}
+    .preview-overlay.hidden{display:none!important}
+    .preview-card{width:min(96vw,1120px);display:grid;grid-template-rows:auto minmax(0,1fr) auto;max-height:min(92vh,980px)}
+    .preview-head,.preview-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border-bottom:1px solid var(--border)}
+    .preview-foot{border-top:1px solid var(--border);border-bottom:0;align-items:flex-start}
+    .preview-title{font-size:14px;font-weight:900;min-width:0;line-height:1.45;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
+    .preview-body{display:grid;place-items:center;background:#050508;overflow:hidden;min-height:0;padding:12px}
+    .preview-body img{width:auto;height:auto;max-width:100%;max-height:calc(92vh - 132px);object-fit:contain;margin:auto}
+    .preview-meta{min-width:0;color:var(--text-secondary);font-size:12px;line-height:1.5}
+    .preview-meta b{display:block;color:var(--text);font-size:13px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-word}
+    .preview-actions{display:flex;gap:10px;align-items:center;justify-content:flex-end;flex-wrap:wrap}
+    .empty{padding:18px;color:var(--text-tertiary);text-align:center}
+    .chip{display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 9px;border-radius:999px;
+      background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.07);color:var(--text-secondary);font-size:12px}
+    .skeleton{height:14px;border-radius:99px;background:linear-gradient(90deg,rgba(255,255,255,.04),rgba(255,255,255,.11),rgba(255,255,255,.04));
+      background-size:240px 100%;animation:shimmer 1.6s linear infinite}
+    @media(max-width:860px){.content-grid{grid-template-columns:1fr}.topbar{top:8px}.thinking-meta{grid-template-columns:1fr 1fr}.hero{grid-template-columns:1fr;padding-top:18px}.draw-stats{min-width:0}}
+    @media(max-width:560px){.page{padding:10px}.draw-form{grid-template-columns:1fr}.btn-primary{height:48px}.nav .btn span{display:none}.thinking-meta{grid-template-columns:1fr}.hero h1{font-size:34px}.draw-stats{grid-template-columns:1fr 1fr 1fr}.stat-pill{padding:10px 8px}.stat-pill span{font-size:11px}.preview-overlay{padding:8px}.preview-card{width:100%;max-height:94vh}.preview-head,.preview-foot{padding:10px;gap:8px}.preview-foot{display:grid}.preview-actions{justify-content:stretch}.preview-actions .btn{flex:1}.preview-body{padding:8px}.preview-body img{max-height:calc(94vh - 150px)}}
+  </style>
+</head>
+<body class="age-locked">
+  <canvas id="bgCanvas"></canvas>
+  <div id="ageGate" class="age-gate" role="dialog" aria-modal="true" aria-labelledby="ageTitle">
+    <div class="age-card">
+      <div>
+        <div id="ageTitle" class="age-title">请确认你已满 18 岁</div>
+        <div class="age-text">本页面包含 AI 图片生成、历史记录和可能需要主动显示的敏感内容。继续使用前，请确认你已达到所在地法律允许的年龄。</div>
+      </div>
+      <div class="age-list">
+        <div><b>免责声明：</b>本工具仅提供 AI 图片生成和本地展示能力，不鼓励也不授权任何违法或侵权用途。</div>
+        <div>你承诺不会生成、上传、传播违法内容，或涉及未成年人、非自愿隐私、侵权、骚扰、暴力伤害等内容。</div>
+        <div>AI 生成结果由用户提示词和模型输出共同决定，页面会进行审核、遮罩和记录，但不保证覆盖全部风险。</div>
+        <div>你需要自行判断生成内容是否适合保存、下载、展示或传播，并承担相应责任。</div>
+      </div>
+      <label class="age-check">
+        <input id="ageCheck" type="checkbox">
+        <span>我确认已满 18 岁，已阅读并同意以上免责声明。</span>
+      </label>
+      <div class="age-actions">
+        <button id="ageConfirmBtn" class="btn btn-primary" type="button" disabled>进入 Draw</button>
+        <a class="btn" href="/gallery.html">返回 Gallery</a>
+      </div>
+    </div>
+  </div>
+  <div class="page">
+    <div class="shell">
+      <header class="topbar">
+        <a class="brand" href="/gallery.html">
+          <div class="logo">狐</div>
+          <div><b id="brandName">WineFox Draw</b><span>Web Draw</span></div>
+        </a>
+        <nav class="nav">
+          <a class="btn" href="/gallery.html" title="Gallery">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+            <span>Gallery</span>
+          </a>
+        </nav>
+      </header>
+
+      <section class="hero">
+        <h1 id="title">Draw</h1>
+        <div class="hero-line"></div>
+        <div class="draw-stats">
+          <div class="stat-pill"><b id="drawCount">0</b><span>24小时生图</span></div>
+          <div class="stat-pill"><b id="hiddenCount">0</b><span>默认隐藏</span></div>
+          <div class="stat-pill"><b id="loraCount">0</b><span>可用 LoRA</span></div>
+        </div>
+        <form id="drawForm" class="draw-form" autocomplete="off">
+          <input id="prompt" class="prompt-input" name="prompt" type="text" maxlength="4000" placeholder="输入提示词" autofocus>
+          <button id="submitBtn" class="btn btn-primary" type="submit">生成</button>
+        </form>
+        <div id="status" class="status"></div>
+      </section>
+
+      <section class="content-grid">
+        <div class="panel">
+          <div class="panel-head">
+            <div class="panel-title">生成结果</div>
+            <div id="resultState" class="chip">待命</div>
+          </div>
+
+          <div id="thinking" class="thinking">
+            <div class="thinking-box">
+              <div id="thinkingWord" class="thinking-word" aria-live="polite"><span>酒狐正在疯狂画图中</span></div>
+              <div id="thinkingStage" class="status warn thinking-stage">正在准备任务</div>
+              <div class="thinking-bars"><i></i><i></i><i></i><i></i><i></i></div>
+              <div class="thinking-meta">
+                <div class="metric"><b id="waitText">马上开始</b><span>预计等待</span></div>
+                <div class="metric"><b id="elapsedText">0 秒</b><span>已运行</span></div>
+                <div class="metric"><b id="queueText">第 1 位</b><span>队列</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div id="result" class="result">
+            <div id="imageWrap" class="image-wrap">
+              <img id="resultImage" alt="生成图片">
+              <div id="sensitiveMask" class="sensitive-mask">
+                <button id="revealBtn" class="mask-card" type="button">
+                  <span class="mask-icon">
+                    <svg width="25" height="25" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4v5c0 5-3.4 8.5-8 9-4.6-.5-8-4-8-9V7l8-4z"/><path d="M9.5 12.5l1.8 1.8 3.7-4.1"/></svg>
+                  </span>
+                  <span class="mask-title">敏感内容已隐藏</span>
+                  <span id="maskText" class="mask-text">这张图触发了出图审核提示，点击后显示原图。</span>
+                  <span id="maskRisk" class="mask-risk"></span>
+                </button>
+              </div>
+            </div>
+            <div class="result-body">
+              <div class="result-actions">
+                <a id="downloadBtn" class="btn btn-primary" href="#" download>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+                  下载图片
+                </a>
+                <button id="openBtn" class="btn" type="button">预览图片</button>
+                <button id="favoriteBtn" class="btn favorite-control" type="button" disabled aria-disabled="true">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-4.4-9.2-8.7C1 8.6 3.2 5 7 5c2 0 3.4 1 5 2.8C13.6 6 15 5 17 5c3.8 0 6 3.6 4.2 7.3C19 16.6 12 21 12 21z"/></svg>
+                  <span data-favorite-label>收藏</span>
+                </button>
+              </div>
+              <div id="infoGrid" class="info-grid"></div>
+              <div id="promptInfo" class="prompt-card"></div>
+            </div>
+          </div>
+        </div>
+
+        <aside class="side-stack">
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <div class="panel-title">当前可用 LoRA</div>
+                <div id="loraSub" class="status">读取中</div>
+              </div>
+              <button class="btn" type="button" onclick="loadLoras()">刷新</button>
+            </div>
+            <div id="loraList" class="lora-list">
+              <div class="empty"><div class="skeleton"></div></div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div class="panel-title">最近 24 小时</div>
+              <button class="btn" type="button" onclick="loadHistory()">刷新</button>
+            </div>
+            <div id="history" class="history">
+              <div class="empty"><div class="skeleton"></div></div>
+            </div>
+          </section>
+        </aside>
+      </section>
+    </div>
+  </div>
+
+  <div id="previewOverlay" class="preview-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="previewTitle">
+    <div class="preview-card">
+      <div class="preview-head">
+        <div id="previewTitle" class="preview-title">图片预览</div>
+        <button id="previewCloseBtn" class="btn" type="button">关闭</button>
+      </div>
+      <div class="preview-body">
+        <img id="previewImage" alt="图片预览">
+      </div>
+      <div class="preview-foot">
+        <div id="previewMeta" class="preview-meta"></div>
+        <div class="preview-actions">
+          <button id="previewFavoriteBtn" class="btn favorite-control" type="button" disabled aria-disabled="true">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-4.4-9.2-8.7C1 8.6 3.2 5 7 5c2 0 3.4 1 5 2.8C13.6 6 15 5 17 5c3.8 0 6 3.6 4.2 7.3C19 16.6 12 21 12 21z"/></svg>
+            <span data-favorite-label>收藏</span>
+          </button>
+          <a id="previewDownloadBtn" class="btn btn-primary" href="#" download>下载</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const GALLERY_NAME = __GALLERY_NAME_JSON__;
+    const GALLERY_API = __GALLERY_API_MANIFEST_JSON__;
+    const $ = id => document.getElementById(id);
+    let pollTimer = 0;
+    let thinkingTimer = 0;
+    let thinkingIndex = 0;
+    let currentJob = '';
+    let currentResultData = null;
+    let historyCache = [];
+    let jobStartedAt = 0;
+    const AGE_KEY = 'winefox_draw_age_confirmed_v1';
+    const AGE_TTL = 30 * 24 * 60 * 60 * 1000;
+    const thinkingPhrases = ['正在整理提示词和角色信息', '正在给画面铺色和打光', '正在检查细节和构图', '正在给图片加上酒狐水印', '马上把结果端上来'];
+
+    function endpoint(name){
+      return (GALLERY_API.endpoints && GALLERY_API.endpoints[name] && GALLERY_API.endpoints[name].path) || '';
+    }
+    function esc(value){
+      return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+    }
+    function setStatus(text, type){
+      const el = $('status');
+      el.textContent = text || '';
+      el.className = 'status' + (type ? ' ' + type : '');
+    }
+    function secondsText(value){
+      const n = Math.max(0, Math.round(Number(value || 0)));
+      if (n >= 3600) return Math.floor(n / 3600) + ' 小时 ' + Math.floor((n % 3600) / 60) + ' 分';
+      if (n >= 60) return Math.floor(n / 60) + ' 分 ' + (n % 60) + ' 秒';
+      return n + ' 秒';
+    }
+    function percentText(value){
+      if (value === null || value === undefined || value === '') return '';
+      const n = Number(value);
+      if (!Number.isFinite(n)) return '';
+      return (Math.max(0, Math.min(1, n)) * 100).toFixed(2) + '%';
+    }
+    function withCacheBust(url){
+      if (!url) return '';
+      return url + (url.includes('?') ? '&' : '?') + 't=' + Date.now();
+    }
+    function safetyOf(data){
+      return (data && data.safety) || (data && data.history && data.history.safety) || {};
+    }
+    function isSensitive(data){
+      return !!((data && (data.sensitive || data.reveal_required)) || (data && data.history && (data.history.sensitive || data.history.reveal_required)));
+    }
+    function historyIdOf(data){
+      return String((data && data.id) || (data && data.history && data.history.id) || '').trim();
+    }
+    function favoriteEndpoint(itemId){
+      const tpl = endpoint('draw_history_favorite') || '/api/draw/history/{item_id}/favorite';
+      return tpl.replace('{item_id}', encodeURIComponent(itemId));
+    }
+    function setFavoriteLabel(button, text){
+      if (!button) return;
+      const label = button.querySelector('[data-favorite-label]');
+      if (label) label.textContent = text;
+      else button.textContent = text;
+    }
+    function setFavoriteControl(button, state){
+      if (!button) return;
+      const next = state || {};
+      const id = next.id !== undefined ? String(next.id || '').trim() : String(button.dataset.id || '').trim();
+      if (next.id !== undefined) button.dataset.id = id;
+      if (next.text !== undefined) setFavoriteLabel(button, next.text);
+      const disabled = !!next.locked || !!next.pending || !id;
+      button.disabled = disabled;
+      button.classList.toggle('disabled', disabled);
+      button.classList.toggle('favorited', !!next.done);
+      button.setAttribute('aria-disabled', disabled ? 'true' : 'false');
+    }
+    function favoriteControlsFor(itemId){
+      const id = String(itemId || '').trim();
+      if (!id) return [];
+      return Array.from(document.querySelectorAll('.favorite-control')).filter(button => String(button.dataset.id || '') === id);
+    }
+    function setThinkingWord(word){
+      $('thinkingWord').innerHTML = `<span>${esc(word || '酒狐正在疯狂画图中')}</span>`;
+    }
+    function setThinkingPhrase(text){
+      const el = $('thinkingStage');
+      const next = String(text || '').trim() || '正在准备任务';
+      if (el.textContent === next) return;
+      el.classList.remove('phrase-in');
+      void el.offsetWidth;
+      el.textContent = next;
+      el.classList.add('phrase-in');
+    }
+    function startThinkingWords(){
+      clearInterval(thinkingTimer);
+      thinkingIndex = 0;
+      setThinkingWord('酒狐正在疯狂画图中');
+      setThinkingPhrase(thinkingPhrases[thinkingIndex]);
+      thinkingTimer = setInterval(() => {
+        thinkingIndex = (thinkingIndex + 1) % thinkingPhrases.length;
+        setThinkingPhrase(thinkingPhrases[thinkingIndex]);
+      }, 4600);
+    }
+    function stopThinkingWords(){
+      clearInterval(thinkingTimer);
+      thinkingTimer = 0;
+    }
+    function setResultLinks(imageUrl, downloadUrl, locked, historyId){
+      const openBtn = $('openBtn');
+      const downloadBtn = $('downloadBtn');
+      const favoriteBtn = $('favoriteBtn');
+      openBtn.dataset.href = imageUrl || '#';
+      openBtn.disabled = !!locked;
+      openBtn.classList.toggle('disabled', !!locked);
+      openBtn.setAttribute('aria-disabled', locked ? 'true' : 'false');
+      downloadBtn.dataset.href = downloadUrl || imageUrl || '#';
+      downloadBtn.href = locked ? '#' : (downloadUrl || imageUrl || '#');
+      downloadBtn.classList.toggle('disabled', !!locked);
+      downloadBtn.setAttribute('aria-disabled', locked ? 'true' : 'false');
+      setFavoriteControl(favoriteBtn, {id: historyId || '', locked: !!locked || !historyId, done: false, text: '收藏'});
+    }
+    function ageConfirmed(){
+      try {
+        const stamp = Number(localStorage.getItem(AGE_KEY) || 0);
+        return stamp && Date.now() - stamp < AGE_TTL;
+      } catch (_) {
+        return false;
+      }
+    }
+    function unlockAgeGate(){
+      document.body.classList.remove('age-locked');
+      $('ageGate').classList.add('hidden');
+      ensureAuth();
+    }
+    function initAgeGate(){
+      if (ageConfirmed()) {
+        unlockAgeGate();
+        return;
+      }
+      $('ageGate').classList.remove('hidden');
+      document.body.classList.add('age-locked');
+      $('ageCheck').addEventListener('change', () => {
+        $('ageConfirmBtn').disabled = !$('ageCheck').checked;
+      });
+      $('ageConfirmBtn').addEventListener('click', () => {
+        if (!$('ageCheck').checked) return;
+        try { localStorage.setItem(AGE_KEY, String(Date.now())); } catch (_) {}
+        unlockAgeGate();
+      });
+    }
+    function revealSensitive(){
+      const wrap = $('imageWrap');
+      wrap.classList.add('revealed');
+      wrap.classList.remove('sensitive');
+      setResultLinks($('openBtn').dataset.href || '#', $('downloadBtn').dataset.href || '#', false, $('favoriteBtn').dataset.id || historyIdOf(currentResultData));
+      $('resultState').textContent = '完成';
+      setStatus('已显示原图。', 'ok');
+    }
+    function revealHistory(event, button){
+      event.preventDefault();
+      event.stopPropagation();
+      const card = button.closest('.history-card');
+      if (!card) return;
+      const thumb = card.querySelector('.history-thumb');
+      if (thumb) thumb.classList.remove('sensitive');
+      for (const node of card.querySelectorAll('[data-href],[data-lockable]')) {
+        if (node.tagName === 'A') node.href = node.dataset.href || '#';
+        node.classList.remove('disabled');
+        node.removeAttribute('disabled');
+        node.setAttribute('aria-disabled', 'false');
+      }
+    }
+    function openPreview(data){
+      const item = data || {};
+      const info = item.info || {};
+      const imgUrl = item.image_url || (item.history && item.history.image_url) || '';
+      const downloadUrl = item.download_url || (item.history && item.history.download_url) || imgUrl;
+      const prompt = info.raw_prompt || item.raw_prompt || item.prompt || '图片预览';
+      $('previewTitle').textContent = prompt;
+      $('previewImage').src = withCacheBust(imgUrl);
+      $('previewDownloadBtn').href = downloadUrl || '#';
+      $('previewMeta').innerHTML = `<b>${esc(prompt)}</b>${esc(info.size || '-')} · ${esc(secondsText(info.elapsed_seconds || item.elapsed_seconds || 0))}`;
+      setFavoriteControl($('previewFavoriteBtn'), {id: historyIdOf(item), locked: !historyIdOf(item), done: false, text: '收藏'});
+      $('previewOverlay').classList.remove('hidden');
+    }
+    function closePreview(){
+      $('previewOverlay').classList.add('hidden');
+      $('previewImage').removeAttribute('src');
+    }
+    function openCurrentPreview(){
+      if (currentResultData && !$('openBtn').disabled) openPreview(currentResultData.history || currentResultData);
+    }
+    function openHistoryPreview(event, button){
+      event.preventDefault();
+      if (button.disabled || button.classList.contains('disabled')) return;
+      const item = historyCache.find(row => String(row.id || '') === String(button.dataset.id || ''));
+      if (item) openPreview(item);
+    }
+    async function favoriteHistoryItem(event, itemId, button){
+      if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      const id = String(itemId || (button && button.dataset.id) || historyIdOf(currentResultData) || '').trim();
+      if (!id) {
+        setStatus('这张图还没有历史记录，暂时不能收藏。', 'warn');
+        return;
+      }
+      if (button && (button.disabled || button.classList.contains('disabled'))) return;
+      let controls = favoriteControlsFor(id);
+      if (!controls.length && button) controls = [button];
+      const original = new Map(controls.map(node => [node, node.innerHTML]));
+      controls.forEach(node => setFavoriteControl(node, {id, pending: true, text: '收藏中'}));
+      try {
+        const data = await api(favoriteEndpoint(id), {method:'POST', body:JSON.stringify({})});
+        controls.forEach(node => setFavoriteControl(node, {id, done: true, text: '已收藏'}));
+        setStatus(data.duplicate ? '这张图已在 Gallery，已补充收藏人。' : '已收藏到 Gallery。', 'ok');
+      } catch (err) {
+        controls.forEach(node => {
+          node.innerHTML = original.get(node) || node.innerHTML;
+          setFavoriteControl(node, {id, locked: false, done: false});
+        });
+        setStatus(err.message || '收藏失败', 'error');
+      }
+    }
+    async function api(url, options){
+      const base = Object.assign({credentials:'same-origin'}, options || {});
+      base.headers = Object.assign({'Content-Type':'application/json'}, base.headers || {});
+      const resp = await fetch(url, base);
+      const text = await resp.text();
+      let data = {};
+      try { data = text ? JSON.parse(text) : {}; } catch (_) { data = {error:text}; }
+      if (!resp.ok) {
+        const err = new Error(data.error || ('HTTP ' + resp.status));
+        err.status = resp.status;
+        throw err;
+      }
+      return data;
+    }
+    function showThinking(data){
+      $('thinking').classList.add('visible');
+      $('result').classList.remove('visible');
+      $('imageWrap').className = 'image-wrap';
+      $('resultState').textContent = '生成中';
+      $('waitText').textContent = data.wait_text || '马上开始';
+      $('queueText').textContent = data.wait_seconds > 0 ? '排队中' : '第 1 位';
+      $('elapsedText').textContent = '0 秒';
+      $('thinkingStage').textContent = '正在组织提示词和工作流';
+      startThinkingWords();
+      jobStartedAt = Date.now();
+    }
+    function updateThinking(data){
+      const started = Number(data.started_at || 0);
+      const elapsed = started ? Math.max(0, Date.now()/1000 - started) : Math.max(0, (Date.now() - jobStartedAt) / 1000);
+      $('elapsedText').textContent = secondsText(elapsed);
+      $('waitText').textContent = data.wait_text || '马上开始';
+      if (data.status === 'preparing') {
+        setThinkingPhrase('正在组织提示词和工作流');
+        $('queueText').textContent = '准备中';
+      } else if (data.status === 'running') {
+        $('queueText').textContent = '运行中';
+      } else {
+        setThinkingPhrase('任务已排队，酒狐在排队探头');
+        $('queueText').textContent = '等待中';
+      }
+    }
+    function renderInfo(data){
+      const info = data.info || {};
+      const safety = safetyOf(data);
+      const rows = [
+        ['耗时', secondsText(info.elapsed_seconds || data.elapsed_seconds || 0)],
+        ['尺寸', info.size || '-'],
+        ['角色', info.character || '-'],
+        ['LoRA', info.lora || '-'],
+        ['Seed', info.seed ?? '-'],
+        ['水印', (info.watermark_applied || data.watermark_applied) ? '已添加' : '未添加'],
+        ['审核', safety.audit_status ? (safety.sensitive ? '默认隐藏' : '已通过') : '-']
+      ];
+      $('infoGrid').innerHTML = rows.map(([k,v]) => `<div class="info"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('');
+      const raw = info.raw_prompt || data.raw_prompt || data.prompt || '';
+      const finalPrompt = info.final_prompt || data.prompt || '';
+      $('promptInfo').innerHTML = `<b>提示词</b><br>${esc(raw)}${finalPrompt && finalPrompt !== raw ? `<br><br><b>最终提示词</b><br>${esc(finalPrompt)}` : ''}`;
+    }
+    function renderResult(data){
+      currentResultData = data;
+      const imgUrl = data.image_url || (data.history && data.history.image_url) || '';
+      const downloadUrl = data.download_url || (data.history && data.history.download_url) || imgUrl;
+      const sensitive = isSensitive(data);
+      const safety = safetyOf(data);
+      $('thinking').classList.remove('visible');
+      stopThinkingWords();
+      $('result').classList.add('visible');
+      $('resultState').textContent = sensitive ? '已隐藏' : '完成';
+      $('resultImage').src = withCacheBust(imgUrl);
+      $('imageWrap').className = 'image-wrap' + (sensitive ? ' sensitive' : '');
+      const risk = percentText(safety.risk);
+      const threshold = percentText(safety.threshold);
+      $('maskText').textContent = safety.reason || safety.message || '这张图触发了出图审核提示，点击后显示原图。';
+      $('maskRisk').textContent = sensitive && (risk || threshold) ? `风险 ${risk || '-'} / 阈值 ${threshold || '-'}` : '';
+      setResultLinks(imgUrl, downloadUrl, sensitive, historyIdOf(data));
+      renderInfo(data.history || data);
+      if (sensitive) {
+        setStatus('图片已生成，审核提示默认隐藏，点击遮罩可显示。', 'warn');
+      } else {
+        setStatus('完成，用时 ' + secondsText(data.elapsed_seconds || 0) + '。', 'ok');
+      }
+    }
+    async function poll(jobId){
+      try {
+        const tpl = endpoint('draw_job') || '/api/draw/{job_id}';
+        const data = await api(tpl.replace('{job_id}', encodeURIComponent(jobId)), {method:'GET', headers:{}});
+        if (data.status === 'done') {
+          clearTimeout(pollTimer);
+          renderResult(data);
+          $('submitBtn').disabled = false;
+          loadHistory();
+          return;
+        }
+        if (data.status === 'error') {
+          clearTimeout(pollTimer);
+          $('thinking').classList.remove('visible');
+          stopThinkingWords();
+          $('resultState').textContent = '失败';
+          setStatus(data.error || '生成失败', 'error');
+          $('submitBtn').disabled = false;
+          return;
+        }
+        updateThinking(data);
+        pollTimer = setTimeout(() => poll(jobId), 1800);
+      } catch (err) {
+        clearTimeout(pollTimer);
+        $('thinking').classList.remove('visible');
+        stopThinkingWords();
+        $('resultState').textContent = '异常';
+        setStatus(err.message || '查询失败', 'error');
+        $('submitBtn').disabled = false;
+      }
+    }
+    async function loadHistory(){
+      try {
+        const historyUrl = (endpoint('draw_history') || '/api/draw/history') + '?limit=200';
+        const data = await api(historyUrl, {method:'GET', headers:{}});
+        const list = data.history || [];
+        historyCache = list;
+        $('drawCount').textContent = String(list.length);
+        $('hiddenCount').textContent = String(list.filter(item => isSensitive(item)).length);
+        if (!list.length) {
+          $('history').innerHTML = '<div class="empty">暂无记录</div>';
+          return;
+        }
+        $('history').innerHTML = list.map(item => {
+          const info = item.info || {};
+          const sensitive = isSensitive(item);
+          const time = item.created_at ? new Date(Number(item.created_at)).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}) : '';
+          const downloadHref = sensitive ? '#' : item.download_url;
+          return `<article class="history-card">
+            <div class="history-thumb${sensitive ? ' sensitive' : ''}">
+              <img src="${esc(withCacheBust(item.image_url))}" alt="">
+              <button class="history-lock" type="button" onclick="revealHistory(event,this)">显示</button>
+            </div>
+            <div class="history-meta">
+              <div class="history-prompt">${esc(item.raw_prompt || item.prompt || '无提示词')}</div>
+              <div class="history-sub">${esc(time)} · ${esc(info.size || '-')} · ${esc(secondsText(info.elapsed_seconds || 0))}</div>
+              <div class="history-actions">
+                <button class="mini-link${sensitive ? ' disabled' : ''}" type="button" data-id="${esc(item.id || '')}" data-href="${esc(item.image_url)}" onclick="openHistoryPreview(event,this)" ${sensitive ? 'disabled' : ''} aria-disabled="${sensitive ? 'true' : 'false'}">查看</button>
+                <a class="mini-link${sensitive ? ' disabled' : ''}" href="${esc(downloadHref)}" data-href="${esc(item.download_url)}" aria-disabled="${sensitive ? 'true' : 'false'}">下载</a>
+                <button class="mini-link favorite-control${sensitive ? ' disabled' : ''}" type="button" data-id="${esc(item.id || '')}" data-lockable="1" onclick="favoriteHistoryItem(event,this.dataset.id,this)" ${sensitive ? 'disabled' : ''} aria-disabled="${sensitive ? 'true' : 'false'}">收藏</button>
+              </div>
+            </div>
+          </article>`;
+        }).join('');
+      } catch (err) {
+        historyCache = [];
+        $('history').innerHTML = `<div class="empty">${esc(err.status === 401 ? '请先登录 Gallery' : err.message)}</div>`;
+      }
+    }
+    async function loadLoras(){
+      try {
+        const data = await api(endpoint('draw_loras') || '/api/draw/loras', {method:'GET', headers:{}});
+        const list = data.loras || [];
+        const stats = data.stats || {};
+        $('loraCount').textContent = String(stats.shown ?? list.length);
+        $('loraSub').textContent = `${data.family_label || data.family || '当前模型族'} · ${stats.shown ?? list.length}/${stats.usable ?? list.length}`;
+        if (data.live_warning && !data.live_checked) $('loraSub').textContent += ' · 未实时确认';
+        if (!list.length) {
+          $('loraList').innerHTML = '<div class="empty">暂无可用 LoRA</div>';
+          return;
+        }
+        $('loraList').innerHTML = list.map(item => {
+          const confirmed = item.live_available === true;
+          const name = item.display_name || item.character || item.key || '未命名角色';
+          const file = item.lora || '-';
+          return `<button class="lora-card" type="button" data-name="${esc(name)}" onclick="useLoraName(this.dataset.name)">
+            <div class="lora-status${confirmed ? '' : ' warn'}">${confirmed ? '可用' : '档案可用'}</div>
+            <div class="lora-name">${esc(name)}</div>
+            <div class="lora-file">${esc(file)}</div>
+          </button>`;
+        }).join('');
+      } catch (err) {
+        $('loraCount').textContent = '0';
+        $('loraSub').textContent = '读取失败';
+        $('loraList').innerHTML = `<div class="empty">${esc(err.status === 401 ? '请先登录 Gallery' : err.message)}</div>`;
+      }
+    }
+    function useLoraName(name){
+      const input = $('prompt');
+      const text = String(name || '').trim();
+      if (!text) return;
+      const current = input.value.trim();
+      input.value = current ? current + '，' + text : text;
+      input.focus();
+    }
+    async function ensureAuth(){
+      $('title').textContent = 'Draw';
+      $('brandName').textContent = (GALLERY_NAME || 'WineFox') + ' Draw';
+      try {
+        const meta = await api(endpoint('meta') || '/api/meta', {method:'GET', headers:{}});
+        if (meta && meta.endpoints) Object.assign(GALLERY_API.endpoints, meta.endpoints);
+        if (!meta.authenticated) {
+          setStatus('请先登录 Gallery。', 'warn');
+          $('submitBtn').disabled = true;
+          return;
+        }
+        setStatus('就绪', 'ok');
+        loadHistory();
+        loadLoras();
+      } catch (err) {
+        setStatus(err.status === 401 ? '请先登录 Gallery。' : err.message, 'warn');
+        $('submitBtn').disabled = true;
+      }
+    }
+    $('drawForm').addEventListener('submit', async event => {
+      event.preventDefault();
+      const prompt = ($('prompt').value || '').trim();
+      if (!prompt) {
+        setStatus('请填写提示词。', 'warn');
+        $('prompt').focus();
+        return;
+      }
+      clearTimeout(pollTimer);
+      $('submitBtn').disabled = true;
+      $('resultImage').removeAttribute('src');
+      currentResultData = null;
+      $('imageWrap').className = 'image-wrap';
+      setResultLinks('#', '#', false, '');
+      try {
+        const data = await api(endpoint('draw') || '/api/draw', {method:'POST', body:JSON.stringify({prompt})});
+        currentJob = data.job_id;
+        showThinking(data);
+        setStatus('已提交，预计等待 ' + (data.wait_text || '马上开始') + '。', 'warn');
+        poll(currentJob);
+      } catch (err) {
+        $('thinking').classList.remove('visible');
+        stopThinkingWords();
+        setStatus(err.message || '提交失败', 'error');
+        $('submitBtn').disabled = false;
+      }
+    });
+    $('revealBtn').addEventListener('click', revealSensitive);
+    $('openBtn').addEventListener('click', openCurrentPreview);
+    $('favoriteBtn').addEventListener('click', event => favoriteHistoryItem(event, historyIdOf(currentResultData), $('favoriteBtn')));
+    $('previewFavoriteBtn').addEventListener('click', event => favoriteHistoryItem(event, $('previewFavoriteBtn').dataset.id, $('previewFavoriteBtn')));
+    $('previewCloseBtn').addEventListener('click', closePreview);
+    $('previewOverlay').addEventListener('click', event => {
+      if (event.target === $('previewOverlay')) closePreview();
+    });
+    addEventListener('keydown', event => {
+      if (event.key === 'Escape' && !$('previewOverlay').classList.contains('hidden')) closePreview();
+    });
+    function initBackground(){
+      const canvas = $('bgCanvas');
+      const ctx = canvas.getContext('2d');
+      let points = [];
+      function resize(){
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        canvas.width = Math.floor(innerWidth * dpr);
+        canvas.height = Math.floor(innerHeight * dpr);
+        canvas.style.width = innerWidth + 'px';
+        canvas.style.height = innerHeight + 'px';
+        ctx.setTransform(dpr,0,0,dpr,0,0);
+        const count = Math.max(36, Math.min(90, Math.floor(innerWidth * innerHeight / 18000)));
+        points = Array.from({length:count}, () => ({
+          x:Math.random()*innerWidth,
+          y:Math.random()*innerHeight,
+          vx:(Math.random()-.5)*.28,
+          vy:(Math.random()-.5)*.28,
+          r:Math.random()*1.8+.7
+        }));
+      }
+      function frame(){
+        ctx.clearRect(0,0,innerWidth,innerHeight);
+        ctx.fillStyle='rgba(255,255,255,.16)';
+        ctx.strokeStyle='rgba(90,191,191,.09)';
+        for (const p of points) {
+          p.x += p.vx; p.y += p.vy;
+          if (p.x < 0 || p.x > innerWidth) p.vx *= -1;
+          if (p.y < 0 || p.y > innerHeight) p.vy *= -1;
+          ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2); ctx.fill();
+        }
+        for (let i=0;i<points.length;i++) for (let j=i+1;j<points.length;j++) {
+          const a=points[i], b=points[j], dx=a.x-b.x, dy=a.y-b.y, dist=Math.hypot(dx,dy);
+          if (dist < 118) {
+            ctx.globalAlpha = (1 - dist / 118) * .6;
+            ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
+          }
+        }
+        ctx.globalAlpha = 1;
+        requestAnimationFrame(frame);
+      }
+      resize(); addEventListener('resize', resize); frame();
+    }
+    initBackground();
+    initAgeGate();
+  </script>
+</body>
+</html>

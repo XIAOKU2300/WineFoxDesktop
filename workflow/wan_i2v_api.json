@@ -1,0 +1,208 @@
+{
+  "1": {
+    "inputs": {
+      "unet_name": "wan2.2_i2v_A14b_high_noise_lightx2v_4step_1030-Q4_K_M.gguf"
+    },
+    "class_type": "UnetLoaderGGUF",
+    "_meta": {
+      "title": "Wan2.2 I2V High Noise Q4"
+    }
+  },
+  "2": {
+    "inputs": {
+      "unet_name": "wan2.2_i2v_A14b_low_noise_lightx2v_4step-Q4_K_M.gguf"
+    },
+    "class_type": "UnetLoaderGGUF",
+    "_meta": {
+      "title": "Wan2.2 I2V Low Noise Q4"
+    }
+  },
+  "3": {
+    "inputs": {
+      "clip_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "type": "wan",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Wan T5 Text Encoder"
+    }
+  },
+  "4": {
+    "inputs": {
+      "vae_name": "Wan2.1_VAE.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Wan VAE"
+    }
+  },
+  "5": {
+    "inputs": {
+      "clip": [
+        "3",
+        0
+      ],
+      "text": "subtle natural motion, slow camera movement, hair gently swaying, looking at viewer"
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Positive Prompt"
+    }
+  },
+  "6": {
+    "inputs": {
+      "clip": [
+        "3",
+        0
+      ],
+      "text": "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Negative Prompt"
+    }
+  },
+  "7": {
+    "inputs": {
+      "image": "__ASTRBOT_WAN_I2V_SOURCE__"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "AstrBot Wan I2V Source"
+    }
+  },
+  "12": {
+    "inputs": {
+      "clip_name": "clip_vision_h.safetensors"
+    },
+    "class_type": "CLIPVisionLoader",
+    "_meta": {
+      "title": "Wan CLIP Vision (语义引导)"
+    }
+  },
+  "13": {
+    "inputs": {
+      "clip_vision": [
+        "12",
+        0
+      ],
+      "image": [
+        "7",
+        0
+      ],
+      "crop": "center"
+    },
+    "class_type": "CLIPVisionEncode",
+    "_meta": {
+      "title": "Encode Source Image (CLIP Vision)"
+    }
+  },
+  "8": {
+    "inputs": {
+      "positive": [
+        "5",
+        0
+      ],
+      "negative": [
+        "6",
+        0
+      ],
+      "vae": [
+        "4",
+        0
+      ],
+      "start_image": [
+        "7",
+        0
+      ],
+      "clip_vision_output": [
+        "13",
+        0
+      ],
+      "width": 832,
+      "height": 480,
+      "length": 81,
+      "batch_size": 1
+    },
+    "class_type": "WanImageToVideo",
+    "_meta": {
+      "title": "Wan Image To Video"
+    }
+  },
+  "9": {
+    "inputs": {
+      "model_high_noise": [
+        "1",
+        0
+      ],
+      "model_low_noise": [
+        "2",
+        0
+      ],
+      "positive": [
+        "8",
+        0
+      ],
+      "negative": [
+        "8",
+        1
+      ],
+      "latent_image": [
+        "8",
+        2
+      ],
+      "boundary": 0.9,
+      "seed": 0,
+      "steps": 4,
+      "cfg_high_noise": 3.0,
+      "cfg_low_noise": 3.0,
+      "sampler_name": "lcm",
+      "scheduler": "simple",
+      "sigma_shift": 5.0,
+      "denoise": 1.0
+    },
+    "class_type": "WanMoeKSampler",
+    "_meta": {
+      "title": "Wan MoE Sampler"
+    }
+  },
+  "10": {
+    "inputs": {
+      "samples": [
+        "9",
+        0
+      ],
+      "vae": [
+        "4",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "Decode Video Latents"
+    }
+  },
+  "11": {
+    "inputs": {
+      "images": [
+        "10",
+        0
+      ],
+      "frame_rate": 16,
+      "loop_count": 0,
+      "filename_prefix": "wan_i2v/jiuhu_wan_i2v",
+      "format": "video/h264-mp4",
+      "pix_fmt": "yuv420p",
+      "crf": 19,
+      "save_metadata": true,
+      "trim_to_audio": false,
+      "pingpong": false,
+      "save_output": true
+    },
+    "class_type": "VHS_VideoCombine",
+    "_meta": {
+      "title": "Save MP4"
+    }
+  }
+}

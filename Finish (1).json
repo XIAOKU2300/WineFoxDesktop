@@ -1,0 +1,224 @@
+{
+  "8": {
+    "inputs": {
+      "samples": [
+        "19",
+        0
+      ],
+      "vae": [
+        "15",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE解码"
+    }
+  },
+  "11": {
+    "inputs": {
+      "text": "masterpiece, best quality, absurdres, giantess, size difference, huge female tiny male, POV perspective from tiny boyfriend laying on bed, point of view shot looking up at giantess, extreme low angle, 1girl, cat girl girlfriend, white cat ears on top of head, soft white fur tufts inside ears, cat ear fluff, long flowing silver-white hair, shiny platinum hair, double braids flowing down, braided silver hair, hair ornaments, pearl hairpin, red ribbon in braids, small golden bell earring, black choker with gold embroidery pattern, tiny golden bell on choker, playful loving smirk looking down from above, giantess face visible far above behind giant foot, green and purple gradient jewel-like eyes, slit pupils, small cute fangs visible, blushing cheeks giggling, girlfriend teasing expression, wearing oversized boyfriend hoodie slipping off one shoulder, bare shoulder and collarbone visible, giant cat paw socks, paw socks with pink toe beans print on bottom, paw pad socks, cat paw print thigh highs, giant paw sock sole filling most of frame, pink paw pad details on sock sole, cat toe beans pattern, sock fabric knit texture visible, paw sock pressing gently down toward camera, sock about to squash tiny boyfriend playfully, tiny boyfriend arms raised trying to catch giant paw sock foot, massive size contrast, soft fluffy bed duvet beneath, pastel pink bedsheets, pillow giant in background, fairy lights on headboard bokeh, cozy warm bedroom lighting, warm golden glow, cat-shaped hearts floating in air, pink kitty hearts near giantess face, \"GAO\" text embroidered on paw sock, paw print shadows on bedsheet, giant cat tail curling in background, soft atmosphere, loving gentle femdom, girlfriend playfully stepping on boyfriend dynamic, 2D anime illustration style, soft painterly rendering, Pixiv illustration quality, warm color palette, highly detailed sock fabric texture, paw pad detail, extreme scale contrast, intimate cozy giantess POV",
+      "clip": [
+        "100",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP文本编码器"
+    }
+  },
+  "12": {
+    "inputs": {
+      "text": "worst quality, low quality, score_1, score_2, score_3, artist name, blurry, jpeg artifacts,\nbad anatomy, bad hands, bad fingers, malformed hands, poorly drawn hands, extra fingers, missing fingers, fused fingers, broken fingers, too many fingers, long fingers, dislocated fingers,\nextra arms, missing arms, deformed arms, twisted arms, unnatural pose,\nugly, deformed, duplicate, multiple girls, text, watermark, logo, signature, cropped, out of frame, messy background, dark atmosphere, nsfw, explicit, nude",
+      "clip": [
+        "100",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP文本编码器"
+    }
+  },
+  "15": {
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "VAE加载器"
+    }
+  },
+  "19": {
+    "inputs": {
+      "seed": 826759515445902,
+      "steps": 35,
+      "cfg": 5,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1,
+      "model": [
+        "47",
+        0
+      ],
+      "positive": [
+        "11",
+        0
+      ],
+      "negative": [
+        "12",
+        0
+      ],
+      "latent_image": [
+        "28",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "K采样器"
+    }
+  },
+  "28": {
+    "inputs": {
+      "width": [
+        "63",
+        0
+      ],
+      "height": [
+        "64",
+        0
+      ],
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": {
+      "title": "空Latent"
+    }
+  },
+  "44": {
+    "inputs": {
+      "unet_name": "anima_baseV10.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "UNET加载器"
+    }
+  },
+  "45": {
+    "inputs": {
+      "clip_name": "qwen_3_06b_base.safetensors",
+      "type": "stable_diffusion",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "CLIP加载器"
+    }
+  },
+  "47": {
+    "inputs": {
+      "shift": 3,
+      "model": [
+        "100",
+        0
+      ]
+    },
+    "class_type": "ModelSamplingAuraFlow",
+    "_meta": {
+      "title": "模型采样算法AuraFlow"
+    }
+  },
+  "63": {
+    "inputs": {
+      "value": 1024
+    },
+    "class_type": "PrimitiveInt",
+    "_meta": {
+      "title": "宽"
+    }
+  },
+  "64": {
+    "inputs": {
+      "value": 1536
+    },
+    "class_type": "PrimitiveInt",
+    "_meta": {
+      "title": "高"
+    }
+  },
+  "66": {
+    "inputs": {
+      "filename_prefix": "Trst",
+      "images": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "保存图像"
+    }
+  },
+  "86": {
+    "inputs": {
+      "text_x": 10,
+      "text_y": 2,
+      "height": 48,
+      "font_size": 32,
+      "font_color": "white",
+      "label_color": "black",
+      "font": "FreeMono.ttf",
+      "text": "Anima",
+      "direction": "up",
+      "image": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "AddLabel",
+    "_meta": {
+      "title": "添加标签"
+    }
+  },
+  "99": {
+    "inputs": {
+      "lora_name": "anima-preview-3-masterpieces-v5.safetensors",
+      "strength_model": 0,
+      "strength_clip": 0,
+      "model": [
+        "44",
+        0
+      ],
+      "clip": [
+        "45",
+        0
+      ]
+    },
+    "class_type": "LoraLoader",
+    "_meta": {
+      "title": "LoRA 1 - 角色（插件控制，配置 lora_node_id=99）"
+    }
+  },
+  "100": {
+    "inputs": {
+      "lora_name": "anima-preview-3-masterpieces-v5.safetensors",
+      "strength_model": 0.35,
+      "strength_clip": 0.35,
+      "model": [
+        "99",
+        0
+      ],
+      "clip": [
+        "99",
+        1
+      ]
+    },
+    "class_type": "LoraLoader",
+    "_meta": {
+      "title": "LoRA 2 - 固定质量/风格（低强度）"
+    }
+  }
+}
