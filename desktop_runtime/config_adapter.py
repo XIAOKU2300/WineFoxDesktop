@@ -18,7 +18,15 @@ SECRET_NAMES = (
     "comfyui_username",
     "comfyui_custom_header",
     "ai_api_key",
+    "vision_api_key",
 )
+
+_PROVIDER_FIELDS = {
+    "ai_provider": frozenset({"enabled", "base_url", "model", "utility_model", "timeout_seconds"}),
+    "vision_provider": frozenset(
+        {"enabled", "follow_text_provider", "base_url", "model", "timeout_seconds", "max_tokens"}
+    ),
+}
 
 
 def _merge(target: dict[str, Any], patch: dict[str, Any]) -> None:
@@ -27,6 +35,27 @@ def _merge(target: dict[str, Any], patch: dict[str, Any]) -> None:
             _merge(target[key], value)
         else:
             target[key] = deepcopy(value)
+
+
+def _provider_patch(name: str, value: dict[str, Any]) -> dict[str, Any]:
+    """Return only public provider fields; credentials always use SecretStore."""
+
+    allowed = _PROVIDER_FIELDS[name]
+    cleaned: dict[str, Any] = {}
+    for key, item in value.items():
+        if key not in allowed:
+            continue
+        if key in {"enabled", "follow_text_provider"}:
+            cleaned[key] = bool(item)
+        elif key in {"timeout_seconds", "max_tokens"}:
+            try:
+                number = int(item)
+            except (TypeError, ValueError):
+                continue
+            cleaned[key] = max(5, min(number, 180)) if key == "timeout_seconds" else max(128, min(number, 4096))
+        else:
+            cleaned[key] = str(item or "").strip()
+    return cleaned
 
 
 class DesktopConfigAdapter:
@@ -50,7 +79,15 @@ class DesktopConfigAdapter:
                 "base_url": "https://api.openai.com/v1",
                 "model": "gpt-4.1-mini",
                 "utility_model": "gpt-4.1-mini",
-                "vision_model": "gpt-4.1-mini",
+                "timeout_seconds": 60,
+            },
+            "vision_provider": {
+                "enabled": False,
+                "follow_text_provider": True,
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4.1-mini",
+                "timeout_seconds": 90,
+                "max_tokens": 700,
             },
             "defaults": {"family": "illustrious", "workflow": "workflow_api.json", "width": 832, "height": 1216},
             "wizard": {"completed": False},
@@ -65,7 +102,19 @@ class DesktopConfigAdapter:
 
             value = json.loads(self._desktop_path.read_text(encoding="utf-8"))
             if isinstance(value, dict):
-                _merge(self._desktop, value)
+                public_value = {key: item for key, item in value.items() if key not in _PROVIDER_FIELDS}
+                _merge(self._desktop, public_value)
+                for name in _PROVIDER_FIELDS:
+                    provider = value.get(name)
+                    if isinstance(provider, dict):
+                        _merge(self._desktop[name], _provider_patch(name, provider))
+
+                # Older desktop builds placed the visual model inside ai_provider.
+                # Preserve that preference while moving it into the separate contract.
+                if not isinstance(value.get("vision_provider"), dict):
+                    legacy = value.get("ai_provider")
+                    if isinstance(legacy, dict) and legacy.get("vision_model"):
+                        self._desktop["vision_provider"]["model"] = str(legacy["vision_model"])
         except (OSError, ValueError):
             # A damaged UI preference file must not make connection settings unusable.
             pass
@@ -144,10 +193,14 @@ class DesktopConfigAdapter:
                     core_patch.setdefault("size", {}).update(size_patch)
                 if "workflow" in defaults:
                     core_patch.setdefault("workflows", {})["active"] = defaults["workflow"]
-            for key in ("auth", "tls", "ai_provider", "wizard"):
+            for key in ("auth", "tls", "wizard"):
                 value = patch.get(key)
                 if isinstance(value, dict):
                     _merge(self._desktop.setdefault(key, {}), value)
+            for key in _PROVIDER_FIELDS:
+                value = patch.get(key)
+                if isinstance(value, dict):
+                    _merge(self._desktop[key], _provider_patch(key, value))
             tls = self._desktop.get("tls", {})
             if isinstance(tls, dict) and "verify" in tls:
                 core_patch.setdefault("comfyui", {})["ssl_verify"] = bool(tls["verify"])

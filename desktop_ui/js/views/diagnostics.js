@@ -19,7 +19,6 @@ export class DiagnosticsView {
     store.set("diagnostics", null);
     if (prefetched) {
       this.data = prefetched;
-      this.comfy = store.get("comfyui") || null;
       this.renderBody();
     } else {
       await this.load();
@@ -51,10 +50,7 @@ export class DiagnosticsView {
     if (!body) return;
     body.replaceChildren(loadingState("正在汇集诊断信息"));
     try {
-      const [diagnostics, comfy] = await Promise.allSettled([api.diagnostics(), api.comfyui()]);
-      if (diagnostics.status === "rejected") throw diagnostics.reason;
-      this.data = diagnostics.value;
-      this.comfy = comfy.status === "fulfilled" ? comfy.value : store.get("comfyui") || null;
+      this.data = await api.diagnostics();
       this.error = null;
     } catch (e) {
       this.data = null;
@@ -81,15 +77,53 @@ export class DiagnosticsView {
     const plugin = d.plugin || {};
     const cf = d.comfyui || {};
     const nodes = d.nodes || {};
-    const cfg = d.config_health || [];
+    const catalog = d.catalog || {};
+    const cfg = Array.isArray(d.config_health) ? d.config_health : [];
+    const failures = Array.isArray(d.failures) ? d.failures : [];
+    const connected = Boolean(cf.connected ?? cf.online ?? cf.status === "ok");
+    const workflowReady = catalog.compatible_workflows == null
+      ? `${catalog.valid_workflows ?? 0} / ${catalog.workflows ?? 0} 个结构有效`
+      : `${catalog.compatible_workflows} / ${catalog.workflows ?? 0} 个可用`;
 
     const grid = el("div", { class: "diag-grid" }, [
       this.item("WineFox 应用", esc(app.name || "WineFox Desktop"), esc(app.version || "—"), esc(app.build || "")),
-      this.item("插件版本", esc(plugin.name || "ComfyUI Pro"), esc(plugin.version || "—"), "AstrBot 插件"),
-      this.item("ComfyUI 服务", cf.connected ? [el("span", { class: "badge ok" }, "已连接"), el("span", { class: "mono" }, esc(cf.version || ""))] : el("span", { class: "badge danger" }, "未连接"), esc(cf.url ? urlHost(cf.url) : "—"), "服务地址仅显示主机名"),
-      this.item("自定义节点", nodes.total != null ? esc(`${nodes.total} 个`) : "—", nodes.missing?.length ? el("span", { class: "badge warn" }, esc(`${nodes.missing.length} 个缺失`)) : el("span", { class: "badge ok" }, "全部就绪"), "缺失节点：" + (nodes.missing?.join("、") || "无")),
+      this.item("源插件版本", esc(plugin.version || "—"), esc(plugin.name || "ComfyUI Pro"), esc(plugin.runtime || "桌面适配")),
+      this.item(
+        "ComfyUI 服务",
+        connected
+          ? [el("span", { class: "badge ok" }, "已连接"), cf.version ? el("span", { class: "mono" }, esc(cf.version)) : null]
+          : el("span", { class: "badge danger" }, "未连接"),
+        esc(cf.url ? urlHost(cf.url) : "未配置地址"),
+        cf.latency_ms != null ? esc(`检测耗时 ${Math.round(cf.latency_ms)} ms`) : esc(cf.error?.message || "等待连接检测"),
+      ),
+      this.item(
+        "ComfyUI 节点",
+        nodes.total != null ? esc(`${nodes.total} 个`) : "未取得",
+        nodes.missing?.length
+          ? el("span", { class: "badge warn" }, esc(`${nodes.missing.length} 个缺失`))
+          : el("span", { class: "badge ok" }, "无缺失项"),
+        esc(nodes.detail || "节点数据来自最近一次连接检测"),
+      ),
+      this.item("工作流", esc(workflowReady), esc(`${catalog.valid_workflows ?? 0} 个结构校验通过`), "仅统计图像工作流"),
+      this.item("模型与 LoRA", esc(`${catalog.checkpoints ?? 0} / ${catalog.loras ?? 0}`), "checkpoint / LoRA", esc(`已载入 ${catalog.lora_profiles ?? 0} 份别名档案`)),
     ]);
     body.append(grid);
+
+    if (failures.length) {
+      body.append(
+        el("div", { class: "section-card" }, [
+          el("div", { class: "sec-head" }, [el("h3", {}, "需要处理")]),
+          el("div", { class: "sec-body stack-2" }, failures.map((failure) =>
+            el("div", { class: "model-row" }, [
+              el("div", { class: "grow" }, [
+                el("div", { class: "m-name" }, esc(failure.message || failure.code || "诊断项异常")),
+                failure.action ? el("div", { class: "m-sub" }, esc(failure.action)) : null,
+              ]),
+              el("span", { class: `badge ${failure.status === "fail" ? "danger" : "warn"}` }, esc(failure.code || "注意")),
+            ])),
+        ]),
+      );
+    }
 
     // 配置健康
     body.append(
@@ -117,8 +151,8 @@ export class DiagnosticsView {
       );
     }
 
-    // 自定义节点明细（来自 /comfyui）
-    const customNodes = this.comfy?.custom_nodes;
+    // 节点明细来自同一份诊断快照，避免额外触发一次完整 ComfyUI 探测。
+    const customNodes = Array.isArray(nodes.items) ? nodes.items : [];
     if (customNodes?.length) {
       body.append(
         el("div", { class: "section-card" }, [
@@ -133,24 +167,25 @@ export class DiagnosticsView {
     }
 
     // 最近错误 / 日志摘要
-    if (d.log_tail?.lines?.length) {
-      body.append(
-        el("div", { class: "section-card" }, [
-          el("div", { class: "sec-head" }, [el("h3", {}, "日志摘要"), el("span", { class: "text-xs text-muted" }, esc(d.log_tail.truncated ? "（已截断）" : ""))]),
-          el("div", { class: "sec-body" }, [
-            el("div", { class: "log-box", tabindex: "0", "aria-label": "日志摘要" }, d.log_tail.lines.map((l) => this.logLine(l))),
-          ]),
-        ]),
-      );
-    }
+    const logTail = d.log_tail || {};
+    body.append(
+      el("div", { class: "section-card" }, [
+        el("div", { class: "sec-head" }, [el("h3", {}, "日志摘要"), el("span", { class: "text-xs text-muted" }, esc(logTail.truncated ? "已截断" : "已脱敏"))]),
+        el("div", { class: "sec-body" }, logTail.lines?.length
+          ? el("div", { class: "log-box", tabindex: "0", "aria-label": "日志摘要" }, logTail.lines.map((line) => this.logLine(line)))
+          : el("p", { class: "text-sm text-muted" }, esc(logTail.detail || "当前还没有可读取的运行日志。"))),
+      ]),
+    );
   }
 
   item(label, value, sub, hint) {
-    return el("div", { class: "card card-pad diag-item" }, [
+    const children = [
       el("div", { class: "d-label" }, esc(label)),
       el("div", { class: "d-value" }, value),
-      el("div", { class: "d-sub" }, hint ? esc(String(hint)) : sub ? esc(String(sub)) : ""),
-    ]);
+    ];
+    if (sub) children.push(el("div", { class: "d-sub" }, sub));
+    if (hint) children.push(el("div", { class: "d-sub" }, hint));
+    return el("div", { class: "card card-pad diag-item" }, children);
   }
 
   logLine(line) {

@@ -3,10 +3,64 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Mapping
 from urllib.parse import urlparse
 
 import aiohttp
+
+
+@dataclass(frozen=True)
+class ResolvedAIProvider:
+    """Non-sensitive endpoint selection plus the exact SecretStore entry to use."""
+
+    enabled: bool
+    base_url: str
+    model: str
+    timeout_seconds: float
+    secret_name: str
+    source: str
+
+
+def resolve_provider(settings: Mapping[str, Any], purpose: str = "text") -> ResolvedAIProvider:
+    """Resolve text or vision settings without ever mixing independent credentials.
+
+    Vision may explicitly follow the text endpoint. In that mode sharing the text
+    secret is intentional; otherwise the resolver always selects ``vision_api_key``.
+    """
+
+    if purpose not in {"text", "vision"}:
+        raise ValueError("purpose must be 'text' or 'vision'")
+    text = settings.get("ai_provider")
+    text = text if isinstance(text, Mapping) else {}
+    if purpose == "text":
+        selected = text
+        source = "ai_provider"
+        secret_name = "ai_api_key"
+        enabled = bool(selected.get("enabled"))
+        timeout = selected.get("timeout_seconds", 60)
+    else:
+        vision = settings.get("vision_provider")
+        vision = vision if isinstance(vision, Mapping) else {}
+        follows_text = bool(vision.get("follow_text_provider", True))
+        selected = text if follows_text else vision
+        source = "ai_provider" if follows_text else "vision_provider"
+        secret_name = "ai_api_key" if follows_text else "vision_api_key"
+        enabled = bool(vision.get("enabled"))
+        # Image requests keep their own timeout even when endpoint credentials follow text.
+        timeout = vision.get("timeout_seconds", 90)
+    try:
+        timeout_seconds = max(5.0, min(float(timeout), 180.0))
+    except (TypeError, ValueError):
+        timeout_seconds = 90.0 if purpose == "vision" else 60.0
+    return ResolvedAIProvider(
+        enabled=enabled,
+        base_url=str(selected.get("base_url") or "").strip(),
+        model=str(selected.get("model") or "").strip(),
+        timeout_seconds=timeout_seconds,
+        secret_name=secret_name,
+        source=source,
+    )
 
 
 class OpenAICompatibleLLMClient:

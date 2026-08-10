@@ -203,8 +203,8 @@ export class SettingsView {
   }
 
   setSecretDialog(key) {
-    const label = ({ comfyui_api_key: "ComfyUI API Key", ai_api_key: "AI API Key", comfyui_client_cert: "客户端证书", tls_ca_cert: "自定义 CA 证书" })[key] || key;
-    const isApiKey = key === "comfyui_api_key" || key === "ai_api_key";
+    const label = ({ comfyui_api_key: "ComfyUI API Key", ai_api_key: "提示词 AI API Key", vision_api_key: "视觉理解 AI API Key", comfyui_client_cert: "客户端证书", tls_ca_cert: "自定义 CA 证书" })[key] || key;
+    const isApiKey = key === "comfyui_api_key" || key === "ai_api_key" || key === "vision_api_key";
     const overlay = el("div", { class: "overlay", role: "dialog", "aria-modal": "true", "aria-labelledby": "sk-title", "aria-describedby": "sk-desc" });
     overlay.append(el("div", { class: "modal" }, [
       el("div", { class: "modal-head" }, [el("h3", { id: "sk-title" }, esc(`设置 ${label}`)), el("button", { class: "icon-btn", type: "button", "aria-label": "关闭" }, [ic("x")])]),
@@ -266,10 +266,12 @@ export class SettingsView {
   /* ---------- AI 提供商 ---------- */
   sec_ai_provider() {
     const provider = this.settings?.ai_provider || {};
+    const vision = this.settings?.vision_provider || {};
+    const followsText = vision.follow_text_provider !== false;
     return [
       el("div", { class: "section-card" }, [
         el("div", { class: "sec-head" }, [
-          el("h3", {}, "OpenAI 兼容接口"),
+          el("h3", {}, "提示词 AI"),
           el("span", { class: "badge " + (provider.enabled ? "ok" : "") }, provider.enabled ? "已启用" : "未启用"),
         ]),
         el("div", { class: "sec-body" }, [
@@ -298,15 +300,61 @@ export class SettingsView {
             ]),
           ]),
           el("div", { class: "field" }, [
-            el("label", { for: "s-ai-vision-model" }, "视觉模型"),
-            this.input("s-ai-vision-model", provider.vision_model || "", { placeholder: "例如 gpt-4.1", autocomplete: "off", spellcheck: "false" }),
-            el("span", { class: "hint" }, "用于理解图生图参考图；可与主模型相同。"),
+            el("label", { for: "s-ai-timeout" }, "请求超时（秒）"),
+            this.input("s-ai-timeout", provider.timeout_seconds ?? 60, { type: "number", min: "5", max: "180", step: "1" }),
           ]),
           el("div", { class: "divider" }),
           el("div", { class: "field" }, [
             el("label", { id: "s-ai-key-label" }, "API Key"),
             el("div", { "aria-labelledby": "s-ai-key-label" }, this.secretRows([
-              { key: "ai_api_key", label: "AI API Key", desc: "仅保存在系统密钥存储中，不会回显" },
+              { key: "ai_api_key", label: "提示词 AI API Key", desc: "仅用于提示词优化和文本任务" },
+            ])),
+          ]),
+        ]),
+      ]),
+      el("div", { class: "section-card" }, [
+        el("div", { class: "sec-head" }, [
+          el("h3", {}, "视觉理解 AI"),
+          el("span", { class: "badge " + (vision.enabled ? "ok" : "") }, vision.enabled ? "已启用" : "未启用"),
+        ]),
+        el("div", { class: "sec-body" }, [
+          el("label", { class: "check" }, [
+            el("input", { type: "checkbox", id: "s-vision-enabled", checked: !!vision.enabled }),
+            el("span", { class: "box" }, [ic("check")]),
+            el("span", {}, esc("启用参考图视觉理解")),
+          ]),
+          el("label", { class: "check" }, [
+            el("input", { type: "checkbox", id: "s-vision-follow", checked: followsText }),
+            el("span", { class: "box" }, [ic("check")]),
+            el("span", {}, esc("跟随提示词 AI 的接口、模型和密钥")),
+          ]),
+          el("div", { class: "notice info" }, [
+            ic("info"),
+            el("span", { id: "s-vision-follow-note" }, followsText
+              ? "当前沿用提示词 AI 的 Base URL、主模型和 API Key；视觉请求仍使用下方独立超时。"
+              : "当前使用独立视觉接口和 vision_api_key，不会读取提示词 AI 的密钥。"),
+          ]),
+          el("div", { class: "field" }, [
+            el("label", { for: "s-vision-base-url" }, "视觉 Base URL"),
+            this.input("s-vision-base-url", vision.base_url || "", {
+              type: "url", placeholder: "https://api.openai.com/v1", autocomplete: "url", spellcheck: "false", disabled: followsText,
+            }),
+          ]),
+          el("div", { class: "form-row" }, [
+            el("div", { class: "field" }, [
+              el("label", { for: "s-vision-model" }, "视觉模型"),
+              this.input("s-vision-model", vision.model || "", { placeholder: "例如 gpt-4.1", autocomplete: "off", spellcheck: "false", disabled: followsText }),
+            ]),
+            el("div", { class: "field" }, [
+              el("label", { for: "s-vision-timeout" }, "请求超时（秒）"),
+              this.input("s-vision-timeout", vision.timeout_seconds ?? 90, { type: "number", min: "5", max: "180", step: "1" }),
+            ]),
+          ]),
+          el("div", { class: "divider" }),
+          el("div", { class: "field" }, [
+            el("label", { id: "s-vision-key-label" }, "独立 API Key"),
+            el("div", { "aria-labelledby": "s-vision-key-label" }, this.secretRows([
+              { key: "vision_api_key", label: "视觉理解 AI API Key", desc: "仅在关闭“跟随提示词 AI”时使用" },
             ])),
           ]),
         ]),
@@ -396,6 +444,16 @@ export class SettingsView {
         const sub = $("#s-tls-sub");
         if (sub) sub.hidden = !e.target.checked;
       }
+      if (e.target.id === "s-vision-follow") {
+        ["s-vision-base-url", "s-vision-model"].forEach((id) => {
+          const input = body.querySelector("#" + id);
+          if (input) input.disabled = e.target.checked;
+        });
+        const note = body.querySelector("#s-vision-follow-note");
+        if (note) note.textContent = e.target.checked
+          ? "当前沿用提示词 AI 的 Base URL、主模型和 API Key；视觉请求仍使用下方独立超时。"
+          : "当前使用独立视觉接口和 vision_api_key，不会读取提示词 AI 的密钥。";
+      }
     });
     body.addEventListener("click", (e) => {
       if (e.target.closest("#s-test")) {
@@ -474,7 +532,31 @@ export class SettingsView {
         base_url: baseUrl,
         model: val("s-ai-model")?.trim() || "",
         utility_model: val("s-ai-utility-model")?.trim() || "",
-        vision_model: val("s-ai-vision-model")?.trim() || "",
+        timeout_seconds: Math.max(5, Math.min(parseInt(val("s-ai-timeout"), 10) || 60, 180)),
+      };
+      const followText = checked("s-vision-follow");
+      const visionBaseUrl = val("s-vision-base-url")?.trim() || "";
+      if (!followText && checked("s-vision-enabled") && !visionBaseUrl) {
+        toast("启用独立视觉理解前，请填写视觉 Base URL。", "warn");
+        body.querySelector("#s-vision-base-url")?.focus();
+        return;
+      }
+      if (!followText && visionBaseUrl) {
+        try {
+          const parsed = new URL(visionBaseUrl);
+          if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("unsupported protocol");
+        } catch {
+          toast("视觉 Base URL 必须是有效的 HTTP 或 HTTPS 地址。", "warn");
+          body.querySelector("#s-vision-base-url")?.focus();
+          return;
+        }
+      }
+      patch.vision_provider = {
+        enabled: checked("s-vision-enabled"),
+        follow_text_provider: followText,
+        base_url: visionBaseUrl,
+        model: val("s-vision-model")?.trim() || "",
+        timeout_seconds: Math.max(5, Math.min(parseInt(val("s-vision-timeout"), 10) || 90, 180)),
       };
     } else if (section === "defaults") {
       patch.defaults = {

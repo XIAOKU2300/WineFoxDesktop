@@ -417,11 +417,91 @@ async def handle_delete_favorite(request: web.Request) -> web.Response:
 
 # ---------------- diagnostics ----------------
 
+def _normalize_diagnostics_contract(result: Any) -> dict[str, Any]:
+    """Keep the public diagnostics payload stable across engine adapters."""
+    if not isinstance(result, dict):
+        raise AppError(500, "invalid_engine_result", "诊断引擎返回了无效数据")
+    payload = dict(result)
+    version = str(payload.get("version") or VERSION)
+
+    app = payload.get("app") if isinstance(payload.get("app"), dict) else {}
+    payload["app"] = {
+        **app,
+        "name": str(app.get("name") or "WineFox Desktop"),
+        "version": str(app.get("version") or version),
+        "build": str(app.get("build") or "desktop"),
+    }
+    plugin = payload.get("plugin") if isinstance(payload.get("plugin"), dict) else {}
+    payload["plugin"] = {
+        **plugin,
+        "name": str(plugin.get("name") or "astrbot_plugin_comfyui_pro_UltraPlusMax"),
+        "version": str(plugin.get("version") or version),
+    }
+
+    comfy = payload.get("comfyui") if isinstance(payload.get("comfyui"), dict) else {}
+    connected = bool(comfy.get("connected", comfy.get("online", comfy.get("status") == "ok")))
+    payload["comfyui"] = {
+        "connected": connected,
+        "status": "ok" if connected else str(comfy.get("status") or "fail"),
+        "url": str(comfy.get("url") or comfy.get("server") or ""),
+        "version": str(comfy.get("version") or ""),
+        "latency_ms": comfy.get("latency_ms"),
+        "queue": comfy.get("queue") if isinstance(comfy.get("queue"), dict) else {},
+        "error": comfy.get("error"),
+    }
+
+    nodes = payload.get("nodes")
+    if isinstance(nodes, list):
+        nodes = {"total": len(nodes), "items": nodes, "missing": []}
+    elif not isinstance(nodes, dict):
+        nodes = {}
+    missing = nodes.get("missing")
+    if not isinstance(missing, list):
+        missing = list(payload.get("missing_nodes") or [])
+    payload["nodes"] = {
+        **nodes,
+        "total": nodes.get("total"),
+        "missing": missing,
+        "status": str(nodes.get("status") or ("warn" if missing else "ok")),
+        "detail": str(nodes.get("detail") or ""),
+    }
+
+    catalog = payload.get("catalog") if isinstance(payload.get("catalog"), dict) else {}
+    payload["catalog"] = {
+        **catalog,
+        "workflows": int(catalog.get("workflows") or 0),
+        "valid_workflows": int(catalog.get("valid_workflows") or 0),
+        "compatible_workflows": catalog.get("compatible_workflows"),
+        "checkpoints": int(catalog.get("checkpoints") or 0),
+        "loras": int(catalog.get("loras") or 0),
+        "lora_profiles": int(catalog.get("lora_profiles") or 0),
+        "status": str(catalog.get("status") or "unknown"),
+    }
+
+    health = payload.get("config_health")
+    if not isinstance(health, list):
+        health = payload.get("checks") if isinstance(payload.get("checks"), list) else []
+    payload["config_health"] = [item for item in health if isinstance(item, dict)]
+    failures = payload.get("failures")
+    if not isinstance(failures, list):
+        failures = payload.get("errors") if isinstance(payload.get("errors"), list) else []
+    payload["failures"] = [item for item in failures if isinstance(item, dict)]
+    log_tail = payload.get("log_tail") if isinstance(payload.get("log_tail"), dict) else {}
+    lines = log_tail.get("lines") if isinstance(log_tail.get("lines"), list) else []
+    payload["log_tail"] = {
+        "available": bool(log_tail.get("available", lines)),
+        "lines": [str(line) for line in lines],
+        "truncated": bool(log_tail.get("truncated")),
+        "detail": str(log_tail.get("detail") or ("暂无运行日志" if not lines else "")),
+    }
+    return payload
+
+
 async def handle_diagnostics(request: web.Request) -> web.Response:
     engine = _ctx(request).get("engine")
     if engine is None:
         raise AppError(503, "core_engine_not_configured", "核心引擎未注入")
-    result = await engine.diagnostics()
+    result = _normalize_diagnostics_contract(await engine.diagnostics())
     return _json(result)
 
 
@@ -429,7 +509,7 @@ async def handle_diagnostics_export(request: web.Request) -> web.Response:
     engine = _ctx(request).get("engine")
     if engine is None:
         raise AppError(503, "core_engine_not_configured", "核心引擎未注入")
-    result = await engine.diagnostics()
+    result = _normalize_diagnostics_contract(await engine.diagnostics())
     return _json({
         "filename": "winefox-diagnostics.json",
         "content": json.dumps(result, ensure_ascii=False, indent=2),

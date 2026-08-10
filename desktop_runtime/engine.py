@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import logging
 import mimetypes
+import re
 import time
 import uuid
 from pathlib import Path
 from typing import Any, Mapping
 
+from desktop_backend import VERSION
 from desktop_backend.errors import AppError
 from desktop_backend.models import HistoryEntry, ImageData, JobRecord
 from winefox_core.comfyui_executor import ComfyUIExecutor
@@ -23,7 +26,7 @@ from winefox_core.lora_service import LoraService, normalize_lora_key
 from winefox_core.workflow_service import WorkflowEntry, WorkflowService
 
 from .config_adapter import DesktopConfigAdapter
-from .llm_client import OpenAICompatibleLLMClient
+from .llm_client import OpenAICompatibleLLMClient, resolve_provider
 from .lora_profiles import load_lora_profiles, merge_prompt_tags, resolve_prompt_loras
 from .upload_store import FileUploadStore
 from .workflow_builder import prepare_workflow
@@ -31,6 +34,15 @@ from .workflow_builder import prepare_workflow
 logger = logging.getLogger("winefox.runtime.engine")
 
 TERMINAL_STATES = {"completed", "failed", "cancelled", "detached"}
+
+_WINDOWS_PATH_RE = re.compile(
+    r"(?i)(?:\"[a-z]:[\\/][^\"\r\n]+\"|(?:[a-z]:[\\/]|\\\\)[^\s,;\"<>|?*]+)"
+)
+_SECRET_VALUE_RE = re.compile(
+    r"(?i)\b(authorization|api[_-]?key|token|secret|password|passwd|bearer)"
+    r"(\s*[:=]\s*)[^\s,;]+"
+)
+_LONG_SECRET_RE = re.compile(r"\b(?:[0-9a-fA-F]{32,}|[A-Za-z0-9+/]{40,}={0,2})\b")
 
 
 def _iso_to_epoch(value: str | None) -> float:
@@ -42,6 +54,25 @@ def _iso_to_epoch(value: str | None) -> float:
         return datetime.fromisoformat(value).timestamp()
     except ValueError:
         return time.time()
+
+
+def _redact_diagnostic_text(value: Any) -> str:
+    """Remove secrets and local absolute paths from diagnostic text."""
+    text = str(value or "")
+    text = _SECRET_VALUE_RE.sub(lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]", text)
+    text = _LONG_SECRET_RE.sub("[REDACTED]", text)
+    return _WINDOWS_PATH_RE.sub("[LOCAL_PATH]", text)
+
+
+def _comfyui_version(system_stats: Mapping[str, Any] | None) -> str:
+    stats = system_stats if isinstance(system_stats, Mapping) else {}
+    system = stats.get("system") if isinstance(stats.get("system"), Mapping) else {}
+    for source in (stats, system):
+        for key in ("comfyui_version", "version", "required_frontend_version"):
+            value = source.get(key)
+            if value:
+                return str(value)
+    return ""
 
 
 class DesktopEngine:
@@ -154,20 +185,45 @@ class DesktopEngine:
                 self._probe_task = None
 
     async def _probe_comfyui_once(self) -> dict[str, Any]:
+        connection: ComfyUIServerConfig | None = None
         try:
-            async with ComfyUIExecutor(self._connection_config()) as executor:
+            connection = self._connection_config()
+            async with ComfyUIExecutor(connection) as executor:
                 probe = await executor.probe()
+            installed_nodes = {str(name).lower() for name in probe.object_info}
+            image_workflows = [
+                entry for entry in self.workflows.all_entries()
+                if entry.mode != "video" and entry.path
+            ]
+            required_nodes = {
+                str(class_name).lower()
+                for entry in image_workflows
+                for class_name in entry.node_classes
+            }
+            missing_nodes = sorted(required_nodes - installed_nodes) if installed_nodes else []
+            compatible_workflows = (
+                sum(
+                    1
+                    for entry in image_workflows
+                    if {str(name).lower() for name in entry.node_classes}.issubset(installed_nodes)
+                )
+                if installed_nodes
+                else None
+            )
             result = {
                 "ok": probe.reachable,
                 "online": probe.reachable,
-                "server": self._connection_config().server_address,
+                "server": connection.server_address,
+                "version": _comfyui_version(probe.system_stats),
                 "latency_ms": round(probe.latency_ms, 1),
                 "node_count": probe.node_count,
                 "queue": {"running": probe.queue.running, "pending": probe.queue.pending},
                 "checkpoints": list(probe.models.checkpoints),
                 "loras": list(probe.models.loras),
                 "warnings": list(probe.warnings),
-                "missing_nodes": [],
+                "missing_nodes": missing_nodes,
+                "workflow_total": len(image_workflows),
+                "workflow_compatible": compatible_workflows,
                 "result": "ok" if probe.reachable else "fail",
                 "summary": "ComfyUI 连接正常" if probe.reachable else "无法连接 ComfyUI",
                 "steps": [
@@ -177,19 +233,30 @@ class DesktopEngine:
                     {"status": "ok", "detail": f"检测到 {len(probe.models.loras)} 个 LoRA"},
                 ],
             }
-        except (ComfyUIError, ValueError) as exc:
+        except (AppError, ComfyUIError, ValueError) as exc:
+            error_code = exc.code if isinstance(exc, AppError) else getattr(exc, "code", "COMFYUI_OFFLINE")
             result = {
                 "ok": False,
                 "online": False,
-                "server": self._connection_config().server_address,
+                "server": connection.server_address if connection is not None else "",
+                "version": "",
                 "latency_ms": None,
-                "error": str(exc),
+                "error": _redact_diagnostic_text(exc),
+                "error_code": str(getattr(error_code, "value", error_code)),
                 "result": "fail",
-                "summary": str(exc),
-                "steps": [{"status": "fail", "detail": str(exc)}],
+                "summary": _redact_diagnostic_text(exc),
+                "steps": [{"status": "fail", "detail": _redact_diagnostic_text(exc)}],
                 "checkpoints": [],
                 "loras": [],
                 "missing_nodes": [],
+                "warnings": [],
+                "node_count": None,
+                "queue": {"running": 0, "pending": 0},
+                "workflow_total": len([
+                    entry for entry in self.workflows.all_entries()
+                    if entry.mode != "video" and entry.path
+                ]),
+                "workflow_compatible": None,
             }
         self._last_probe = result
         self._last_probe_at = time.monotonic()
@@ -328,6 +395,7 @@ class DesktopEngine:
         prompt_result = await self._prepare_prompt(payload)
         execution_payload = dict(payload)
         execution_payload["prompt"] = prompt_result.final_prompt
+        vision_meta: dict[str, Any] = {"status": "not_requested"}
         if prompt_result.seed is not None and payload.get("seed") in (None, -1, "-1"):
             execution_payload["seed"] = prompt_result.seed
         entry = self._select_workflow(payload)
@@ -355,6 +423,16 @@ class DesktopEngine:
             checkpoint = self._select_checkpoint(source, payload, list(inventory.checkpoints))
             uploaded_name = None
             source_bytes = await self._source_bytes(payload)
+            if source_bytes is not None and resume_prompt_id is None and str(payload.get("mode") or "txt2img") == "img2img":
+                vision_tags, vision_meta = await self._reverse_prompt_with_vision(
+                    source_bytes,
+                    raw_prompt=raw_prompt,
+                    current_prompt=prompt_result.final_prompt,
+                    family=str(payload.get("family") or "illustrious"),
+                )
+                if vision_tags:
+                    prompt_result.final_prompt = merge_prompt_tags(prompt_result.final_prompt, vision_tags)
+                    execution_payload["prompt"] = prompt_result.final_prompt
             if source_bytes is not None and resume_prompt_id is None:
                 uploaded = await executor.upload_image(source_bytes, filename=f"winefox_{job_id}.png")
                 uploaded_name = uploaded.name if not uploaded.subfolder else f"{uploaded.subfolder}/{uploaded.name}"
@@ -405,6 +483,7 @@ class DesktopEngine:
                 "elapsed_seconds": result.meta.get("elapsed_seconds"),
                 "prompt_source": prompt_result.source,
                 "prompt_warnings": list(prompt_result.warnings),
+                "vision_reverse": vision_meta,
                 "auto_lora": auto_lora.metadata if auto_lora is not None else None,
             },
         )
@@ -436,6 +515,117 @@ class DesktopEngine:
             llm_port=llm_client,
         )
         return await service.process(str(payload.get("prompt") or ""))
+
+    async def _reverse_prompt_with_vision(
+        self,
+        source_bytes: bytes,
+        *,
+        raw_prompt: str,
+        current_prompt: str,
+        family: str,
+    ) -> tuple[list[str], dict[str, Any]]:
+        """Use the separately configured vision provider as an optional img2img aid."""
+        settings = self.config.snapshot()
+        provider = resolve_provider(settings, "vision")
+        if not provider.enabled:
+            return [], {"status": "disabled"}
+        if not provider.base_url or not provider.model:
+            return [], {"status": "not_configured"}
+        api_key = self.config.get_secret(provider.secret_name) or ""
+        if not api_key:
+            return [], {"status": "missing_secret", "secret": provider.secret_name}
+        try:
+            mime = mimetypes.guess_type("reference.png")[0] or "image/png"
+            data_url = f"data:{mime};base64,{base64.b64encode(source_bytes).decode('ascii')}"
+            client = OpenAICompatibleLLMClient(
+                provider.base_url,
+                api_key,
+                timeout_seconds=provider.timeout_seconds,
+            )
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "Describe the attached anime reference image for image-to-image generation. "
+                        "Output only English comma-separated visual tags. Describe pose, expression, gaze, "
+                        "camera, framing, composition, background, lighting and visible props. Do not preserve "
+                        "source identity, exact outfit, logos or text. Never output reasoning, headings, markdown "
+                        "or first-person sentences."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "family": family,
+                                    "user_request": raw_prompt.strip(),
+                                    "current_prompt": current_prompt.strip(),
+                                    "instruction": "Return at least four concise comma-separated tags.",
+                                },
+                                ensure_ascii=False,
+                            ),
+                        },
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                    ],
+                },
+            ]
+            data = await client.complete(
+                messages,
+                model=provider.model,
+                max_tokens=700,
+                temperature=0.1,
+            )
+            content = self._extract_llm_text(data)
+            tags = self._sanitize_vision_tags(content)
+            if len(tags) < 4:
+                return [], {"status": "invalid_output"}
+            return tags, {"status": "completed", "count": len(tags), "provider": provider.source}
+        except Exception as exc:  # Vision is an optional enhancement; generation still proceeds.
+            logger.warning("vision reverse prompt skipped: %s", _redact_diagnostic_text(exc))
+            return [], {"status": "failed", "message": _redact_diagnostic_text(exc)[:240]}
+
+    @staticmethod
+    def _extract_llm_text(data: Any) -> str:
+        parts: list[str] = []
+
+        def collect(value: Any) -> None:
+            if isinstance(value, str) and value.strip():
+                parts.append(value)
+            elif isinstance(value, list):
+                for item in value:
+                    collect(item)
+            elif isinstance(value, dict):
+                # reasoning_content is intentionally ignored.
+                for key in ("text", "content", "output_text"):
+                    if key in value:
+                        collect(value[key])
+
+        if isinstance(data, dict):
+            for choice in data.get("choices") or []:
+                if isinstance(choice, dict):
+                    message = choice.get("message") if isinstance(choice.get("message"), dict) else {}
+                    collect(message.get("content"))
+                    collect(choice.get("text"))
+            collect(data.get("output_text"))
+        return "\n".join(parts).strip()
+
+    @staticmethod
+    def _sanitize_vision_tags(value: str) -> list[str]:
+        text = re.sub(r"<think>.*?</think>|<!--.*?-->|```[^`]*```", "", str(value or ""), flags=re.I | re.S)
+        text = re.sub(r"[\r\n]+", ",", text)
+        tags: list[str] = []
+        for raw in text.split(","):
+            tag = raw.strip(" `\"'\t")
+            if not tag or len(tag.split()) > 16:
+                continue
+            if re.search(r"\b(?:analysis|reasoning|because|therefore|i am|i'm|the task|the request|policy|guidelines)\b", tag, re.I):
+                continue
+            if tag.casefold() not in {item.casefold() for item in tags}:
+                tags.append(tag)
+        return tags[:80]
 
     def _select_workflow(self, payload: Mapping[str, Any]) -> WorkflowEntry:
         requested = str(payload.get("workflow") or "").strip()
@@ -726,17 +916,266 @@ class DesktopEngine:
             counts[category] = counts.get(category, 0) + 1
         return {"items": [{"name": name, "count": count} for name, count in sorted(counts.items())]}
 
+    def _diagnostic_log_tail(self, *, max_lines: int = 80, max_bytes: int = 128 * 1024) -> dict[str, Any]:
+        log_dir = self.data_root / "logs"
+        try:
+            candidates = sorted(
+                (path for path in log_dir.glob("*.log") if path.is_file()),
+                key=lambda path: path.stat().st_mtime,
+                reverse=True,
+            )
+        except OSError:
+            candidates = []
+        if not candidates:
+            return {
+                "available": False,
+                "lines": [],
+                "truncated": False,
+                "detail": "当前还没有可读取的运行日志。",
+            }
+        path = candidates[0]
+        try:
+            with path.open("rb") as handle:
+                size = path.stat().st_size
+                start = max(0, size - max_bytes)
+                handle.seek(start)
+                raw = handle.read(max_bytes)
+            lines = raw.decode("utf-8", errors="replace").splitlines()
+            if start and lines:
+                lines = lines[1:]
+            was_truncated = start > 0 or len(lines) > max_lines
+            safe_lines = [_redact_diagnostic_text(line) for line in lines[-max_lines:]]
+            return {
+                "available": True,
+                "lines": safe_lines,
+                "truncated": was_truncated,
+                "detail": f"最近 {len(safe_lines)} 行脱敏日志。",
+            }
+        except OSError:
+            return {
+                "available": False,
+                "lines": [],
+                "truncated": False,
+                "detail": "运行日志暂时无法读取。",
+            }
+
     async def diagnostics(self) -> dict[str, Any]:
-        probe = self._last_probe or await self.probe_comfyui()
-        integrity = self.db.verify_integrity()
+        probe = await self.probe_comfyui()
+        connected = bool(probe.get("online"))
+        failures: list[dict[str, Any]] = []
+        config_health: list[dict[str, Any]] = []
+
+        try:
+            integrity = self.db.verify_integrity()
+            database_ok = not integrity
+            database_detail = "SQLite 数据库校验通过" if database_ok else "；".join(map(_redact_diagnostic_text, integrity))
+        except Exception:
+            logger.exception("diagnostic database integrity check failed")
+            integrity = ["quick_check failed"]
+            database_ok = False
+            database_detail = "SQLite 数据库校验无法完成"
+        config_health.append({
+            "id": "database",
+            "label": "本地数据库",
+            "status": "ok" if database_ok else "fail",
+            "detail": database_detail,
+            "code": None if database_ok else "DATABASE_INTEGRITY_FAILED",
+            "retryable": False,
+            "action": "导出诊断信息并从备份恢复数据。" if not database_ok else "",
+        })
+
+        try:
+            settings = self.config.snapshot()
+            config_error = None
+        except AppError as exc:
+            settings = {}
+            config_error = exc
+            failures.append({
+                "status": "fail",
+                "code": exc.code,
+                "message": _redact_diagnostic_text(exc.message),
+                "retryable": False,
+                "action": "打开设置检查配置文件，或从备份恢复设置。",
+            })
+        comfy_settings = settings.get("comfyui") if isinstance(settings.get("comfyui"), Mapping) else {}
+        server = str(probe.get("server") or comfy_settings.get("server_address") or "")
+        tls_verified = bool(comfy_settings.get("ssl_verify", True))
+        config_health.append({
+            "id": "comfyui_connection",
+            "label": "ComfyUI 连接",
+            "status": "ok" if connected else "fail",
+            "detail": _redact_diagnostic_text(probe.get("summary") or ("连接正常" if connected else "连接失败")),
+            "code": None if connected else str(probe.get("error_code") or "COMFYUI_OFFLINE"),
+            "retryable": not connected,
+            "action": "检查 ComfyUI 地址、认证信息和服务状态后重新检查。" if not connected else "",
+        })
+        config_health.append({
+            "id": "tls_verification",
+            "label": "TLS 校验",
+            "status": "ok" if tls_verified else "warn",
+            "detail": "证书校验已启用" if tls_verified else "证书校验已关闭，仅应在可信网络临时使用",
+            "code": None if tls_verified else "TLS_VERIFICATION_DISABLED",
+            "retryable": False,
+            "action": "在设置中重新启用 TLS 证书校验。" if not tls_verified else "",
+        })
+
+        image_workflows = [entry for entry in self.workflows.all_entries() if entry.mode != "video" and entry.path]
+        valid_workflows = sum(1 for entry in image_workflows if entry.valid)
+        compatible_workflows = probe.get("workflow_compatible")
+        workflow_status = "ok"
+        if not image_workflows:
+            workflow_status = "fail"
+        elif compatible_workflows == 0 or valid_workflows == 0:
+            workflow_status = "warn"
+        workflow_detail = f"已载入 {len(image_workflows)} 个图像工作流，{valid_workflows} 个结构校验通过"
+        if compatible_workflows is not None:
+            workflow_detail += f"，{compatible_workflows} 个与当前 ComfyUI 节点兼容"
+        config_health.append({
+            "id": "workflows",
+            "label": "工作流",
+            "status": workflow_status,
+            "detail": workflow_detail,
+            "code": "WORKFLOW_NOT_FOUND" if not image_workflows else ("WORKFLOW_NODE_MISSING" if compatible_workflows == 0 else None),
+            "retryable": False,
+            "action": "检查内置工作流资源和 ComfyUI 自定义节点。" if workflow_status != "ok" else "",
+        })
+
+        checkpoint_count = len(probe.get("checkpoints") or [])
+        lora_count = len(probe.get("loras") or [])
+        config_health.append({
+            "id": "model_catalog",
+            "label": "模型目录",
+            "status": "ok" if connected and checkpoint_count else ("warn" if connected else "fail"),
+            "detail": f"检测到 {checkpoint_count} 个 checkpoint、{lora_count} 个 LoRA",
+            "code": None if checkpoint_count else ("CHECKPOINT_NOT_FOUND" if connected else "COMFYUI_OFFLINE"),
+            "retryable": True,
+            "action": "确认模型目录已在 ComfyUI 中配置并刷新目录。" if connected and not checkpoint_count else "",
+        })
+
+        provider = settings.get("ai_provider") if isinstance(settings.get("ai_provider"), Mapping) else {}
+        provider_enabled = bool(provider.get("enabled"))
+        provider_ready = bool(provider.get("base_url") and provider.get("model"))
+        if provider_enabled:
+            try:
+                provider_ready = provider_ready and bool(self.config.get_secret("ai_api_key"))
+            except AppError:
+                provider_ready = False
+        config_health.append({
+            "id": "ai_provider",
+            "label": "AI 提示词服务",
+            "status": "ok" if provider_enabled and provider_ready else ("warn" if not provider_enabled else "fail"),
+            "detail": "已配置并启用" if provider_enabled and provider_ready else ("未启用（不影响基础生成）" if not provider_enabled else "已启用，但地址、模型或密钥不完整"),
+            "code": "AI_PROVIDER_INCOMPLETE" if provider_enabled and not provider_ready else None,
+            "retryable": False,
+            "action": "在设置中补全 AI 提供商地址、模型和密钥。" if provider_enabled and not provider_ready else "",
+        })
+
+        vision_provider = settings.get("vision_provider") if isinstance(settings.get("vision_provider"), Mapping) else {}
+        vision_enabled = bool(vision_provider.get("enabled"))
+        vision_follows_text = vision_provider.get("follow_text_provider", True) is not False
+        vision_base = provider.get("base_url") if vision_follows_text else vision_provider.get("base_url")
+        vision_model = provider.get("model") if vision_follows_text else vision_provider.get("model")
+        vision_ready = bool(vision_base and vision_model)
+        vision_secret_name = "ai_api_key" if vision_follows_text else "vision_api_key"
+        if vision_enabled:
+            try:
+                vision_ready = vision_ready and bool(self.config.get_secret(vision_secret_name))
+            except AppError:
+                vision_ready = False
+        config_health.append({
+            "id": "vision_provider",
+            "label": "视觉理解 AI",
+            "status": "ok" if vision_enabled and vision_ready else ("warn" if not vision_enabled else "fail"),
+            "detail": (
+                "已启用，跟随提示词 AI"
+                if vision_enabled and vision_ready and vision_follows_text
+                else "已启用，使用独立视觉接口"
+                if vision_enabled and vision_ready
+                else "未启用（图生图仍可直接生成）"
+                if not vision_enabled
+                else "已启用，但地址、模型或密钥不完整"
+            ),
+            "code": "VISION_PROVIDER_INCOMPLETE" if vision_enabled and not vision_ready else None,
+            "retryable": False,
+            "action": "在设置中补全视觉提供商地址、模型和对应密钥，或启用跟随提示词 AI。" if vision_enabled and not vision_ready else "",
+        })
+
+        if not database_ok:
+            failures.append({
+                "status": "fail",
+                "code": "DATABASE_INTEGRITY_FAILED",
+                "message": database_detail,
+                "retryable": False,
+                "action": "导出诊断信息并从备份恢复数据。",
+            })
+        if not connected:
+            failures.append({
+                "status": "fail",
+                "code": str(probe.get("error_code") or "COMFYUI_OFFLINE"),
+                "message": _redact_diagnostic_text(probe.get("summary") or "无法连接 ComfyUI"),
+                "retryable": True,
+                "action": "检查 ComfyUI 地址、认证信息和服务状态后重新检查。",
+            })
+        missing_nodes = list(probe.get("missing_nodes") or [])
+        if missing_nodes:
+            failures.append({
+                "status": "warn",
+                "code": "WORKFLOW_NODE_MISSING",
+                "message": f"当前工作流需要的 {len(missing_nodes)} 个节点未安装",
+                "retryable": False,
+                "action": "通过 ComfyUI Manager 安装缺失节点后重启 ComfyUI。",
+            })
+        warnings = [_redact_diagnostic_text(value) for value in probe.get("warnings") or []]
+        if warnings:
+            failures.append({
+                "status": "warn",
+                "code": "COMFYUI_PARTIAL_PROBE",
+                "message": "；".join(warnings[:3]),
+                "retryable": True,
+                "action": "重新检查；若仍存在，查看日志摘要定位失败的接口。",
+            })
+
         return {
-            "version": "8.5.9",
-            "backend": {"status": "ok", "database": "ok" if not integrity else "fail"},
-            "comfyui": {"status": "ok" if probe.get("online") else "warn", "server": probe.get("server")},
+            "version": VERSION,
+            "app": {"name": "WineFox Desktop", "version": VERSION, "build": "desktop-integrated"},
+            "plugin": {
+                "name": "astrbot_plugin_comfyui_pro_UltraPlusMax",
+                "version": VERSION,
+                "runtime": "desktop adapter",
+            },
+            "backend": {"status": "ok", "database": "ok" if database_ok else "fail"},
+            "comfyui": {
+                "connected": connected,
+                "status": "ok" if connected else "fail",
+                "url": _redact_diagnostic_text(server),
+                "version": str(probe.get("version") or ""),
+                "latency_ms": probe.get("latency_ms"),
+                "queue": dict(probe.get("queue") or {}),
+                "error": None if connected else {
+                    "code": str(probe.get("error_code") or "COMFYUI_OFFLINE"),
+                    "message": _redact_diagnostic_text(probe.get("summary") or "无法连接 ComfyUI"),
+                    "retryable": True,
+                },
+            },
+            "nodes": {
+                "total": probe.get("node_count"),
+                "missing": missing_nodes,
+                "status": "fail" if not connected else ("warn" if missing_nodes or warnings else "ok"),
+                "detail": "节点信息不可用" if probe.get("node_count") is None else f"检测到 {probe.get('node_count')} 个节点",
+            },
+            "catalog": {
+                "workflows": len(image_workflows),
+                "valid_workflows": valid_workflows,
+                "compatible_workflows": compatible_workflows,
+                "checkpoints": checkpoint_count,
+                "loras": lora_count,
+                "lora_profiles": self.loaded_lora_profiles.count,
+                "status": "ok" if connected and image_workflows and checkpoint_count else "warn",
+            },
             "queue": {"busy": self.busy(), "tasks": self.task_count()},
-            "checks": [
-                {"name": "SQLite", "status": "ok" if not integrity else "fail", "detail": ", ".join(integrity)},
-                {"name": "ComfyUI", "status": "ok" if probe.get("online") else "warn", "detail": probe.get("summary")},
-            ],
+            "config_health": config_health,
+            "checks": config_health,
+            "failures": failures,
+            "log_tail": self._diagnostic_log_tail(),
             "data_root": "WineFox application data",
         }
