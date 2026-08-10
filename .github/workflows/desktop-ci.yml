@@ -98,7 +98,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force reports | Out-Null
           pip install -r requirements.txt --dry-run --report reports/pip-report.json
-          python -c "import json; rep=json.load(open('reports/pip-report.json', encoding='utf-8')); deps=rep.get('install', []); sbom={'bomFormat':'SPDX-ish (minimal)','specVersion':'1.0','component':{'type':'application','name':'winefox-desktop','version':'0.1.0'},'dependencies':[{'name':d.get('metadata',{}).get('name'),'version':d.get('metadata',{}).get('version'),'license':(d.get('metadata',{}).get('license') or {}).get('expression') or 'unknown'} for d in deps]}; json.dump(sbom, open('reports/sbom-python.json','w',encoding='utf-8'), indent=2, ensure_ascii=False); print('SBOM entries:', len(sbom['dependencies']))"
+          python -c "import json; rep=json.load(open('reports/pip-report.json', encoding='utf-8')); deps=rep.get('install', []); sbom={'bomFormat':'SPDX-ish (minimal)','specVersion':'1.0','component':{'type':'application','name':'winefox-desktop','version':'0.1.0'},'dependencies':[{'name':(d.get('metadata') or {}).get('name'),'version':(d.get('metadata') or {}).get('version'),'license':(lambda l: l if isinstance(l, str) else ((l or {}).get('expression') or 'unknown'))((d.get('metadata') or {}).get('license'))} for d in deps]}; json.dump(sbom, open('reports/sbom-python.json','w',encoding='utf-8'), indent=2, ensure_ascii=False); print('SBOM entries:', len(sbom['dependencies']))"
       - uses: actions/upload-artifact@v4
         with:
           name: sbom-python

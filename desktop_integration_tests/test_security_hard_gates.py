@@ -41,7 +41,7 @@ SECRET_PATTERNS = [
 
 SKIP_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".woff", ".woff2", ".ttf", ".zip", ".pyc", ".js.map"}
 SKIP_DIRS = {".git", "__pycache__", ".pytest_cache", "node_modules", "dist", "build", "target", ".venv", "venv", "html_render_cache"}
-TEST_DIRS = {"desktop_integration_tests", "tools"}  # fake/tool tokens are allowed here only
+TEST_DIRS = {"desktop_integration_tests", "tests_desktop", "tools"}  # test/tool tokens are allowed here only
 
 
 def _repo_files(plugin_root: Path):
