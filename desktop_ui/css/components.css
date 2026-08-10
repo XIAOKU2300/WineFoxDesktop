@@ -267,6 +267,66 @@
 /* ================= 滚动加载指示 ================= */
 .load-more { display: flex; justify-content: center; padding: var(--sp-4); color: var(--muted); font-size: var(--fs-sm); }
 
+/* ================= WineFox 统一加载状态 ================= */
+.wfx-loading {
+  min-height: 148px;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: var(--sp-3);
+  color: var(--muted);
+}
+.wfx-loading.is-compact { min-height: 76px; }
+.wfx-loading-mark {
+  position: relative;
+  width: 148px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+}
+.wfx-loading-ink {
+  position: relative;
+  display: block;
+  width: 126px;
+  height: 1px;
+  background: var(--border-strong);
+  overflow: hidden;
+}
+.wfx-loading-ink::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--aizome);
+  transform: translateX(-100%) scaleX(.45);
+  transform-origin: left;
+  animation: wfxInkPass 1.15s var(--ease-out) infinite;
+}
+.wfx-loading-seal {
+  position: absolute;
+  right: 0;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--primary);
+  color: var(--primary);
+  background: var(--surface);
+  font-family: var(--font-display);
+  font-size: 13px;
+  line-height: 1;
+  animation: wfxSealPulse 1.15s var(--ease-out) infinite;
+}
+.wfx-loading-label { font-size: var(--fs-sm); }
+@keyframes wfxInkPass {
+  0% { transform: translateX(-100%) scaleX(.45); opacity: .25; }
+  48% { transform: translateX(0) scaleX(1); opacity: 1; }
+  100% { transform: translateX(100%) scaleX(.45); opacity: .2; }
+}
+@keyframes wfxSealPulse {
+  0%, 100% { transform: scale(.94); opacity: .58; }
+  48% { transform: scale(1); opacity: 1; }
+}
+
 /* ================= 键盘提示 ================= */
 kbd {
   font-family: var(--font-ui); font-size: var(--fs-xs);
@@ -278,4 +338,6 @@ kbd {
 /* 动效偏好：reduced-motion 时关闭所有动画（tokens 已将时长归零，此处兜底） */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+  .wfx-loading-ink::before { animation: none !important; transform: none; opacity: .72; }
+  .wfx-loading-seal { animation: none !important; transform: none; opacity: 1; }
 }

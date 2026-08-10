@@ -1,5 +1,5 @@
 /* WineFox Desktop — 设置页
- * 分组：ComfyUI / TLS / 认证 / 默认参数 / 界面。
+ * 分组：ComfyUI / TLS / 认证 / AI 提供商 / 默认参数 / 界面。
  * 密钥只显示配置状态（GET /secrets），值仅写入不回读；token 不落 localStorage。
  */
 import { el, $, $$, ic, esc, toast } from "../utils.js";
@@ -17,8 +17,17 @@ export class SettingsView {
   async mount(container) {
     this.root = container;
     this.render();
-    try { this.settings = await api.settings(); } catch { this.settings = null; }
-    try { this.secrets = (await api.secrets()).items || []; } catch { this.secrets = []; }
+    this.settings = store.get("settings");
+    const cachedSecrets = store.get("secrets");
+    store.set("settings", null);
+    store.set("secrets", null);
+    if (!this.settings) {
+      try { this.settings = await api.settings(); } catch { this.settings = null; }
+    }
+    if (cachedSecrets) this.secrets = cachedSecrets.items || [];
+    else {
+      try { this.secrets = (await api.secrets()).items || []; } catch { this.secrets = []; }
+    }
     this.renderBody();
     this.loaded = true;
   }
@@ -35,7 +44,7 @@ export class SettingsView {
       ]),
       el("div", { class: "settings-layout" }, [
         el("nav", { class: "settings-nav", "aria-label": "设置分类" }, [
-          ["comfyui", "ComfyUI 连接"], ["tls", "TLS"], ["auth", "认证与密钥"], ["defaults", "默认参数"], ["ui", "界面"],
+          ["comfyui", "ComfyUI 连接"], ["tls", "TLS"], ["auth", "认证与密钥"], ["ai_provider", "AI 提供商"], ["defaults", "默认参数"], ["ui", "界面"],
         ].map(([id, label]) => {
           const b = el("button", { type: "button", "aria-current": this.section === id ? "true" : "false", dataset: { sec: id } }, esc(label));
           b.addEventListener("click", () => { this.section = id; this.renderNav(); this.renderBody(); });
@@ -154,8 +163,8 @@ export class SettingsView {
     ];
   }
 
-  secretRows() {
-    const defaults = [
+  secretRows(definitions = null) {
+    const defaults = definitions || [
       { key: "comfyui_api_key", label: "ComfyUI API Key", desc: "用于反向代理 / 网关认证" },
       { key: "comfyui_client_cert", label: "客户端证书（可选）", desc: "mTLS 双向认证" },
       { key: "tls_ca_cert", label: "自定义 CA 证书", desc: "受信任的本地根证书" },
@@ -172,8 +181,8 @@ export class SettingsView {
           ? el("span", { class: "badge ok" }, `已配置${st.updated_at ? " · " + esc(st.updated_at) : ""}`)
           : el("span", { class: "badge warn" }, "未配置"),
         configured
-          ? el("button", { class: "btn btn-sm btn-danger", type: "button", "data-clear": d.key }, "清除")
-          : el("button", { class: "btn btn-sm", type: "button", "data-set": d.key }, "设置"),
+          ? el("button", { class: "btn btn-sm btn-danger", type: "button", "data-clear": d.key, "aria-label": `清除 ${d.label}` }, "清除")
+          : el("button", { class: "btn btn-sm", type: "button", "data-set": d.key, "aria-label": `设置 ${d.label}` }, "设置"),
       ]);
     });
     const wrap = el("div", { class: "stack-2" }, rows);
@@ -194,13 +203,14 @@ export class SettingsView {
   }
 
   setSecretDialog(key) {
-    const label = ({ comfyui_api_key: "ComfyUI API Key", comfyui_client_cert: "客户端证书", tls_ca_cert: "自定义 CA 证书" })[key] || key;
-    const overlay = el("div", { class: "overlay", role: "dialog", "aria-modal": "true", "aria-label": "设置密钥" });
+    const label = ({ comfyui_api_key: "ComfyUI API Key", ai_api_key: "AI API Key", comfyui_client_cert: "客户端证书", tls_ca_cert: "自定义 CA 证书" })[key] || key;
+    const isApiKey = key === "comfyui_api_key" || key === "ai_api_key";
+    const overlay = el("div", { class: "overlay", role: "dialog", "aria-modal": "true", "aria-labelledby": "sk-title", "aria-describedby": "sk-desc" });
     overlay.append(el("div", { class: "modal" }, [
-      el("div", { class: "modal-head" }, [el("h3", {}, esc(`设置 ${label}`)), el("button", { class: "icon-btn", type: "button", "aria-label": "关闭" }, [ic("x")])]),
+      el("div", { class: "modal-head" }, [el("h3", { id: "sk-title" }, esc(`设置 ${label}`)), el("button", { class: "icon-btn", type: "button", "aria-label": "关闭" }, [ic("x")])]),
       el("div", { class: "modal-body" }, [
-        el("p", { class: "text-sm text-muted" }, "密钥仅写入后端本机存储，界面不会回显；不会存储到浏览器 localStorage。"),
-        key === "comfyui_api_key"
+        el("p", { class: "text-sm text-muted", id: "sk-desc" }, "密钥仅写入后端本机存储，界面不会回显；不会存储到浏览器 localStorage。"),
+        isApiKey
           ? el("div", { class: "field" }, [
             el("label", { for: "sk-val" }, "API Key"),
             el("input", { id: "sk-val", class: "input", type: "password", autocomplete: "new-password" }),
@@ -215,11 +225,28 @@ export class SettingsView {
         el("button", { class: "btn btn-primary", type: "button", id: "sk-save" }, "保存"),
       ]),
     ]));
+    const previousFocus = document.activeElement;
     document.body.append(overlay);
-    const close = () => overlay.remove();
+    const close = () => {
+      overlay.remove();
+      document.removeEventListener("keydown", onKey);
+      previousFocus?.focus();
+    };
     overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
     overlay.querySelector(".modal-head .icon-btn").addEventListener("click", close);
-    const onKey = (e) => { if (e.key === "Escape") { close(); document.removeEventListener("keydown", onKey); } };
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        close();
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const focusable = $$("button:not([disabled]), input:not([disabled]), textarea:not([disabled])", overlay);
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus(); }
+    };
     document.addEventListener("keydown", onKey);
     $("#sk-cancel", overlay)?.addEventListener("click", close);
     $("#sk-save", overlay)?.addEventListener("click", async () => {
@@ -236,11 +263,63 @@ export class SettingsView {
     $("#sk-val", overlay)?.focus();
   }
 
+  /* ---------- AI 提供商 ---------- */
+  sec_ai_provider() {
+    const provider = this.settings?.ai_provider || {};
+    return [
+      el("div", { class: "section-card" }, [
+        el("div", { class: "sec-head" }, [
+          el("h3", {}, "OpenAI 兼容接口"),
+          el("span", { class: "badge " + (provider.enabled ? "ok" : "") }, provider.enabled ? "已启用" : "未启用"),
+        ]),
+        el("div", { class: "sec-body" }, [
+          el("label", { class: "check" }, [
+            el("input", { type: "checkbox", id: "s-ai-enabled", checked: !!provider.enabled }),
+            el("span", { class: "box" }, [ic("check")]),
+            el("span", {}, esc("启用 AI 提示词优化")),
+          ]),
+          el("div", { class: "field" }, [
+            el("label", { for: "s-ai-base-url" }, "Base URL"),
+            this.input("s-ai-base-url", provider.base_url || "", {
+              type: "url", placeholder: "https://api.openai.com/v1", autocomplete: "url", spellcheck: "false",
+            }),
+            el("span", { class: "hint" }, "填写 OpenAI 兼容接口的完整 /v1 地址。"),
+          ]),
+          el("div", { class: "form-row" }, [
+            el("div", { class: "field" }, [
+              el("label", { for: "s-ai-model" }, "主模型"),
+              this.input("s-ai-model", provider.model || "", { placeholder: "例如 gpt-4.1", autocomplete: "off", spellcheck: "false" }),
+              el("span", { class: "hint" }, "用于提示词优化与主要文本任务。"),
+            ]),
+            el("div", { class: "field" }, [
+              el("label", { for: "s-ai-utility-model" }, "轻量模型"),
+              this.input("s-ai-utility-model", provider.utility_model || "", { placeholder: "例如 gpt-4.1-mini", autocomplete: "off", spellcheck: "false" }),
+              el("span", { class: "hint" }, "用于快速分类和短文本任务。"),
+            ]),
+          ]),
+          el("div", { class: "field" }, [
+            el("label", { for: "s-ai-vision-model" }, "视觉模型"),
+            this.input("s-ai-vision-model", provider.vision_model || "", { placeholder: "例如 gpt-4.1", autocomplete: "off", spellcheck: "false" }),
+            el("span", { class: "hint" }, "用于理解图生图参考图；可与主模型相同。"),
+          ]),
+          el("div", { class: "divider" }),
+          el("div", { class: "field" }, [
+            el("label", { id: "s-ai-key-label" }, "API Key"),
+            el("div", { "aria-labelledby": "s-ai-key-label" }, this.secretRows([
+              { key: "ai_api_key", label: "AI API Key", desc: "仅保存在系统密钥存储中，不会回显" },
+            ])),
+          ]),
+        ]),
+      ]),
+    ];
+  }
+
   /* ---------- 默认参数 ---------- */
   sec_defaults() {
     const d = this.settings?.defaults || {};
     const cat = store.get("catalog");
     const families = cat?.families || [];
+    const workflows = (cat?.workflows || []).filter((workflow) => workflow.mode !== "video");
     return [
       el("div", { class: "section-card" }, [
         el("div", { class: "sec-head" }, [el("h3", {}, "默认参数")]),
@@ -254,22 +333,19 @@ export class SettingsView {
             ]),
             el("div", { class: "field" }, [
               el("label", { for: "sd-workflow" }, "默认工作流"),
-              this.input("sd-workflow", d.workflow || "", { placeholder: "留空自动选择" }),
+              el("select", { id: "sd-workflow", class: "select" }, [
+                el("option", { value: "", selected: !d.workflow }, "自动选择"),
+                ...workflows.map((workflow) => el("option", {
+                  value: workflow.id,
+                  selected: d.workflow === workflow.id || d.workflow === workflow.name,
+                }, esc(`[${workflow.family || "通用"} / ${workflow.mode || "通用"}] ${workflow.label}`))),
+              ]),
+              el("span", { class: "hint" }, `${workflows.length} 个内置工作流已载入。`),
             ]),
           ]),
-          el("div", { class: "form-row-3" }, [
-            el("div", { class: "field" }, [
-              el("label", { for: "sd-steps" }, "步数"),
-              this.input("sd-steps", d.steps ?? 24, { type: "number", min: "4", max: "120" }),
-            ]),
-            el("div", { class: "field" }, [
-              el("label", { for: "sd-cfg" }, "CFG"),
-              this.input("sd-cfg", d.cfg ?? 7, { type: "number", min: "1", max: "30", step: "0.5" }),
-            ]),
-            el("div", { class: "field" }, [
-              el("label", { for: "sd-sampler" }, "采样器"),
-              this.input("sd-sampler", d.sampler || "euler_ancestral"),
-            ]),
+          el("div", { class: "notice info" }, [
+            ic("info"),
+            el("span", {}, "步数、CFG、采样器和调度器默认使用工作流内置值；仅在生成页显式开启高级覆盖时才会改写。"),
           ]),
           el("div", { class: "form-row" }, [
             el("div", { class: "field" }, [
@@ -353,6 +429,7 @@ export class SettingsView {
   async testConnection() {
     try {
       const res = await api.probe();
+      store.set("comfyui", res);
       toast(res.result === "ok" ? "连接正常" : "连接异常：" + (res.summary || ""), res.result === "ok" ? "ok" : "err");
     } catch (e) {
       toast("连接失败：" + e.message, "err");
@@ -374,13 +451,35 @@ export class SettingsView {
       patch.tls = { enabled: checked("s-tls-on"), verify: checked("s-tls-verify"), ca_configured: checked("s-tls-ca") };
     } else if (section === "auth") {
       patch.auth = { mode: val("s-amode") || "none" };
+    } else if (section === "ai_provider") {
+      const enabled = checked("s-ai-enabled");
+      const baseUrl = val("s-ai-base-url")?.trim() || "";
+      if (enabled && !baseUrl) {
+        toast("启用提示词优化前，请填写 Base URL。", "warn");
+        body.querySelector("#s-ai-base-url")?.focus();
+        return;
+      }
+      if (baseUrl) {
+        try {
+          const parsed = new URL(baseUrl);
+          if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("unsupported protocol");
+        } catch {
+          toast("Base URL 必须是有效的 HTTP 或 HTTPS 地址。", "warn");
+          body.querySelector("#s-ai-base-url")?.focus();
+          return;
+        }
+      }
+      patch.ai_provider = {
+        enabled,
+        base_url: baseUrl,
+        model: val("s-ai-model")?.trim() || "",
+        utility_model: val("s-ai-utility-model")?.trim() || "",
+        vision_model: val("s-ai-vision-model")?.trim() || "",
+      };
     } else if (section === "defaults") {
       patch.defaults = {
         family: val("sd-family"),
         workflow: val("sd-workflow")?.trim() || null,
-        steps: parseInt(val("sd-steps"), 10) || undefined,
-        cfg: parseFloat(val("sd-cfg")) || undefined,
-        sampler: val("sd-sampler")?.trim() || undefined,
         width: parseInt(val("sd-w"), 10) || undefined,
         height: parseInt(val("sd-h"), 10) || undefined,
       };
@@ -389,6 +488,7 @@ export class SettingsView {
     }
     await api.saveSettings(patch);
     this.settings = await api.settings();
+    store.set("settings", this.settings);
     toast("已保存", "ok");
   }
 }

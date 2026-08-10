@@ -11,11 +11,28 @@ use tauri::{AppHandle, Runtime, State};
 /// Result of evaluating an exit request.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub enum ExitDecision {
-    /// Sidecar is busy: the UI must ask wait / stop-waiting / return.
-    NeedsChoice { busy: bool, tasks: u32 },
-    /// Nothing running: quit directly.
-    Direct,
+pub struct ExitDecision {
+    pub needs_choice: bool,
+    pub busy: bool,
+    pub tasks: u32,
+}
+
+impl ExitDecision {
+    fn direct() -> Self {
+        Self {
+            needs_choice: false,
+            busy: false,
+            tasks: 0,
+        }
+    }
+
+    fn needs_choice(busy: bool, tasks: u32) -> Self {
+        Self {
+            needs_choice: true,
+            busy,
+            tasks,
+        }
+    }
 }
 
 #[tauri::command]
@@ -41,7 +58,7 @@ pub fn begin_exit_impl<R: Runtime>(app: &AppHandle<R>, manager: &Arc<SidecarMana
     {
         let inner = manager.state.inner.lock().unwrap();
         if inner.quitting {
-            return ExitDecision::Direct;
+            return ExitDecision::direct();
         }
     }
     let busy = manager.state.inner.lock().unwrap().busy;
@@ -49,9 +66,9 @@ pub fn begin_exit_impl<R: Runtime>(app: &AppHandle<R>, manager: &Arc<SidecarMana
     let running = manager.is_running();
     let _ = app;
     if running && busy && tasks > 0 {
-        ExitDecision::NeedsChoice { busy, tasks }
+        ExitDecision::needs_choice(busy, tasks)
     } else {
-        ExitDecision::Direct
+        ExitDecision::direct()
     }
 }
 
@@ -138,4 +155,18 @@ pub fn cancel_exit<R: Runtime>(
     manager: State<'_, Arc<SidecarManager>>,
 ) {
     cancel_exit_impl(&app, &manager);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ExitDecision;
+
+    #[test]
+    fn exit_decision_serializes_as_flat_camel_case_contract() {
+        let value = serde_json::to_value(ExitDecision::needs_choice(true, 2)).unwrap();
+        assert_eq!(value["needsChoice"], true);
+        assert_eq!(value["busy"], true);
+        assert_eq!(value["tasks"], 2);
+        assert!(value.get("needs_choice").is_none());
+    }
 }

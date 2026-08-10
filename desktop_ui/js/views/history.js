@@ -3,6 +3,7 @@
  */
 import { el, $, $$, ic, esc, fmtRelative, sanitizeName, debouncedSearchInput, toast } from "../utils.js";
 import { api } from "../api.js";
+import { store } from "../store.js";
 
 const PAGE_SIZE = 24;
 
@@ -20,7 +21,9 @@ export class HistoryView {
   async mount(container) {
     this.root = container;
     this.render();
-    await this.load();
+    const prefetched = store.get("history");
+    store.set("history", null);
+    await this.load(false, prefetched);
   }
 
   render() {
@@ -58,7 +61,7 @@ export class HistoryView {
     $("#h-trash")?.addEventListener("click", () => { this.trash = !this.trash; this.cursor = null; this.prevCursors = []; this.render(); this.load(); });
   }
 
-  async load(append = false) {
+  async load(append = false, prefetched = null) {
     const grid = $("#h-grid");
     const body = $("#h-body");
     if (!grid) return;
@@ -73,7 +76,7 @@ export class HistoryView {
       if (this.q) q.q = this.q;
       if (this.filter !== "all") q.status = this.filter;
       if (this.trash) q.trash = "1";
-      const res = await api.history(q);
+      const res = prefetched || await api.history(q);
       this.total = res.total ?? this.total;
       const items = res.items || [];
       if (!append) this.prevCursors = [];

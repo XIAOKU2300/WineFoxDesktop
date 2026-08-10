@@ -2,8 +2,9 @@
  * 版本 / ComfyUI 状态 / 节点缺失 / 配置健康 / 脱敏日志导出。
  * 完全离线可用：任何请求失败都以「不可用」状态呈现，不抛错。
  */
-import { el, $, $$, ic, esc, sanitizeName, toast, downloadText } from "../utils.js";
+import { el, $, $$, ic, esc, sanitizeName, toast, downloadText, loadingState } from "../utils.js";
 import { api } from "../api.js";
+import { store } from "../store.js";
 
 export class DiagnosticsView {
   constructor() {
@@ -14,7 +15,15 @@ export class DiagnosticsView {
   async mount(container) {
     this.root = container;
     this.render();
-    await this.load();
+    const prefetched = store.get("diagnostics");
+    store.set("diagnostics", null);
+    if (prefetched) {
+      this.data = prefetched;
+      this.comfy = store.get("comfyui") || null;
+      this.renderBody();
+    } else {
+      await this.load();
+    }
   }
 
   render() {
@@ -31,7 +40,7 @@ export class DiagnosticsView {
           el("button", { class: "btn btn-sm", id: "d-export", type: "button" }, [ic("download"), esc("导出脱敏日志")]),
         ]),
       ]),
-      el("div", { id: "d-body", class: "stack-4" }, [el("div", { class: "load-more" }, "检查中…")]),
+      el("div", { id: "d-body", class: "stack-4" }, [loadingState("正在汇集诊断信息")]),
     );
     $("#d-refresh")?.addEventListener("click", () => this.load());
     $("#d-export")?.addEventListener("click", () => this.exportLogs());
@@ -40,11 +49,12 @@ export class DiagnosticsView {
   async load() {
     const body = $("#d-body");
     if (!body) return;
-    body.innerHTML = "";
-    body.append(el("div", { class: "load-more" }, "检查中…"));
+    body.replaceChildren(loadingState("正在汇集诊断信息"));
     try {
-      this.data = await api.diagnostics();
-      try { this.comfy = await api.comfyui(); } catch { this.comfy = null; }
+      const [diagnostics, comfy] = await Promise.allSettled([api.diagnostics(), api.comfyui()]);
+      if (diagnostics.status === "rejected") throw diagnostics.reason;
+      this.data = diagnostics.value;
+      this.comfy = comfy.status === "fulfilled" ? comfy.value : store.get("comfyui") || null;
       this.error = null;
     } catch (e) {
       this.data = null;
@@ -56,7 +66,7 @@ export class DiagnosticsView {
   renderBody() {
     const body = $("#d-body");
     if (!body) return;
-    body.innerHTML = "";
+    body.replaceChildren();
     if (!this.data) {
       body.append(
         el("div", { class: "card card-pad stack-3" }, [

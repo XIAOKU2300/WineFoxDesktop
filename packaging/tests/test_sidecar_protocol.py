@@ -139,10 +139,12 @@ class TestHandshake(unittest.TestCase):
         self.assertIsInstance(ready["port"], int)
         self.assertGreater(ready["port"], 0)
         self.assertTrue(ready["bootstrapPath"].startswith("/bootstrap/"))
-        self.assertEqual(ready["impl"], "winefox-sidecar-fake")
+        self.assertEqual(ready["impl"], "winefox-desktop-runtime")
         self.assertEqual(ready["pid"], sc.proc.pid)
         sc.send({"cmd": "shutdown", "mode": "now"})
-        self.assertEqual(sc.close(), 0)
+        rc = sc.close()
+        stderr = sc.proc.stderr.read() if sc.proc.stderr else ""
+        self.assertEqual(rc, 0, stderr)
 
     def test_non_json_line_is_tolerated_by_parser(self):
         # The shell parser must skip non-JSON lines with a warning; here we

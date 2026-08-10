@@ -43,6 +43,23 @@ html_render_cache/
 # 环境变量/密钥
 .env
 .env.*
+
+# WineFox Desktop local state and build outputs
+settings.json
+settings.json.bak
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+desktop_shell/node_modules/
+desktop_shell/src-tauri/target/
+desktop_shell/src-tauri/gen/
+desktop_shell/src-tauri/binaries/*.exe
+packaging/.build/
+packaging/dist/
+packaging/pyinstaller/generated/
+
 # Git 提交脚本（不需要提交）
 git提交.py
 git提交.py

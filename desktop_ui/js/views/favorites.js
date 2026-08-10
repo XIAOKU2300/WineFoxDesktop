@@ -1,8 +1,9 @@
 /* WineFox Desktop — 收藏页
  * 分类筛选 + 备注编辑 + 新增收藏（从历史记录或直接创建）。
  */
-import { el, $, $$, ic, esc, fmtRelative, debouncedSearchInput, toast } from "../utils.js";
+import { el, $, $$, ic, esc, fmtRelative, debouncedSearchInput, loadingState, toast } from "../utils.js";
 import { api } from "../api.js";
+import { store } from "../store.js";
 
 export class FavoritesView {
   constructor() {
@@ -15,8 +16,12 @@ export class FavoritesView {
   async mount(container) {
     this.root = container;
     this.render();
-    await this.loadCats();
-    await this.load();
+    const prefetchedCategories = store.get("categories");
+    const prefetchedFavorites = store.get("favorites");
+    store.set("categories", null);
+    store.set("favorites", null);
+    await this.loadCats(prefetchedCategories);
+    await this.load(prefetchedFavorites);
   }
 
   render() {
@@ -34,10 +39,7 @@ export class FavoritesView {
         ]),
       ]),
       el("div", { class: "fav-cats", id: "f-cats", role: "group", "aria-label": "收藏分类" }, []),
-      el("div", { id: "f-body" }, [
-        el("div", { class: "img-grid", id: "f-grid" }, []),
-        el("div", { class: "load-more" }, "加载中…"),
-      ]),
+      el("div", { id: "f-body" }, [loadingState("正在整理收藏")]),
     );
     $("#f-add")?.addEventListener("click", () => this.addDialog());
     this.renderCats();
@@ -63,27 +65,26 @@ export class FavoritesView {
     }
   }
 
-  async loadCats() {
+  async loadCats(prefetched = null) {
     try {
-      const res = await api.categories();
+      const res = prefetched || await api.categories();
       this.categories = res.items || res || [];
       this.renderCats();
     } catch { /* 离线静默 */ }
   }
 
-  async load() {
-    const grid = $("#f-grid");
-    if (!grid) return;
-    grid.innerHTML = "";
-    $(".load-more", this.root).textContent = "加载中…";
+  async load(prefetched = null) {
+    const body = $("#f-body");
+    if (!body) return;
+    body.replaceChildren(loadingState("正在整理收藏"));
     try {
       const q = {};
       if (this.q) q.q = this.q;
       if (this.category !== "all") q.category = this.category;
-      const res = await api.favorites(q);
+      const res = prefetched || await api.favorites(q);
       this.total = res.total;
       const items = res.items || [];
-      grid.innerHTML = "";
+      const grid = el("div", { class: "img-grid", id: "f-grid" });
       if (!items.length) {
         grid.append(el("div", { class: "empty", style: "grid-column:1/-1" }, [
           ic("fav"),
@@ -93,12 +94,18 @@ export class FavoritesView {
       } else {
         grid.append(...items.map((it) => this.cell(it)));
       }
-      const loader = $(".load-more", this.root);
-      loader.textContent = items.length ? `共 ${this.total ?? items.length} 条` : "";
+      body.replaceChildren(
+        grid,
+        el("div", { class: "load-more" }, items.length ? `共 ${this.total ?? items.length} 条` : ""),
+      );
       this.renderCats();
       this.loaded = true;
     } catch (e) {
-      $(".load-more", this.root).textContent = "加载失败：" + e.message;
+      body.replaceChildren(el("div", { class: "empty" }, [
+        ic("warn"),
+        el("div", { class: "empty-title" }, "收藏加载失败"),
+        el("div", { class: "empty-desc" }, esc(e.message)),
+      ]));
     }
   }
 

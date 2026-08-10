@@ -43,6 +43,7 @@ APP_VERSION = VERSIONS["app"]
 datas = []
 plugin_datas = [
     ("workflow", "plugin_data/workflow"),
+    ("migrations", "migrations"),
     ("templates", "plugin_data/templates"),
     ("assets", "plugin_data/assets"),
     ("desktop_ui", "plugin_data/desktop_ui"),
@@ -60,6 +61,10 @@ for src_rel, dst in plugin_datas:
             datas.append((src, dst))
     else:
         print(f"[spec] WARN: plugin data {src_rel} not found, skipping", file=sys.stderr)
+
+metadata_root = os.path.join(PLUGIN_SRC, "metadata.yaml")
+if os.path.isfile(metadata_root):
+    datas.append((metadata_root, "."))
 
 # sidecar package data (desktop_ui served by the sidecar itself).
 # collect_data_files cannot import the uninstalled package, so walk it.
@@ -95,10 +100,17 @@ else:
 
 a = Analysis(
     [os.path.join(SIDECAR_DIR, "winefox_sidecar_entry.py")],
-    pathex=[SIDECAR_DIR],
+    pathex=[ROOT, SIDECAR_DIR],
     binaries=[],
     datas=datas,
-    hiddenimports=["winefox_sidecar"],
+    hiddenimports=[
+        "winefox_sidecar",
+        "desktop_runtime",
+        "desktop_runtime.sidecar",
+        "desktop_backend",
+        "winefox_core",
+        "keyring.backends.Windows",
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -118,7 +130,9 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    console=False,          # windowed: no console window on Windows
+    # The JSON-lines control protocol requires real stdio pipes. The Tauri
+    # parent launches this console binary with CREATE_NO_WINDOW.
+    console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

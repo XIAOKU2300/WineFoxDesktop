@@ -19,6 +19,8 @@ use crate::state::{AppState, SidecarState};
 use serde_json::json;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -100,9 +102,9 @@ impl SidecarManager {
             if !over.is_empty() {
                 if over.to_lowercase().ends_with(".py") {
                     let py = std::env::var("WINE_FOX_PYTHON").unwrap_or_else(|_| "python".into());
-                    return Ok((py, vec![over, "--allow-simulate".to_string()]));
+                    return Ok((py, vec![over]));
                 }
-                return Ok((over, vec!["--allow-simulate".to_string()]));
+                return Ok((over, vec![]));
             }
         }
 
@@ -114,7 +116,7 @@ impl SidecarManager {
             if cand.is_file() {
                 return Ok((
                     cand.to_string_lossy().into_owned(),
-                    vec!["--allow-simulate".to_string()],
+                    vec![],
                 ));
             }
         }
@@ -128,7 +130,7 @@ impl SidecarManager {
             let py = std::env::var("WINE_FOX_PYTHON").unwrap_or_else(|_| "python".into());
             return Ok((
                 py,
-                vec![entry.to_string_lossy().into_owned(), "--allow-simulate".to_string()],
+                vec![entry.to_string_lossy().into_owned()],
             ));
         }
 
@@ -152,6 +154,8 @@ impl SidecarManager {
             inner.last_error = None;
             inner.port = None;
             inner.bootstrap_path = None;
+            inner.session_cookie = None;
+            inner.panel_root = false;
             inner.pid = None;
             inner.busy = false;
             inner.tasks = 0;
@@ -352,6 +356,8 @@ fn session_main(me: &Arc<SidecarManager>) {
     };
 
     let mut cmd = Command::new(&program);
+    #[cfg(windows)]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW; stdout/stderr pipes remain available.
     cmd.args(&args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -526,17 +532,90 @@ fn on_ready(me: &Arc<SidecarManager>, info: &ReadyInfo, pid: u32) -> Result<(), 
         Err(e) => return Err(format!("sidecar health 检查失败：{e}")),
     }
 
+    // The real backend exchanges the one-time bootstrap token for a session
+    // cookie; the legacy fake sidecar just serves HTML under the same path.
+    let (session_cookie, panel_root) = bootstrap_handshake(info)?;
+
     let mut inner = me.state.inner.lock().unwrap();
     inner.state = SidecarState::Ready;
     inner.port = Some(info.port);
     inner.bootstrap_path = Some(info.bootstrap_path.clone());
+    inner.session_cookie = session_cookie;
+    inner.panel_root = panel_root;
     inner.sidecar_version = Some(info.version.clone());
     inner.pid = Some(pid);
     inner.last_error = None;
     drop(inner);
     me.log("info", &format!("sidecar ready: 127.0.0.1:{}", info.port));
+    if panel_root {
+        me.log("info", "bootstrap 握手成功，面板载入根路径");
+    }
     me.emit_status();
     Ok(())
+}
+
+/// Perform the `/bootstrap/<token>` handshake over the shell's raw TCP client.
+///
+/// Returns `(session_cookie, panel_root)`: a 302 + `Set-Cookie` identifies the
+/// real backend (UI at `/`), while a plain 200 is the fake sidecar serving the
+/// bootstrap page itself.
+fn bootstrap_handshake(info: &handshake::ReadyInfo) -> Result<(Option<String>, bool), String> {
+    let url = format!(
+        "http://127.0.0.1:{}/{}",
+        info.port,
+        info.bootstrap_path.trim_start_matches('/')
+    );
+    let resp = crate::http_client::request(
+        "GET",
+        &url,
+        &[("Accept", "text/html")],
+        None,
+        Duration::from_secs(3),
+    )
+    .map_err(|e| format!("bootstrap 握手失败：{e}"))?;
+    match resp.status {
+        200 => Ok((None, false)),
+        302 => {
+            let cookie = resp
+                .headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case("set-cookie"))
+                .and_then(|(_, value)| session_cookie_pair(value));
+            match cookie {
+                Some(cookie) => Ok((Some(cookie), true)),
+                None => Err("bootstrap 302 未返回会话 Cookie".into()),
+            }
+        }
+        other => Err(format!("bootstrap 握手未按预期响应（HTTP {other}）")),
+    }
+}
+
+/// Convert `Set-Cookie` to the single `name=value` pair valid in a Cookie
+/// request header. Attributes such as Path, HttpOnly and SameSite must not be
+/// echoed back as cookies.
+fn session_cookie_pair(set_cookie: &str) -> Option<String> {
+    let pair = set_cookie.split(';').next()?.trim();
+    let (name, value) = pair.split_once('=')?;
+    if name.trim() != "winefox_session" || value.trim().is_empty() {
+        return None;
+    }
+    Some(format!("{}={}", name.trim(), value.trim()))
+}
+
+#[cfg(test)]
+mod cookie_tests {
+    use super::session_cookie_pair;
+
+    #[test]
+    fn strips_set_cookie_attributes_before_proxying() {
+        assert_eq!(
+            session_cookie_pair(
+                "winefox_session=abc123; HttpOnly; Path=/; SameSite=Strict"
+            ),
+            Some("winefox_session=abc123".into())
+        );
+        assert_eq!(session_cookie_pair("Path=/; HttpOnly"), None);
+    }
 }
 
 // ---------------------------------------------------------------------

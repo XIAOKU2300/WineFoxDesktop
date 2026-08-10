@@ -39,6 +39,11 @@ pub struct Inner {
     pub last_error: Option<String>,
     pub port: Option<u16>,
     pub bootstrap_path: Option<String>,
+    /// Session cookie from the real backend's `/bootstrap/<token>` handshake.
+    pub session_cookie: Option<String>,
+    /// True when the sidecar serves the panel UI at `/` (real backend);
+    /// false keeps the legacy bootstrap-path mount used by the fake sidecar.
+    pub panel_root: bool,
     pub sidecar_version: Option<String>,
     pub pid: Option<u32>,
     pub busy: bool,
@@ -82,7 +87,15 @@ impl AppState {
         let inner = self.inner.lock().unwrap();
         let panel_url = match (inner.port, &inner.bootstrap_path) {
             (Some(port), Some(path)) => {
-                Some(format!("http://127.0.0.1:{port}{path}"))
+                if inner.panel_root {
+                    Some(format!("http://winefox-panel.localhost/{port}/"))
+                } else {
+                    let mut p = path.clone();
+                    if !p.ends_with('/') {
+                        p.push('/');
+                    }
+                    Some(format!("http://winefox-panel.localhost/{port}{p}"))
+                }
             }
             _ => None,
         };

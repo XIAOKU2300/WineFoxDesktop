@@ -1,4 +1,77 @@
-# 🌟 astrbot_plugin_comfyui_pro_UltraPlusMax ✨(=^･ω･^=)✨
+# WineFox Desktop
+
+WineFox Desktop 是将 `astrbot_plugin_comfyui_pro_UltraPlusMax` 的 ComfyUI 绘图能力迁移到 Windows 桌面的本地应用。它采用 Tauri 2 桌面外壳、Python 本地 sidecar 和原生 HTML/CSS/ES Modules 界面，保留文生图、图生图、多工作流、LoRA 与中文别名、历史、收藏、模型检测、诊断和旧数据导入等核心能力。
+
+> 当前状态：开发预览。仓库暂不发布 Release，也不提供自动更新包。应用不会捆绑 ComfyUI、模型、CUDA 或用户密钥。
+
+## 桌面版能力
+
+- 连接本机或受信任网络中的 ComfyUI，检测节点、checkpoint、LoRA 与工作流兼容性。
+- 文生图和图生图使用内置工作流参数；高级参数只有显式开启后才覆盖工作流值。
+- LoRA 列表、中文别名检索、角色匹配、模型族筛选与多 LoRA 注入。
+- 本地任务队列、结果历史、收藏、软删除与崩溃恢复。
+- 独立 AI 文本/视觉提供商配置，密钥通过系统凭据存储，不写入普通配置。
+- 仅监听 `127.0.0.1`，使用一次性 bootstrap 会话、Host/Origin/CSRF 校验和默认 TLS 验证。
+
+## 直接运行源码
+
+环境要求：Windows 10/11、Python 3.11+、Rust 1.77+、Node.js 20+、WebView2。
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r packaging\pyinstaller\requirements-sidecar.txt
+cd desktop_shell
+npm install
+$env:WINE_FOX_PYTHON = "..\.venv\Scripts\python.exe"
+npm run tauri dev
+```
+
+启动后应用会先在本地加载配置、工作流和目录数据，完成后直接进入生成页。ComfyUI 默认地址为 `http://127.0.0.1:8188`，可在设置中修改。
+
+## 构建便携版
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\packaging\build.ps1 -SkipNsis
+powershell -ExecutionPolicy Bypass -File .\packaging\stage-portable.ps1
+```
+
+便携版输出到 `packaging\dist\WineFoxDesktop`。正式安装包还需要 NSIS；签名和更新公钥配置完成之前不得发布。
+
+## 验证
+
+```powershell
+python -m unittest discover -s tests -v
+python -m unittest discover -s tests_desktop -v
+python packaging\tests\test_sidecar_protocol.py
+cd desktop_shell\src-tauri
+cargo test
+```
+
+仓库还包含 `tools\desktop_verify.py`，用于检查 LAN 监听、固定口令、query token、密钥泄漏、TLS 默认值和生产包内容。
+
+## 数据与隐私
+
+运行数据默认位于 `%LOCALAPPDATA%\WineFox`。设置、上传、输出、日志和 SQLite 数据均不应提交到 Git；密钥不写入 `settings.json`、数据库或日志。卸载默认保留用户数据，删除前请自行备份。
+
+## 目录
+
+| 路径 | 用途 |
+|---|---|
+| `desktop_ui/` | 桌面界面与设计系统 |
+| `desktop_backend/` | 本地 `/api/v1` HTTP API |
+| `desktop_runtime/` | Core、存储、工作流与后端装配 |
+| `winefox_core/` | 平台无关领域逻辑与 ComfyUI 传输 |
+| `desktop_shell/` | Tauri 外壳和 sidecar 入口 |
+| `packaging/` | PyInstaller、便携版和 NSIS 构建 |
+| `workflow/` | 内置 ComfyUI 工作流 |
+
+## 项目来源与许可
+
+桌面版基于 WineFox AstrBot 插件迁移。根目录保留原插件源码与下方原始说明，便于核对行为和继续兼容。仓库使用根目录 `LICENSE`；发布前仍需完成第三方 Python 包、Rust crates、前端依赖、工作流和 ComfyUI 自定义节点的 Notice 审核。
+
+---
+
+# 原 WineFox AstrBot 插件说明
 
 AstrBot の究极绘图插件～ 这不过是本喵随手捏的玩具啦，笨蛋杂鱼主人能玩明白吗喵～(≧∀≦)ゞ 支持 ComfyUI 文生图、引用/附带图片自动图生图、角色 LoRA 自动匹配、Civitai LoRA 搜索导入、GPT 魔法生图、中文快捷指令、多工作流切换和生图结果自动撤回～ 功能多到你这只杂鱼脑容量要爆炸了捏 (●ˇ∀ˇ●)
 

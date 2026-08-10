@@ -1,20 +1,29 @@
 /* WineFox Desktop — 模型与 LoRA 页
  * 展示 checkpoint / LoRA / 自定义节点状态；v1 无在线下载（缺失给出安装指引）。
  */
-import { el, $, $$, ic, esc, sanitizeName, fmtBytes } from "../utils.js";
+import { el, $, $$, ic, esc, sanitizeName, fmtBytes, loadingState } from "../utils.js";
 import { api } from "../api.js";
+import { store } from "../store.js";
 
 export class ModelsView {
   constructor() {
     this.tab = "checkpoints";
     this.data = null;
     this.loaded = false;
+    this.visible = { checkpoints: 40, loras: 40, nodes: 40 };
   }
 
   async mount(container) {
     this.root = container;
     this.render();
-    await this.load();
+    this.data = store.get("models");
+    store.set("models", null);
+    if (this.data) {
+      this.renderBody();
+      this.loaded = true;
+    } else {
+      await this.load();
+    }
   }
 
   render() {
@@ -35,7 +44,7 @@ export class ModelsView {
         b.addEventListener("click", () => { this.tab = id; this.renderTabs(); this.renderBody(); });
         return b;
       })),
-      el("div", { id: "m-body", class: "stack-3" }, [el("div", { class: "load-more" }, "加载中…")]),
+      el("div", { id: "m-body", class: "stack-3" }, [loadingState("正在读取模型目录")]),
     );
     $("#m-refresh")?.addEventListener("click", () => this.load());
   }
@@ -49,15 +58,13 @@ export class ModelsView {
   async load() {
     const body = $("#m-body");
     if (!body) return;
-    body.innerHTML = "";
-    body.append(el("div", { class: "load-more" }, "扫描中…"));
+    body.replaceChildren(loadingState("正在扫描模型与 LoRA"));
     try {
       this.data = await api.models();
       this.renderBody();
       this.loaded = true;
     } catch (e) {
-      body.innerHTML = "";
-      body.append(el("div", { class: "empty" }, [ic("warn"), el("div", { class: "empty-title" }, "无法获取模型信息"), el("div", { class: "empty-desc" }, esc(e.message))]));
+      body.replaceChildren(el("div", { class: "empty" }, [ic("warn"), el("div", { class: "empty-title" }, "无法获取模型信息"), el("div", { class: "empty-desc" }, esc(e.message))]));
     }
   }
 
@@ -68,6 +75,7 @@ export class ModelsView {
     const summary = el("div", { class: "row wrap gap-2" }, [
       el("span", { class: "badge ok" }, esc(`${(d.checkpoints || []).length} 个 checkpoint`)),
       el("span", { class: "badge ok" }, esc(`${(d.loras || []).length} 个 LoRA`)),
+      el("span", { class: "badge neutral" }, esc(`${d.lora_profiles?.loaded || 0} 个角色档案`)),
       el("span", { class: "badge warn" }, esc(`${(d.missing_nodes || []).length} 个节点缺失`)),
       d.download?.enabled === false ? el("span", { class: "badge neutral" }, "v1：无在线下载") : null,
     ]);
@@ -75,13 +83,12 @@ export class ModelsView {
     if (this.tab === "checkpoints") list = this.checkpointList(d.checkpoints || []);
     else if (this.tab === "loras") list = this.loraList(d.loras || []);
     else list = this.nodeList(d);
-    body.innerHTML = "";
-    body.append(summary, list);
+    body.replaceChildren(summary, list);
   }
 
   checkpointList(items) {
     if (!items.length) return this.empty("未检测到 checkpoint", "将模型放入 ComfyUI 的 models/checkpoints 目录后重新扫描。");
-    return el("div", { class: "model-list" }, items.map((m) => {
+    return this.resourceList(items, "checkpoints", (m) => {
       const row = el("div", { class: "model-row" + (m.compat === "missing" ? " missing" : m.compat === "incompatible" ? " incompatible" : "") }, [
         el("div", { class: "grow" }, [
           el("div", { class: "m-name" }, esc(sanitizeName(m.name))),
@@ -91,22 +98,22 @@ export class ModelsView {
         el("span", { class: "m-warn" }, esc(m.missing_reason || m.warning || "")),
       ]);
       return row;
-    }));
+    });
   }
 
   loraList(items) {
     if (!items.length) return this.empty("未检测到 LoRA", "将 LoRA 放入 ComfyUI 的 models/loras 目录后重新扫描。");
-    return el("div", { class: "model-list" }, items.map((m) => {
+    return this.resourceList(items, "loras", (m) => {
       const row = el("div", { class: "model-row" + (m.compat === "missing" ? " missing" : m.compat === "incompatible" ? " incompatible" : "") }, [
         el("div", { class: "grow" }, [
           el("div", { class: "m-name" }, esc(sanitizeName(m.name))),
-          el("div", { class: "m-sub" }, esc(`${m.family || "通用"}${m.tags?.length ? " · " + m.tags.join(" / ") : ""}`)),
+          el("div", { class: "m-sub" }, esc(`${m.family || "通用"}${m.character ? " · " + m.character : ""}${m.tags?.length ? " · 别名 " + m.tags.join(" / ") : ""}`)),
         ]),
         this.compatBadge(m),
         el("span", { class: "m-warn" }, esc(m.missing_reason || m.warning || "")),
       ]);
       return row;
-    }));
+    });
   }
 
   compatBadge(m) {
@@ -119,7 +126,7 @@ export class ModelsView {
   nodeList(d) {
     const nodes = d.nodes || d.custom_nodes || [];
     if (!nodes.length) return this.empty("未检测到自定义节点信息", "连接 ComfyUI 后可查看节点兼容状态。");
-    return el("div", { class: "model-list" }, nodes.map((n) => {
+    return this.resourceList(nodes, "nodes", (n) => {
       const ok = n.installed !== false;
       const row = el("div", { class: "model-row" + (ok ? "" : " missing") }, [
         el("div", { class: "grow" }, [
@@ -130,7 +137,21 @@ export class ModelsView {
         ok ? null : el("span", { class: "m-warn" }, esc(n.install_hint || "请通过 ComfyUI Manager 安装此节点")),
       ]);
       return row;
-    }));
+    });
+  }
+
+  resourceList(items, key, renderRow) {
+    const limit = this.visible[key] || 40;
+    const list = el("div", { class: "model-list" }, items.slice(0, limit).map(renderRow));
+    if (items.length > limit) {
+      const more = el("button", { class: "btn btn-sm model-more", type: "button" }, `再显示 ${Math.min(40, items.length - limit)} 项`);
+      more.addEventListener("click", () => {
+        this.visible[key] = limit + 40;
+        this.renderBody();
+      });
+      list.append(more);
+    }
+    return list;
   }
 
   empty(title, desc) {

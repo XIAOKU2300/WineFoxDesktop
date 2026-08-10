@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import json
 import logging
 import shutil
 import socket
@@ -163,6 +164,16 @@ class FakeComfyUIServer:
                 return web.json_response(self.models_loras)
             return web.json_response(self.models)
 
+        async def chunked_json_handler(request):
+            body = json.dumps({"payload": "x" * 300_000}).encode("utf-8")
+            response = web.StreamResponse(status=200, headers={"Content-Type": "application/json"})
+            await response.prepare(request)
+            await response.write(body[:128 * 1024])
+            await asyncio.sleep(0.01)
+            await response.write(body[128 * 1024:])
+            await response.write_eof()
+            return response
+
         async def queue_handler(request):
             self.queue_requests += 1
             return web.json_response(
@@ -240,6 +251,7 @@ class FakeComfyUIServer:
         app.router.add_get("/object_info", object_info_handler)
         app.router.add_get("/models", models_handler)
         app.router.add_get("/models/loras", models_handler)
+        app.router.add_get("/chunked-json", chunked_json_handler)
         app.router.add_get("/queue", queue_handler)
         app.router.add_get("/history/{prompt_id}", history_handler)
         app.router.add_get("/view", view_handler)
@@ -542,6 +554,21 @@ class TestTransport:
                 try:
                     with pytest.raises(ComfyUIPayloadTooLargeError):
                         await transport.get_bytes("/view", params={"filename": "a.png"})
+                finally:
+                    await transport.close()
+
+            return scenario
+
+        server_scenario(build)
+
+    def test_chunked_json_body_is_read_to_eof(self, server_scenario):
+        def build(fake, url):
+            async def scenario():
+                transport = ComfyUITransport(_base_config(url, max_json_bytes=400_000))
+                await transport.start()
+                try:
+                    data = await transport.get_json("/chunked-json", retries=1)
+                    assert len(data["payload"]) == 300_000
                 finally:
                     await transport.close()
 

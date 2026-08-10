@@ -28,6 +28,8 @@ export class GenerateView {
       job: null,
       result: null,     // 最近完成结果 { job, url }
       seed: -1,
+      workflowOverrides: false,
+      loraVisible: 40,
     };
     store.set("genParams", this.state);
     this.root = null;
@@ -70,18 +72,23 @@ export class GenerateView {
             el("option", { value: f.id, selected: this.state.family === f.id }, esc(f.label)))),
         ]),
         el("div", { class: "field" }, [
-          el("label", { for: "g-workflow" }, "工作流"),
+          el("label", { for: "g-workflow" }, `工作流 · ${workflows.length} 个可用`),
           el("select", { id: "g-workflow", class: "select" }, workflows.length
-            ? workflows.map((w) => el("option", { value: w.id, selected: this.state.workflow === w.id }, esc(w.label)))
+            ? workflows.map((w) => el("option", { value: w.id, selected: this.state.workflow === w.id }, esc(`[${w.family || "通用"}] ${w.label}`)))
             : [el("option", { value: "" }, "默认（后端选择）")]),
         ]),
         el("div", { class: "divider" }),
         el("div", { class: "row-between" }, [
           el("label", { class: "text-sm", style: "font-weight:600" }, "LoRA"),
-          el("button", { class: "icon-btn", type: "button", title: "刷新 LoRA 列表", "aria-label": "刷新 LoRA 列表" }, [ic("refresh")]),
+          el("button", { class: "icon-btn", id: "g-refresh-loras", type: "button", title: "刷新 LoRA 列表", "aria-label": "刷新 LoRA 列表" }, [ic("refresh")]),
         ]),
         el("div", { class: "lora-list", role: "listbox", "aria-label": "LoRA 列表" }, loras.length
-          ? loras.map((l) => this.loraChip(l))
+          ? [
+              ...loras.slice(0, this.state.loraVisible).map((l) => this.loraChip(l)),
+              loras.length > this.state.loraVisible
+                ? el("button", { class: "btn btn-sm", id: "g-lora-more", type: "button" }, `再显示 ${Math.min(40, loras.length - this.state.loraVisible)} 个`)
+                : null,
+            ]
           : [el("p", { class: "text-xs text-muted" }, "未检测到 LoRA（可在「模型与 LoRA」页查看状态）")]),
         el("div", { class: "divider" }),
         el("div", { class: "stack-2" }, [
@@ -181,13 +188,18 @@ export class GenerateView {
   actionsBar() {
     const s = this.state;
     const isRef = s.mode === "img2img" && s.refImage && !s.result;
+    const autoMatches = s.result?.job?.meta?.auto_lora?.matches || [];
+    const autoLabel = autoMatches.map((match) => match.character || match.key).filter(Boolean).join("、");
     return el("div", { class: "gen-actions" }, [
       el("button", { class: "btn btn-sm", type: "button", id: "g-save", disabled: isRef }, [ic("download"), esc("保存")]),
       el("button", { class: "btn btn-sm", type: "button", id: "g-fav", disabled: isRef }, [ic("fav"), esc("收藏")]),
       el("button", { class: "btn btn-sm", type: "button", id: "g-copy", disabled: isRef }, [ic("copy"), esc("复制")]),
       el("button", { class: "btn btn-sm", type: "button", id: "g-regen", disabled: isRef }, [ic("refresh"), esc("重生成")]),
       isRef ? el("button", { class: "btn btn-sm btn-danger", type: "button", id: "g-clearref" }, "移除参考图") : null,
-      el("span", { class: "queue-info" }, s.result ? `seed ${s.result.job.seed ?? "—"} · ${fmtRelative(s.result.job.created_at)}` : ""),
+      el("span", {
+        class: "queue-info",
+        title: autoLabel ? `自动匹配 LoRA：${autoLabel}` : "",
+      }, s.result ? `${autoLabel ? `LoRA ${autoLabel} · ` : ""}seed ${s.result.job.seed ?? "—"} · ${fmtRelative(s.result.job.created_at)}` : ""),
     ]);
   }
 
@@ -198,9 +210,16 @@ export class GenerateView {
     return el("aside", { class: "gen-panel gen-right", "aria-label": "生成参数" }, [
       el("div", { class: "panel-head" }, [ic("gear"), esc("参数")]),
       el("div", { class: "panel-body" }, [
-        el("div", { class: "mode-switch", role: "tablist", "aria-label": "生成模式" }, [
-          el("button", { type: "button", role: "tab", "aria-selected": s.mode === "txt2img" ? "true" : "false", id: "g-mode-txt" }, "文生图"),
-          el("button", { type: "button", role: "tab", "aria-selected": s.mode === "img2img" ? "true" : "false", id: "g-mode-img" }, "图生图"),
+        el("div", { class: "mode-switch", role: "radiogroup", "aria-label": "生成模式", dataset: { mode: s.mode } }, [
+          el("span", { class: "mode-switch-thumb", "aria-hidden": "true" }),
+          el("button", {
+            type: "button", role: "radio", "aria-checked": s.mode === "txt2img" ? "true" : "false",
+            tabindex: s.mode === "txt2img" ? "0" : "-1", id: "g-mode-txt", dataset: { mode: "txt2img" },
+          }, "文生图"),
+          el("button", {
+            type: "button", role: "radio", "aria-checked": s.mode === "img2img" ? "true" : "false",
+            tabindex: s.mode === "img2img" ? "0" : "-1", id: "g-mode-img", dataset: { mode: "img2img" },
+          }, "图生图"),
         ]),
         el("div", { class: "field" }, [
           el("label", { for: "g-prompt" }, "提示词"),
@@ -218,7 +237,7 @@ export class GenerateView {
             el("button", { type: "button", class: "num-btn", id: "g-seed-inc", "aria-label": "种子加一" }, "+"),
           ]),
         ]),
-        el("div", { class: "form-row-3" }, [
+        el("div", { class: "form-row" }, [
           el("div", { class: "field" }, [
             el("label", { for: "g-w" }, "宽度"),
             el("select", { id: "g-w", class: "select" }, [512, 768, 832, 1024, 1280].map((v) =>
@@ -229,28 +248,44 @@ export class GenerateView {
             el("select", { id: "g-h", class: "select" }, [512, 768, 832, 1024, 1280].map((v) =>
               el("option", { value: v, selected: (p.height || 1216) === v }, String(v)))),
           ]),
-          el("div", { class: "field" }, [
-            el("label", { for: "g-steps" }, "步数"),
-            el("select", { id: "g-steps", class: "select" }, STEPS_OPTS.map((v) =>
-              el("option", { value: v, selected: (p.steps || 24) === v }, String(v)))),
-          ]),
         ]),
-        el("div", { class: "form-row" }, [
-          el("div", { class: "field" }, [
-            el("label", { for: "g-cfg" }, "CFG"),
-            el("select", { id: "g-cfg", class: "select" }, CFG_OPTS.map((v) =>
-              el("option", { value: v, selected: (p.cfg ?? 7) === v }, String(v)))),
+        el("div", { class: "workflow-override stack-3" }, [
+          el("div", { class: "row-between gap-3" }, [
+            el("div", { class: "stack-1" }, [
+              el("b", { class: "text-sm" }, "覆盖工作流采样参数"),
+              el("span", { class: "text-xs text-muted" }, "默认关闭，使用所选工作流中已经调好的参数。"),
+            ]),
+            el("label", { class: "switch" }, [
+              el("input", { id: "g-override", type: "checkbox", checked: s.workflowOverrides, "aria-label": "覆盖工作流采样参数" }),
+              el("span", { class: "track", "aria-hidden": "true" }),
+            ]),
           ]),
-          el("div", { class: "field" }, [
-            el("label", { for: "g-sampler" }, "采样器"),
-            el("select", { id: "g-sampler", class: "select" }, SAMPLERS.map((v) =>
-              el("option", { value: v, selected: (p.sampler || "euler_ancestral") === v }, esc(v)))),
-          ]),
-        ]),
-        el("div", { class: "field" }, [
-          el("label", { for: "g-sched" }, "调度器"),
-          el("select", { id: "g-sched", class: "select" }, SCHEDULERS.map((v) =>
-            el("option", { value: v, selected: (p.scheduler || "normal") === v }, esc(v)))),
+          s.workflowOverrides ? el("div", { class: "stack-3 workflow-override-fields" }, [
+            el("div", { class: "form-row" }, [
+              el("div", { class: "field" }, [
+                el("label", { for: "g-steps" }, "步数"),
+                el("select", { id: "g-steps", class: "select" }, STEPS_OPTS.map((v) =>
+                  el("option", { value: v, selected: (p.steps || 24) === v }, String(v)))),
+              ]),
+              el("div", { class: "field" }, [
+                el("label", { for: "g-cfg" }, "CFG"),
+                el("select", { id: "g-cfg", class: "select" }, CFG_OPTS.map((v) =>
+                  el("option", { value: v, selected: (p.cfg ?? 7) === v }, String(v)))),
+              ]),
+            ]),
+            el("div", { class: "form-row" }, [
+              el("div", { class: "field" }, [
+                el("label", { for: "g-sampler" }, "采样器"),
+                el("select", { id: "g-sampler", class: "select" }, SAMPLERS.map((v) =>
+                  el("option", { value: v, selected: (p.sampler || "euler_ancestral") === v }, esc(v)))),
+              ]),
+              el("div", { class: "field" }, [
+                el("label", { for: "g-sched" }, "调度器"),
+                el("select", { id: "g-sched", class: "select" }, SCHEDULERS.map((v) =>
+                  el("option", { value: v, selected: (p.scheduler || "normal") === v }, esc(v)))),
+              ]),
+            ]),
+          ]) : null,
         ]),
         el("div", { class: "divider" }),
         el("p", { class: "text-xs text-muted" }, "提示：Ctrl+Enter 快速生成；生成中可继续调整参数（下次生效）。"),
@@ -261,15 +296,40 @@ export class GenerateView {
   /* ============ 事件绑定（每次渲染后调用） ============ */
   afterMount() {
     const s = this.state;
-    const g = (id) => $("#" + id);
+    const g = (id) => $("#" + id, this.root);
 
     // 模式切换
-    g("g-mode-txt")?.addEventListener("click", () => { if (s.mode !== "txt2img") { s.mode = "txt2img"; s.refImage = null; s.result = null; this.render(); } });
-    g("g-mode-img")?.addEventListener("click", () => { if (s.mode !== "img2img") { s.mode = "img2img"; s.result = null; this.render(); } });
+    const modeButtons = [g("g-mode-txt"), g("g-mode-img")].filter(Boolean);
+    modeButtons.forEach((button) => {
+      button.addEventListener("click", (event) => this.setMode(button.dataset.mode, { restoreFocus: event.detail === 0 }));
+      button.addEventListener("keydown", (event) => {
+        const target = {
+          ArrowLeft: "txt2img", ArrowUp: "txt2img", Home: "txt2img",
+          ArrowRight: "img2img", ArrowDown: "img2img", End: "img2img",
+        }[event.key];
+        if (!target) return;
+        event.preventDefault();
+        this.setMode(target, { restoreFocus: true });
+      });
+    });
 
     // 家族 / 工作流
     g("g-family")?.addEventListener("change", (e) => { s.family = e.target.value; });
     g("g-workflow")?.addEventListener("change", (e) => { s.workflow = e.target.value; });
+    g("g-lora-more")?.addEventListener("click", () => { s.loraVisible += 40; this.render(); });
+    g("g-refresh-loras")?.addEventListener("click", async () => {
+      try {
+        store.set("catalog", await api.catalog());
+        this.render();
+        toast("模型与 LoRA 目录已更新", "ok");
+      } catch (error) {
+        toast("目录刷新失败：" + error.message, "err");
+      }
+    });
+    g("g-override")?.addEventListener("change", (e) => {
+      s.workflowOverrides = e.target.checked;
+      this.render();
+    });
 
     // 参数
     g("g-prompt")?.addEventListener("input", (e) => { s.params = s.params || {}; s.params.prompt = e.target.value; });
@@ -305,8 +365,31 @@ export class GenerateView {
     });
   }
 
+  setMode(mode, { restoreFocus = false } = {}) {
+    const s = this.state;
+    if (!["txt2img", "img2img"].includes(mode)) return;
+    if (s.mode !== mode) {
+      s.mode = mode;
+      if (mode === "txt2img") s.refImage = null;
+      s.result = null;
+
+      const workflows = (store.get("catalog")?.workflows || []).filter((workflow) =>
+        !workflow.mode || workflow.mode === mode || workflow.mode === "any");
+      if (!workflows.some((workflow) => workflow.id === s.workflow)) {
+        s.workflow = workflows[0]?.id || "";
+      }
+      this.render();
+    }
+    if (restoreFocus) {
+      requestAnimationFrame(() => {
+        const id = mode === "img2img" ? "#g-mode-img" : "#g-mode-txt";
+        $(id, this.root)?.focus();
+      });
+    }
+  }
+
   bindDrop() {
-    const area = $("#canvas-area");
+    const area = $("#canvas-area", this.root);
     if (!area) return;
     const stop = (e) => { e.preventDefault(); e.stopPropagation(); };
     area.addEventListener("dragenter", stop);
@@ -349,7 +432,7 @@ export class GenerateView {
     const p = s.params || {};
     if (!(p.prompt || "").trim() && s.mode === "txt2img") {
       toast("请先填写提示词", "warn");
-      $("#g-prompt")?.focus();
+      $("#g-prompt", this.root)?.focus();
       return;
     }
     const payload = {
@@ -359,17 +442,21 @@ export class GenerateView {
       seed: s.seed,
       width: p.width || 832,
       height: p.height || 1216,
-      steps: p.steps || 24,
-      cfg: p.cfg ?? 7,
-      sampler: p.sampler || "euler_ancestral",
-      scheduler: p.scheduler || "normal",
       family: s.family,
       workflow: s.workflow || null,
       loras: [...s.loras.entries()].map(([id, v]) => ({ id, strength: v.strength })),
       ref_image: s.refImage ? { url: s.refImage.url } : null,
     };
+    if (s.workflowOverrides) {
+      Object.assign(payload, {
+        steps: p.steps || 24,
+        cfg: p.cfg ?? 7,
+        sampler: p.sampler || "euler_ancestral",
+        scheduler: p.scheduler || "normal",
+      });
+    }
     // 保证 -1 随机时后端回传真实种子
-    const btn = $("#g-submit");
+    const btn = $("#g-submit", this.root);
     if (btn) btn.disabled = true;
     try {
       const job = await api.submitJob(payload);
@@ -396,7 +483,7 @@ export class GenerateView {
   onJobUpdate(job) {
     const s = this.state;
     s.job = job;
-    const bar = $("#g-submit");
+    const bar = $("#g-submit", this.root);
     if (bar) bar.disabled = !!job;
     const area = $(".gen-center .canvas-wrap");
     if (area && s.job) {

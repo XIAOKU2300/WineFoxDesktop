@@ -4,7 +4,7 @@
 desktop_shell/
   src/                 前端（无构建步骤的静态页面）
     index.html         本地启动页 / 错误页（状态、日志、重试、退出选择）
-    app.html           面板宿主（iframe 载入 sidecar 的 loopback bootstrap）
+    index.html         单页启动宿主（自动载入 sidecar 面板，无中间操作页）
     main.js            状态渲染、退出流程、单实例 focus 事件
   src-tauri/           Tauri 2 (Rust) shell
     src/

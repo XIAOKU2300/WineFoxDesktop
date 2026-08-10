@@ -3,14 +3,15 @@
 //! Responsibilities:
 //!   * single instance (second launch focuses the existing window)
 //!   * main window + system tray (show / hide / exit)
-//!   * close-to-tray
+//!   * main-window close triggers immediate application shutdown
 //!   * sidecar lifecycle (see sidecar.rs) + local startup/error pages
-//!   * exit flow: no tasks -> quit; busy -> wait (default) / stop / return
+//!   * graceful sidecar cleanup with a force-kill timeout fallback
 
 mod commands;
 mod handshake;
 mod http_client;
 mod job_object;
+mod panel_protocol;
 mod sanitize;
 mod sidecar;
 mod state;
@@ -24,6 +25,7 @@ use tauri_plugin_single_instance::init as single_instance_init;
 
 pub fn run() {
     let state = AppState::new();
+    let protocol_state = Arc::clone(&state);
 
     let app = tauri::Builder::default()
         // Single instance must be the first plugin.
@@ -36,6 +38,9 @@ pub fn run() {
             let _ = app.emit("focus-requested", ());
         }))
         .manage(state.clone())
+        .register_uri_scheme_protocol(panel_protocol::PANEL_SCHEME, move |_ctx, request| {
+            panel_protocol::handle(&protocol_state, request)
+        })
         .invoke_handler(tauri::generate_handler![
             commands::get_status,
             commands::start_sidecar,
@@ -52,19 +57,16 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // Close-to-tray: the X button hides the window unless quitting.
+            // Closing the main window always exits the application. Keep the
+            // event loop alive until the sidecar has shut down (or is force
+            // killed by the existing timeout fallback).
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let quitting = window
-                    .app_handle()
-                    .state::<Arc<SidecarManager>>()
-                    .state
-                    .inner
-                    .lock()
-                    .unwrap()
-                    .quitting;
+                api.prevent_close();
+
+                let manager = window.app_handle().state::<Arc<SidecarManager>>();
+                let quitting = manager.state.inner.lock().unwrap().quitting;
                 if !quitting {
-                    api.prevent_close();
-                    let _ = window.hide();
+                    commands::confirm_exit_impl(window.app_handle(), &manager, "now");
                 }
             }
         })

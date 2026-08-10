@@ -47,17 +47,15 @@ pub fn build_tray<R: Runtime>(app: &AppHandle<R>, manager: &Arc<SidecarManager>)
             TRAY_EXIT => {
                 // No tasks -> quit straight away (no JS round-trip).
                 // Busy -> show the window and let the frontend modal decide.
-                match begin_exit_impl(app, &mgr) {
-                    ExitDecision::NeedsChoice { .. } => {
-                        if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
-                        }
-                        let _ = app.emit("exit-requested", ());
+                let decision: ExitDecision = begin_exit_impl(app, &mgr);
+                if decision.needs_choice {
+                    if let Some(w) = app.get_webview_window("main") {
+                        let _ = w.show();
+                        let _ = w.set_focus();
                     }
-                    ExitDecision::Direct => {
-                        confirm_exit_impl(app, &mgr, "now");
-                    }
+                    let _ = app.emit("exit-requested", ());
+                } else {
+                    confirm_exit_impl(app, &mgr, "now");
                 }
             }
             _ => {}

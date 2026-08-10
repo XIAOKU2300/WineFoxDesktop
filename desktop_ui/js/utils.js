@@ -22,13 +22,47 @@ export function el(tag, attrs = {}, children = []) {
   return node;
 }
 
-export const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({
-  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-}[c]));
+/**
+ * Text values are inserted by `el()` with textContent, so HTML escaping here
+ * would render entities literally (for example `&amp;`). Keep this helper as
+ * a compatibility boundary for existing views, but return display text.
+ */
+export const esc = (s) => String(s ?? "");
+
+/** Create trusted inline SVG markup in the SVG namespace.
+ * `markup` is only used with static literals from the bundled UI; untrusted
+ * API values must continue to go through `el()`/textContent.
+ */
+export function svgEl(viewBox, markup, attrs = {}) {
+  const node = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  node.setAttribute("viewBox", viewBox);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v == null || v === false) continue;
+    node.setAttribute(k, v === true ? "" : v);
+  }
+  node.innerHTML = markup;
+  return node;
+}
 
 export const debounce = (fn, ms) => {
   let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
 };
+
+/** Shared WineFox loading state: a restrained ink line and fox seal. */
+export function loadingState(label = "正在加载", { compact = false } = {}) {
+  return el("div", {
+    class: `wfx-loading${compact ? " is-compact" : ""}`,
+    role: "status",
+    "aria-live": "polite",
+    "aria-busy": "true",
+  }, [
+    el("div", { class: "wfx-loading-mark", "aria-hidden": "true" }, [
+      el("span", { class: "wfx-loading-ink" }),
+      el("span", { class: "wfx-loading-seal" }, "狐"),
+    ]),
+    el("span", { class: "wfx-loading-label" }, label),
+  ]);
+}
 
 /* 只保留路径最后一段（文件名），杜绝绝对路径泄露 */
 export function sanitizeName(name) {

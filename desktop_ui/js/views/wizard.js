@@ -2,9 +2,18 @@
  * 步骤：欢迎 → ComfyUI → 认证/TLS → 连接检测 → Checkpoint/LoRA/节点 → 模型族/工作流 → 旧数据导入 → 完成
  * 数据即时保存（PUT /settings）；密钥只写不读回。
  */
-import { el, $, $$, ic, esc } from "../utils.js";
+import { el, $, $$, ic, esc, svgEl } from "../utils.js";
 import { api } from "../api.js";
 import { store } from "../store.js";
+
+const BRAND_MARKUP = '<path d="M4 13c0-5 3.5-9 10-9s10 4 10 9c0 6.5-5 12-10 12S4 19.5 4 13Z" stroke-width="1.6"/><path d="M9.2 13.8c1.6 1.4 3.4 1.4 4.8.2 1.4 1.2 3.2 1.2 4.8-.2" stroke-width="1.5"/><path d="M13 16.4v1.6" stroke-width="1.5" stroke-linecap="round"/>';
+const HERO_MARKUP = '<circle class="sun" cx="122" cy="24" r="13" stroke-width="1.3"/><path d="M18 86h114M18 74h70M26 96h96" stroke-width="1.2" stroke-linecap="round"/><path d="M30 62c10-16 30-20 44-6 14-14 34-10 44 6" stroke-width="1.4" stroke-linecap="round"/><path d="M34 50h56" stroke-width="1" stroke-linecap="round"/>';
+
+function heroArt() {
+  return el("div", { class: "hero-art" }, [
+    svgEl("0 0 150 110", HERO_MARKUP, { class: "hero-line", "aria-hidden": "true" }),
+  ]);
+}
 
 export class Wizard {
   constructor(onDone) {
@@ -42,8 +51,7 @@ export class Wizard {
     root.append(el("div", { class: "wizard" }, [
       el("div", { class: "wizard-top" }, [
         el("div", { class: "brand" }, [
-          el("svg", { class: "brand-mark", viewBox: "0 0 28 28", "aria-hidden": "true" },
-            '<path d="M4 13c0-5 3.5-9 10-9s10 4 10 9c0 6.5-5 12-10 12S4 19.5 4 13Z" stroke-width="1.6"/><path d="M9.2 13.8c1.6 1.4 3.4 1.4 4.8.2 1.4 1.2 3.2 1.2 4.8-.2" stroke-width="1.5"/><path d="M13 16.4v1.6" stroke-width="1.5" stroke-linecap="round"/>'),
+          svgEl("0 0 28 28", BRAND_MARKUP, { class: "brand-mark", "aria-hidden": "true" }),
           el("div", { class: "w-title" }, "WineFox Desktop 首次设置"),
         ]),
         el("span", { class: "w-step" }, `第 ${this.index + 1} / ${this.steps.length} 步`),
@@ -55,7 +63,7 @@ export class Wizard {
             el("span", {}, s.title),
           ]))),
         el("div", { class: "wizard-main" }, [
-          el("div", { class: "wizard-page", role: "group", "aria-label": step.title }, this[`page_${step.id}`]()),
+          el("div", { class: `wizard-page wizard-page-${step.id}`, role: "group", "aria-label": step.title }, this[`page_${step.id}`]()),
           el("div", { class: "wizard-foot" }, this.foot()),
         ]),
       ]),
@@ -147,21 +155,20 @@ export class Wizard {
 
   page_welcome() {
     return [
-      el("div", { class: "hero-art" }, [
-        el("svg", { viewBox: "0 0 150 110", "aria-hidden": "true" }, [
-          `<circle class="sun" cx="122" cy="24" r="13" stroke-width="1.3"/>`,
-          `<path d="M18 86h114M18 74h70M26 96h96" stroke-width="1.2" stroke-linecap="round"/>`,
-          `<path d="M30 62c10-16 30-20 44-6 14-14 34-10 44 6" stroke-width="1.4" stroke-linecap="round"/>`,
-          `<path d="M34 50h56" stroke-width="1" stroke-linecap="round"/>`,
-        ]),
-      ]),
+      heroArt(),
       el("h1", { class: "h1" }, "欢迎使用 WineFox Desktop"),
       el("p", { class: "subtitle" },
         "将 ComfyUI 的力量带入桌面：文生图、图生图、LoRA、模型管理与完整历史。"),
-      el("div", { class: "card card-pad stack-3" }, [
-        el("div", { class: "row gap-3" }, [ic("gen"), el("span", {}, esc("共 8 步，约 2 分钟完成基本配置"))]),
-        el("div", { class: "row gap-3" }, [ic("model"), el("span", {}, esc("检查 ComfyUI 连接、模型与自定义节点"))]),
-        el("div", { class: "row gap-3" }, [ic("diag"), el("span", {}, esc("所有密钥仅保存在本机，界面只显示配置状态"))]),
+      el("div", { class: "welcome-list", role: "list" }, [
+        el("div", { class: "welcome-item", role: "listitem" }, [ic("gen"), el("div", { class: "welcome-item-copy" }, [
+          el("strong", {}, "8 步完成基本配置"), el("span", {}, "约 2 分钟，随时可以返回修改"),
+        ])]),
+        el("div", { class: "welcome-item", role: "listitem" }, [ic("model"), el("div", { class: "welcome-item-copy" }, [
+          el("strong", {}, "自动检查资源"), el("span", {}, "识别模型、LoRA 与自定义节点"),
+        ])]),
+        el("div", { class: "welcome-item", role: "listitem" }, [ic("diag"), el("div", { class: "welcome-item-copy" }, [
+          el("strong", {}, "密钥只保存在本机"), el("span", {}, "界面只显示配置状态，不回显内容"),
+        ])]),
       ]),
     ];
   }
@@ -356,9 +363,9 @@ export class Wizard {
       el("div", { class: "field" }, [
         el("label", {}, "默认模型族"),
         el("div", { class: "stack-2" }, families.map((f) => {
-          const btn = el("button", { type: "button", class: "lora-chip", style: "justify-content:flex-start", "aria-pressed": (this.data.family || "anima") === f.id }, [
-            el("span", { class: "l-name" }, esc(f.label)),
-            el("span", { class: "l-strength", style: "text-align:left" }, esc(f.description || "")),
+          const btn = el("button", { type: "button", class: "family-option", "aria-pressed": (this.data.family || "anima") === f.id }, [
+            el("span", { class: "family-option-title" }, esc(f.label)),
+            el("span", { class: "family-option-desc" }, esc(f.description || "")),
           ]);
           btn.addEventListener("click", () => { this.data.family = f.id; this.render(); });
           return btn;
@@ -378,12 +385,12 @@ export class Wizard {
       el("h2", { class: "h2" }, "旧数据导入"),
       el("p", { class: "subtitle" }, "可导入旧版插件的数据（收藏、提示词笔记本、生成统计）。数据只会上传到本机后端。"),
       el("div", { class: "card card-pad stack-4" }, [
-        el("div", { class: "row-between" }, [
+        el("div", { class: "migration-picker" }, [
           el("div", { class: "stack-1" }, [
             el("b", {}, "从旧版本导入"),
             el("span", { class: "text-sm text-muted" }, "选择旧版数据文件（JSON），合并到当前库"),
           ]),
-          el("input", { id: "w-file", class: "input", type: "file", accept: ".json,application/json", style: "max-width:300px" }),
+          el("input", { id: "w-file", class: "input migration-file", type: "file", accept: ".json,application/json" }),
         ]),
         el("label", { class: "check" }, [
           el("input", { type: "checkbox", id: "w-keep", checked: true }),
@@ -399,13 +406,7 @@ export class Wizard {
     const cat = this.catalog;
     const missing = (cat?.nodes || []).filter((n) => !n.installed);
     return [
-      el("div", { class: "hero-art" }, [
-        el("svg", { viewBox: "0 0 150 110", "aria-hidden": "true" }, [
-          `<circle class="sun" cx="122" cy="24" r="13" stroke-width="1.3"/>`,
-          `<path d="M18 86h114M18 74h70M26 96h96" stroke-width="1.2" stroke-linecap="round"/>`,
-          `<path d="M30 62c10-16 30-20 44-6 14-14 34-10 44 6" stroke-width="1.4" stroke-linecap="round"/>`,
-        ]),
-      ]),
+      heroArt(),
       el("h2", { class: "h2" }, "一切就绪"),
       el("p", { class: "subtitle" },
         this.probeResult?.result === "ok"

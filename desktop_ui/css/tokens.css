@@ -1,45 +1,43 @@
-/* WineFox Desktop — Design tokens
- * 设计语言：现代 Windows 桌面工具 + 日式精致线描 + 克制半透明材质
- * 禁止：高饱和堆叠 / 巨大渐变标题 / 游戏启动器卡片墙 / 远程资源 / 过度毛玻璃
- * 所有颜色均通过 WCAG AA 校验（见 DESIGN_SYSTEM.md 对比度表）。
- */
+/* WineFox visual tokens: misted washi, sumi ink, taikobai red and celadon. */
 :root {
   color-scheme: light;
 
-  /* ---- 色板 Light ---- */
-  --canvas: #F6F3F1;
-  --surface: #FFFFFF;
-  --surface-2: #FBF9F7;
-  --glass: rgba(255, 255, 255, 0.82);
-  --glass-strong: rgba(255, 255, 255, 0.92);
-  --primary: #A45C73;          /* 主色（按钮底色 / 链接） 4.82:1 on white */
-  --primary-strong: #8A4A5F;   /* hover 加深 */
-  --primary-soft: rgba(164, 92, 115, 0.10);
-  --primary-soft-2: rgba(164, 92, 115, 0.16);
-  --accent: #D3A65A;           /* 点缀金 —— 仅装饰/边框/深色模式强调 */
-  --accent-soft: rgba(211, 166, 90, 0.16);
-  --text: #241F22;             /* 16.23:1 on white */
-  --text-2: #4A4248;
-  --muted: #756B71;            /* 5.12:1 on white */
-  --faint: #9B9298;
-  --success: #3D7A63;          /* 5.05:1 */
-  --success-soft: rgba(61, 122, 99, 0.12);
-  --danger: #B84A50;           /* 5.08:1 */
-  --danger-soft: rgba(184, 74, 80, 0.10);
-  --warn: #9A6B22;             /* 警示文字（金底深字） */
-  --warn-soft: rgba(211, 166, 90, 0.22);
+  --canvas: #F2F5F3;
+  --surface: #FCFDFC;
+  --surface-2: #EDEFED;
+  --glass: rgba(252, 253, 252, 0.84);
+  --glass-strong: rgba(252, 253, 252, 0.95);
 
-  /* ---- 边框 / 阴影 ---- */
-  --border: rgba(36, 31, 34, 0.10);
-  --border-strong: rgba(36, 31, 34, 0.18);
-  --hairline: rgba(36, 31, 34, 0.06);
-  --ring: rgba(164, 92, 115, 0.45);
-  --shadow-1: 0 1px 2px rgba(36, 31, 34, 0.05), 0 2px 8px rgba(36, 31, 34, 0.05);
-  --shadow-2: 0 4px 16px rgba(36, 31, 34, 0.08), 0 2px 4px rgba(36, 31, 34, 0.05);
-  --shadow-3: 0 12px 40px rgba(36, 31, 34, 0.14);
+  --primary: #9B5067;
+  --primary-strong: #7F4054;
+  --primary-soft: rgba(155, 80, 103, 0.10);
+  --primary-soft-2: rgba(155, 80, 103, 0.17);
+  --accent: #AD8748;
+  --accent-soft: rgba(173, 135, 72, 0.16);
+  --aizome: #496A70;
+  --aizome-soft: rgba(73, 106, 112, 0.12);
 
-  /* ---- 排版 ---- */
+  --text: #202426;
+  --text-2: #465052;
+  --muted: #697375;
+  --faint: #90999A;
+  --success: #39745F;
+  --success-soft: rgba(57, 116, 95, 0.12);
+  --danger: #AC424D;
+  --danger-soft: rgba(172, 66, 77, 0.10);
+  --warn: #8A6427;
+  --warn-soft: rgba(173, 135, 72, 0.18);
+
+  --border: rgba(32, 36, 38, 0.11);
+  --border-strong: rgba(32, 36, 38, 0.19);
+  --hairline: rgba(32, 36, 38, 0.065);
+  --ring: rgba(155, 80, 103, 0.42);
+  --shadow-1: 0 1px 2px rgba(32, 36, 38, 0.035), 0 5px 18px rgba(32, 36, 38, 0.035);
+  --shadow-2: 0 8px 28px rgba(32, 36, 38, 0.075), 0 2px 6px rgba(32, 36, 38, 0.045);
+  --shadow-3: 0 22px 64px rgba(32, 36, 38, 0.16);
+
   --font-ui: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+  --font-display: "Yu Mincho", "YuMincho", "MS Mincho", "Songti SC", "SimSun", serif;
   --font-mono: "Cascadia Mono", "Segoe UI Mono", Consolas, monospace;
   --fs-xs: 11px;
   --fs-sm: 12px;
@@ -51,75 +49,79 @@
   --lh-tight: 1.35;
   --lh-normal: 1.55;
 
-  /* ---- 间距（4 的倍数） ---- */
-  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px;
-  --sp-5: 24px; --sp-6: 32px; --sp-7: 48px;
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+  --sp-7: 48px;
 
-  /* ---- 圆角 ---- */
-  --r-sm: 8px; --r-md: 12px; --r-lg: 16px; --r-full: 999px;
+  --r-sm: 7px;
+  --r-md: 8px;
+  --r-lg: 10px;
+  --r-full: 999px;
 
-  /* ---- 动效（160–220ms） ---- */
-  --dur-fast: 160ms;
-  --dur: 200ms;
-  --dur-slow: 220ms;
+  --dur-fast: 140ms;
+  --dur: 220ms;
+  --dur-slow: 360ms;
+  --dur-scene: 520ms;
   --ease: cubic-bezier(0.2, 0, 0, 1);
-  --ease-out: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
 
-  /* ---- 尺寸 ---- */
-  --topbar-h: 52px;
-  --rail-w: 200px;
+  --topbar-h: 56px;
+  --rail-w: 208px;
   --rail-w-collapsed: 64px;
-
-  /* ---- 语义 ---- */
   --focus-outline: 2px solid var(--ring);
 }
 
-/* 深色：画布/表面/文字反转，主色提亮保证 4.5:1 */
 [data-theme="dark"] {
   color-scheme: dark;
-  --canvas: #181416;
-  --surface: #242025;
-  --surface-2: #2A252B;
-  --glass: rgba(36, 32, 37, 0.82);
-  --glass-strong: rgba(36, 32, 37, 0.94);
-  --primary: #C07A90;          /* 4.91:1 on #242025 */
-  --primary-strong: #D291A4;   /* hover 提亮 */
-  --primary-soft: rgba(192, 122, 144, 0.14);
-  --primary-soft-2: rgba(192, 122, 144, 0.22);
-  --accent: #D3A65A;           /* 7.16:1 on #242025 */
-  --accent-soft: rgba(211, 166, 90, 0.18);
-  --text: #F7F2F4;             /* 14.49:1 */
-  --text-2: #D8CFD3;
-  --muted: #B9AEB4;            /* 7.47:1 */
-  --faint: #8E8289;
-  --success: #6FBE9E;
-  --success-soft: rgba(111, 190, 158, 0.14);
-  --danger: #E0858B;
-  --danger-soft: rgba(224, 133, 139, 0.14);
-  --warn: #E0BE7A;
-  --warn-soft: rgba(211, 166, 90, 0.20);
-  --border: rgba(247, 242, 244, 0.12);
-  --border-strong: rgba(247, 242, 244, 0.22);
-  --hairline: rgba(247, 242, 244, 0.06);
-  --ring: rgba(192, 122, 144, 0.55);
-  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.35);
-  --shadow-3: 0 12px 40px rgba(0, 0, 0, 0.5);
+  --canvas: #171A1A;
+  --surface: #222626;
+  --surface-2: #292E2D;
+  --glass: rgba(34, 38, 38, 0.85);
+  --glass-strong: rgba(34, 38, 38, 0.96);
+  --primary: #CF8299;
+  --primary-strong: #E09AAF;
+  --primary-soft: rgba(207, 130, 153, 0.14);
+  --primary-soft-2: rgba(207, 130, 153, 0.22);
+  --accent: #D2AE6D;
+  --accent-soft: rgba(210, 174, 109, 0.18);
+  --aizome: #83ADB2;
+  --aizome-soft: rgba(131, 173, 178, 0.14);
+  --text: #F2F5F3;
+  --text-2: #D3DAD8;
+  --muted: #ADB8B5;
+  --faint: #7F8A88;
+  --success: #72BEA0;
+  --success-soft: rgba(114, 190, 160, 0.14);
+  --danger: #E08791;
+  --danger-soft: rgba(224, 135, 145, 0.14);
+  --warn: #DFBF82;
+  --warn-soft: rgba(210, 174, 109, 0.18);
+  --border: rgba(242, 245, 243, 0.12);
+  --border-strong: rgba(242, 245, 243, 0.22);
+  --hairline: rgba(242, 245, 243, 0.065);
+  --ring: rgba(207, 130, 153, 0.54);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.28);
+  --shadow-2: 0 8px 28px rgba(0, 0, 0, 0.34);
+  --shadow-3: 0 22px 64px rgba(0, 0, 0, 0.5);
 }
 
-/* 主按钮在深色下仍用可读的深玫瑰底 + 白字（4.82:1） */
 [data-theme="dark"] .btn-primary {
-  --btn-bg: #A45C73;
-  --btn-bg-hover: #B96A83;
+  --btn-bg: #A95770;
+  --btn-bg-hover: #BD6B83;
   --btn-fg: #FFFFFF;
-  --btn-border: #A45C73;
+  --btn-border: #A95770;
 }
 
-/* ---- 动效偏好 ---- */
 @media (prefers-reduced-motion: reduce) {
   :root {
     --dur-fast: 0ms;
     --dur: 0ms;
     --dur-slow: 0ms;
+    --dur-scene: 0ms;
   }
 }

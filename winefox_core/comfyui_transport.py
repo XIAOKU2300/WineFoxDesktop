@@ -106,14 +106,18 @@ async def _cap_body(resp: aiohttp.ClientResponse, max_bytes: int) -> bytes:
             kind=ErrorKind.PAYLOAD_TOO_LARGE,
             status=resp.status,
         )
-    body = await resp.content.read(max_bytes + 1)
-    if len(body) > max_bytes:
-        raise ComfyUIPayloadTooLargeError(
-            f"响应体超过大小上限（>{max_bytes} bytes）",
-            kind=ErrorKind.PAYLOAD_TOO_LARGE,
-            status=resp.status,
-        )
-    return body
+    chunks: list[bytes] = []
+    received = 0
+    async for chunk in resp.content.iter_chunked(min(64 * 1024, max_bytes + 1)):
+        received += len(chunk)
+        if received > max_bytes:
+            raise ComfyUIPayloadTooLargeError(
+                f"响应体超过大小上限（>{max_bytes} bytes）",
+                kind=ErrorKind.PAYLOAD_TOO_LARGE,
+                status=resp.status,
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 class ComfyUITransport:

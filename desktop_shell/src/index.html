@@ -1,54 +1,60 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>WineFox — 启动</title>
+  <meta name="color-scheme" content="light dark">
+  <title>WineFox</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <main class="shell-page">
-    <div class="brand">
-      <div class="logo">W</div>
-      <h1>WineFox</h1>
-      <p class="sub">本地绘图服务桌面端</p>
+  <iframe id="panel" title="WineFox Desktop" hidden></iframe>
+
+  <main class="launch" id="launch" aria-live="polite">
+    <div class="launch-art" aria-hidden="true">
+      <svg viewBox="0 0 260 156">
+        <circle class="moon" cx="194" cy="38" r="19"/>
+        <path class="mountain far" d="M18 116c26-35 58-48 86-19 25-29 63-25 94 18"/>
+        <path class="mountain near" d="M8 130c42-16 76-16 105-2 36-17 84-15 139 2"/>
+        <path class="tail" d="M32 123c42-2 63-24 67-49 3-18-11-29-26-21-18 9-10 34 9 43 31 15 68-1 91-24"/>
+        <path class="horizon" d="M16 137h228"/>
+      </svg>
+      <span class="seal">狐</span>
     </div>
+    <div class="launch-copy">
+      <p class="eyebrow">WINEFOX DESKTOP</p>
+      <h1>正在准备创作空间</h1>
+      <p id="status-detail">启动本地服务并整理工作区</p>
+    </div>
+    <div class="launch-progress" aria-hidden="true"><i></i></div>
 
-    <section class="card status-card" id="status-card">
-      <div class="status-row">
-        <span class="spinner" id="spinner" hidden></span>
-        <span class="dot" id="status-dot"></span>
-        <h2 id="status-title">正在启动…</h2>
-      </div>
-      <p class="status-detail" id="status-detail">正在拉起本地 sidecar 服务</p>
-
-      <div class="progress" id="progress-bar"><div class="progress-fill"></div></div>
-
-      <div class="error-box" id="error-box" hidden>
-        <h3>错误详情</h3>
-        <pre id="error-text"></pre>
-        <h3>最近日志（已脱敏）</h3>
-        <pre id="log-tail"></pre>
-      </div>
-
-      <div class="actions" id="actions">
-        <button class="btn primary" id="btn-open" disabled>打开面板</button>
-        <button class="btn" id="btn-retry" hidden>重试启动</button>
-        <button class="btn ghost" id="btn-quit">退出</button>
-      </div>
+    <section class="launch-error" id="error-box" hidden>
+      <h2>启动没有完成</h2>
+      <p id="error-text">本地服务暂时无法启动。</p>
+      <pre id="log-tail"></pre>
+      <button class="retry" id="btn-retry" type="button">重新启动</button>
     </section>
-
-    <footer>版本 <span id="app-version">…</span> · 协议 v1 · sidecar 仅监听 127.0.0.1</footer>
   </main>
 
   <div class="modal-backdrop" id="exit-modal" hidden>
-    <div class="modal">
-      <h2>正在生成图片，确认退出？</h2>
-      <p>当前有 <b id="exit-task-count">0</b> 个任务在运行。退出时不会打断 ComfyUI 后端，生成任务会继续在后台跑完并丢弃。</p>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="exit-title">
+      <h2 id="exit-title">正在生成图片，确认退出？</h2>
+      <p>当前有 <b id="exit-task-count">0</b> 个任务在运行。退出 WineFox 不会中断 ComfyUI 中已经提交的任务。</p>
       <div class="modal-actions">
-        <button class="btn primary" id="exit-wait">等待任务完成（默认）</button>
-        <button class="btn" id="exit-now">立即退出</button>
-        <button class="btn ghost" id="exit-cancel">返回应用</button>
+        <button class="button primary" id="exit-wait" type="button">等待完成后退出</button>
+        <button class="button" id="exit-now" type="button">立即退出</button>
+        <button class="button quiet" id="exit-cancel" type="button">返回应用</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="quitting-modal" hidden>
+    <div class="modal" role="status">
+      <h2 id="quitting-title">正在退出</h2>
+      <p id="quitting-text">正在停止本地服务。</p>
+      <div class="modal-actions">
+        <button class="button" id="quit-force" type="button">立即退出</button>
+        <button class="button quiet" id="quit-back" type="button">返回应用</button>
       </div>
     </div>
   </div>

@@ -1,0 +1,108 @@
+"""Prepare immutable ComfyUI API workflows from desktop job payloads."""
+
+from __future__ import annotations
+
+import copy
+import random
+from typing import Any, Mapping
+
+
+def _replace_ref(value: Any, node_id: str, replacement: Any, output_index: int) -> Any:
+    if isinstance(value, list):
+        if len(value) == 2 and str(value[0]) == node_id and value[1] == output_index:
+            return copy.deepcopy(replacement)
+        return [_replace_ref(v, node_id, replacement, output_index) for v in value]
+    if isinstance(value, dict):
+        return {k: _replace_ref(v, node_id, replacement, output_index) for k, v in value.items()}
+    return value
+
+
+def _bypass_lora(workflow: dict[str, Any], node_id: str, node: Mapping[str, Any]) -> None:
+    inputs = node.get("inputs") if isinstance(node, Mapping) else {}
+    model_ref = (inputs or {}).get("model")
+    clip_ref = (inputs or {}).get("clip")
+    for other_id, other in list(workflow.items()):
+        if other_id == node_id or not isinstance(other, dict):
+            continue
+        if model_ref is not None:
+            other["inputs"] = _replace_ref(other.get("inputs", {}), node_id, model_ref, 0)
+        if clip_ref is not None:
+            other["inputs"] = _replace_ref(other.get("inputs", {}), node_id, clip_ref, 1)
+    workflow.pop(node_id, None)
+
+
+def prepare_workflow(
+    source: Mapping[str, Any],
+    payload: Mapping[str, Any],
+    *,
+    checkpoint: str | None = None,
+    uploaded_name: str | None = None,
+) -> tuple[dict[str, Any], int]:
+    workflow: dict[str, Any] = copy.deepcopy(dict(source))
+    prompt = str(payload.get("prompt") or "").strip()
+    negative = str(payload.get("negative_prompt") or "").strip()
+    seed_value = payload.get("seed")
+    seed = random.SystemRandom().randrange(0, 2**63 - 1) if seed_value in (None, -1, "-1") else int(seed_value)
+    width = max(64, int(payload.get("width") or 832))
+    height = max(64, int(payload.get("height") or 1216))
+    width -= width % 8
+    height -= height % 8
+    loras = payload.get("loras") if isinstance(payload.get("loras"), list) else []
+    selected_loras = [item for item in loras if isinstance(item, dict)]
+    lora_index = 0
+    positive_done = False
+    negative_done = False
+    seed_index = 0
+
+    for node_id, node in list(workflow.items()):
+        if not isinstance(node, dict):
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        class_type = str(node.get("class_type") or "")
+        title = str((node.get("_meta") or {}).get("title") or "").lower()
+        lowered = class_type.lower()
+
+        if "cliptextencode" in lowered and "text" in inputs:
+            if "negative" in title or str(node_id) in {"12", "33"}:
+                if negative and not negative_done:
+                    inputs["text"] = negative
+                    negative_done = True
+            elif not positive_done or "positive prompt" in title:
+                inputs["text"] = prompt
+                positive_done = True
+        for key in ("seed", "noise_seed"):
+            if key in inputs and not isinstance(inputs[key], (list, tuple, dict)):
+                inputs[key] = (seed + seed_index) % (2**63 - 1)
+                seed_index += 1
+        if "width" in inputs and not isinstance(inputs["width"], (list, tuple, dict)):
+            inputs["width"] = width
+        if "height" in inputs and not isinstance(inputs["height"], (list, tuple, dict)):
+            inputs["height"] = height
+        if "steps" in inputs and payload.get("steps") is not None:
+            inputs["steps"] = int(payload["steps"])
+        if "cfg" in inputs and payload.get("cfg") is not None:
+            inputs["cfg"] = float(payload["cfg"])
+        if "sampler_name" in inputs and payload.get("sampler"):
+            inputs["sampler_name"] = str(payload["sampler"])
+        if "scheduler" in inputs and payload.get("scheduler"):
+            inputs["scheduler"] = str(payload["scheduler"])
+        if "ckpt_name" in inputs and checkpoint:
+            inputs["ckpt_name"] = checkpoint
+        if class_type == "LoadImage" and uploaded_name:
+            inputs["image"] = uploaded_name
+        if "lora" in lowered and "lora_name" in inputs:
+            selected_lora = selected_loras[lora_index] if lora_index < len(selected_loras) else None
+            if selected_lora:
+                inputs["lora_name"] = str(selected_lora.get("name") or selected_lora.get("id") or inputs["lora_name"])
+                strength = float(selected_lora.get("strength", selected_lora.get("strength_model", 1.0)))
+                if "strength_model" in inputs:
+                    inputs["strength_model"] = strength
+                if "strength_clip" in inputs:
+                    inputs["strength_clip"] = float(selected_lora.get("strength_clip", strength))
+                lora_index += 1
+            else:
+                _bypass_lora(workflow, str(node_id), node)
+
+    return workflow, seed

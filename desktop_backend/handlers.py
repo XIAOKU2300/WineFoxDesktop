@@ -20,6 +20,7 @@ import json
 import logging
 import re
 import time
+import io
 from typing import Any
 
 from aiohttp import web
@@ -73,7 +74,8 @@ async def handle_bootstrap(request: web.Request) -> web.Response:
     session = security.consume_bootstrap(token)
     if session is None:
         raise AppError(404, "bootstrap_not_found", "bootstrap 令牌无效或已使用")
-    resp = _json({"session": "established"})
+    wants_html = "text/html" in request.headers.get("Accept", "")
+    resp = web.Response(status=302, headers={"Location": "/"}) if wants_html else _json({"session": "established"})
     resp.set_cookie(
         SESSION_COOKIE_NAME,
         session,
@@ -143,6 +145,13 @@ async def handle_delete_secret(request: web.Request) -> web.Response:
     return _json({"name": name, "deleted": True})
 
 
+async def handle_get_secrets(request: web.Request) -> web.Response:
+    config = _ctx(request).get("config")
+    if config is None or not hasattr(config, "secret_statuses"):
+        return _json({"items": []})
+    return _json(await config.secret_statuses())
+
+
 # ---------------- comfyui / catalog ----------------
 
 async def handle_probe(request: web.Request) -> web.Response:
@@ -188,8 +197,26 @@ async def handle_upload(request: web.Request) -> web.Response:
     except Exception as exc:
         logger.exception("上传保存失败")
         raise AppError(500, "upload_store_error", "上传保存失败") from exc
-    # 只返回 ID，绝不返回绝对路径
+    parsed["name"] = parsed["filename"]
+    try:
+        from PIL import Image
+
+        with Image.open(io.BytesIO(data)) as image:
+            parsed["width"], parsed["height"] = image.size
+    except Exception:
+        pass
+    # 只返回 ID 和本地 API URL，绝不返回绝对路径
     return _json(parsed, status=201)
+
+
+async def handle_get_upload(request: web.Request) -> web.Response:
+    uploads = _ctx(request).get("uploads")
+    if uploads is None:
+        raise AppError(503, "not_configured", "上传存储未注入")
+    image = await uploads.get(request.match_info["id"])
+    if image is None:
+        raise AppError(404, "upload_not_found", "上传不存在或已失效")
+    return web.Response(body=image.data, content_type=image.content_type or "application/octet-stream")
 
 
 # ---------------- jobs ----------------
@@ -262,6 +289,18 @@ async def handle_list_history(request: web.Request) -> web.Response:
     if engine is None:
         raise AppError(503, "core_engine_not_configured", "核心引擎未注入")
     limit, offset, favorite = _history_query(request)
+    if hasattr(engine, "list_history_page"):
+        page = await engine.list_history_page(
+            limit=limit,
+            offset=offset,
+            favorite_only=favorite,
+            cursor=request.query.get("cursor"),
+            q=request.query.get("q"),
+            status=request.query.get("status"),
+            trash=request.query.get("trash"),
+        )
+        page.pop("_rows", None)
+        return _json(page)
     items = await engine.list_history(limit=limit, offset=offset, favorite_only=favorite)
     return _json([it.to_dict() if isinstance(it, HistoryEntry) else it for it in items])
 
@@ -311,6 +350,71 @@ async def handle_delete_history(request: web.Request) -> web.Response:
     return _json({"id": hid, "deleted": True})
 
 
+async def handle_restore_history(request: web.Request) -> web.Response:
+    engine = _ctx(request).get("engine")
+    if engine is None or not hasattr(engine, "restore_history"):
+        raise AppError(501, "not_implemented", "当前引擎不支持恢复历史")
+    hid = request.match_info["id"]
+    if not await engine.restore_history(hid):
+        raise AppError(404, "history_not_found", "历史记录不存在")
+    return _json({"id": hid, "restored": True})
+
+
+async def handle_purge_history(request: web.Request) -> web.Response:
+    engine = _ctx(request).get("engine")
+    if engine is None or not hasattr(engine, "purge_history"):
+        raise AppError(501, "not_implemented", "当前引擎不支持彻底删除历史")
+    hid = request.match_info["id"]
+    if not await engine.purge_history(hid):
+        raise AppError(404, "history_not_found", "历史记录不存在")
+    return _json({"id": hid, "purged": True})
+
+
+async def handle_categories(request: web.Request) -> web.Response:
+    engine = _ctx(request).get("engine")
+    if engine is None or not hasattr(engine, "categories"):
+        return _json({"items": []})
+    return _json(await engine.categories())
+
+
+async def handle_favorites(request: web.Request) -> web.Response:
+    engine = _ctx(request).get("engine")
+    if engine is None or not hasattr(engine, "list_favorites"):
+        return _json({"items": [], "total": 0})
+    return _json(await engine.list_favorites(request.query))
+
+
+async def handle_create_favorite(request: web.Request) -> web.Response:
+    engine = _ctx(request).get("engine")
+    if engine is None or not hasattr(engine, "create_favorite"):
+        raise AppError(501, "not_implemented", "当前引擎不支持提示词收藏")
+    body = await _json_body(request)
+    if not isinstance(body, dict):
+        raise ValidationError("收藏内容需要 JSON 对象")
+    return _json(await engine.create_favorite(body), status=201)
+
+
+async def handle_update_favorite(request: web.Request) -> web.Response:
+    engine = _ctx(request).get("engine")
+    if engine is None or not hasattr(engine, "update_favorite"):
+        raise AppError(501, "not_implemented", "当前引擎不支持编辑收藏")
+    body = await _json_body(request)
+    if not isinstance(body, dict):
+        raise ValidationError("收藏内容需要 JSON 对象")
+    if not await engine.update_favorite(request.match_info["id"], body):
+        raise AppError(404, "favorite_not_found", "收藏不存在")
+    return _json({"id": request.match_info["id"], "updated": True})
+
+
+async def handle_delete_favorite(request: web.Request) -> web.Response:
+    engine = _ctx(request).get("engine")
+    if engine is None or not hasattr(engine, "delete_favorite"):
+        raise AppError(501, "not_implemented", "当前引擎不支持删除收藏")
+    if not await engine.delete_favorite(request.match_info["id"]):
+        raise AppError(404, "favorite_not_found", "收藏不存在")
+    return _json({"id": request.match_info["id"], "deleted": True})
+
+
 # ---------------- diagnostics ----------------
 
 async def handle_diagnostics(request: web.Request) -> web.Response:
@@ -321,18 +425,36 @@ async def handle_diagnostics(request: web.Request) -> web.Response:
     return _json(result)
 
 
+async def handle_diagnostics_export(request: web.Request) -> web.Response:
+    engine = _ctx(request).get("engine")
+    if engine is None:
+        raise AppError(503, "core_engine_not_configured", "核心引擎未注入")
+    result = await engine.diagnostics()
+    return _json({
+        "filename": "winefox-diagnostics.json",
+        "content": json.dumps(result, ensure_ascii=False, indent=2),
+    })
+
+
 # ---------------- 路由表 ----------------
 
 def register_routes(app: web.Application) -> None:
     app.router.add_get("/bootstrap/{token}", handle_bootstrap)
     app.router.add_get("/api/v1/health", handle_health)
+    app.router.add_get("/api/health", handle_health)
     app.router.add_get("/api/v1/settings", handle_get_settings)
     app.router.add_patch("/api/v1/settings", handle_patch_settings)
+    app.router.add_put("/api/v1/settings", handle_patch_settings)
+    app.router.add_get("/api/v1/secrets", handle_get_secrets)
     app.router.add_put("/api/v1/secrets/{name}", handle_put_secret)
     app.router.add_delete("/api/v1/secrets/{name}", handle_delete_secret)
     app.router.add_post("/api/v1/comfyui/probe", handle_probe)
+    app.router.add_get("/api/v1/comfyui", handle_probe)
+    app.router.add_post("/api/v1/probe", handle_probe)
     app.router.add_get("/api/v1/catalog", handle_catalog)
+    app.router.add_get("/api/v1/models", handle_catalog)
     app.router.add_post("/api/v1/uploads", handle_upload)
+    app.router.add_get("/api/v1/uploads/{id}", handle_get_upload)
     app.router.add_post("/api/v1/jobs", handle_submit_job)
     app.router.add_get("/api/v1/jobs/{id}", handle_get_job)
     app.router.add_post("/api/v1/jobs/{id}/cancel", handle_cancel_job)
@@ -341,4 +463,14 @@ def register_routes(app: web.Application) -> None:
     app.router.add_post("/api/v1/history/{id}/favorite", handle_set_favorite)
     app.router.add_delete("/api/v1/history/{id}/favorite", handle_unset_favorite)
     app.router.add_delete("/api/v1/history/{id}", handle_delete_history)
+    app.router.add_post("/api/v1/history/{id}/unfavorite", handle_unset_favorite)
+    app.router.add_post("/api/v1/history/{id}/trash", handle_delete_history)
+    app.router.add_post("/api/v1/history/{id}/restore", handle_restore_history)
+    app.router.add_post("/api/v1/history/{id}/purge", handle_purge_history)
+    app.router.add_get("/api/v1/categories", handle_categories)
+    app.router.add_get("/api/v1/favorites", handle_favorites)
+    app.router.add_post("/api/v1/favorites", handle_create_favorite)
+    app.router.add_put("/api/v1/favorites/{id}", handle_update_favorite)
+    app.router.add_delete("/api/v1/favorites/{id}", handle_delete_favorite)
     app.router.add_get("/api/v1/diagnostics", handle_diagnostics)
+    app.router.add_post("/api/v1/diagnostics/export", handle_diagnostics_export)

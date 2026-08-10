@@ -20,11 +20,12 @@
         "minHeight": 640,
         "center": true,
         "resizable": true,
-        "visible": true
+        "visible": true,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --no-proxy-server"
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; frame-src http://127.0.0.1:*; connect-src 'self' ipc: http://ipc.localhost; font-src 'self'"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; frame-src http://127.0.0.1:* winefox-panel: http://winefox-panel.localhost; connect-src 'self' ipc: http://ipc.localhost; font-src 'self'"
     }
   },
   "bundle": {

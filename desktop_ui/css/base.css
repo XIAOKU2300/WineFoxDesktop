@@ -2,6 +2,7 @@
  * 不加载任何外部字体/资源；rem 基准保证 125%–200% DPI 缩放。
  */
 *, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
 
 html {
   font-size: 14px;
@@ -73,8 +74,8 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible {
 .visually-disabled { opacity: 0.55; pointer-events: none; }
 
 /* ---- 排版 ---- */
-.h1 { font-size: var(--fs-3xl); font-weight: 650; letter-spacing: -0.01em; line-height: var(--lh-tight); }
-.h2 { font-size: var(--fs-2xl); font-weight: 650; letter-spacing: -0.01em; line-height: var(--lh-tight); }
+.h1 { font-size: var(--fs-3xl); font-weight: 650; letter-spacing: 0; line-height: var(--lh-tight); }
+.h2 { font-size: var(--fs-2xl); font-weight: 650; letter-spacing: 0; line-height: var(--lh-tight); }
 .h3 { font-size: var(--fs-xl); font-weight: 600; line-height: var(--lh-tight); }
 .subtitle { color: var(--muted); font-size: var(--fs-sm); }
 
@@ -84,7 +85,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible {
 .mono { font-family: var(--font-mono); font-size: 0.92em; }
 
 /* ---- 布局 ---- */
-.stack { display: flex; flex-direction: column; }
+.stack, .stack-1, .stack-2, .stack-3, .stack-4 { display: flex; flex-direction: column; }
 .stack-1 { gap: var(--sp-1); } .stack-2 { gap: var(--sp-2); }
 .stack-3 { gap: var(--sp-3); } .stack-4 { gap: var(--sp-4); }
 .row { display: flex; align-items: center; }

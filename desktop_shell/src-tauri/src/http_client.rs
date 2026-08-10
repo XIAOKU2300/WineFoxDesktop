@@ -1,17 +1,53 @@
-//! Minimal synchronous HTTP/1.1 client (loopback health checks only).
+//! Minimal synchronous HTTP/1.1 client for loopback traffic.
 //!
-//! Avoids pulling tokio/reqwest into the shell; the only endpoints used are
-//! GET /api/health on 127.0.0.1.
+//! Avoids pulling tokio/reqwest into the shell. Every request goes through a
+//! plain TCP socket, so WebView2's network stack (and its proxy handling) is
+//! never involved for sidecar traffic.
 
+use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
+
+/// A plain HTTP response (status + headers + raw body).
+#[derive(Debug)]
+pub struct HttpResponse {
+    pub status: u16,
+    pub content_type: Option<String>,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
 
 /// GET `url`, parse the JSON body if any.
 /// Returns Ok(Some(json)) on 200 + JSON, Ok(None) on non-JSON body,
 /// Err on connection/parse failures and non-200 statuses.
 pub fn get_json(url: &str, timeout: Duration) -> Result<Option<serde_json::Value>, String> {
+    let resp = request("GET", url, &[], None, timeout)?;
+    if resp.status != 200 {
+        return Err(format!("HTTP {}", resp.status));
+    }
+    match serde_json::from_slice(&resp.body) {
+        Ok(v) => Ok(Some(v)),
+        Err(_) => Ok(None),
+    }
+}
+
+/// Send one HTTP/1.1 request over a raw loopback TCP socket.
+pub fn request(
+    method: &str,
+    url: &str,
+    extra_headers: &[(&str, &str)],
+    body: Option<&[u8]>,
+    timeout: Duration,
+) -> Result<HttpResponse, String> {
+    if !is_http_token(method) {
+        return Err("invalid HTTP method".into());
+    }
+    let extra_headers = normalize_extra_headers(extra_headers)?;
     let (host, port, path) = parse_url(url)?;
+    if path.contains(['\r', '\n']) {
+        return Err("invalid HTTP path".into());
+    }
     let addr = format!("{host}:{port}");
     let sock_addr: std::net::SocketAddr = addr.parse().map_err(|_| format!("bad address: {addr}"))?;
     let mut stream = TcpStream::connect_timeout(&sock_addr, timeout)
@@ -23,31 +59,125 @@ pub fn get_json(url: &str, timeout: Duration) -> Result<Option<serde_json::Value
         .set_write_timeout(Some(timeout))
         .map_err(|e| e.to_string())?;
 
-    let req = format!(
-        "GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\nAccept: application/json\r\nUser-Agent: winefox-shell/1\r\n\r\n"
-    );
-    stream.write_all(req.as_bytes()).map_err(|e| e.to_string())?;
+    let has_header = |wanted: &str| {
+        extra_headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case(wanted))
+    };
+    let mut head =
+        format!("{method} {path} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n");
+    if !has_header("Accept") {
+        head.push_str("Accept: */*\r\n");
+    }
+    if !has_header("User-Agent") {
+        head.push_str("User-Agent: winefox-shell/1\r\n");
+    }
+    for (name, value) in &extra_headers {
+        head.push_str(&format!("{name}: {value}\r\n"));
+    }
+    if let Some(payload) = body {
+        if !has_header("Content-Type") {
+            head.push_str("Content-Type: application/json\r\n");
+        }
+        head.push_str(&format!("Content-Length: {}\r\n", payload.len()));
+    }
+    head.push_str("\r\n");
+    stream.write_all(head.as_bytes()).map_err(|e| e.to_string())?;
+    if let Some(payload) = body {
+        stream.write_all(payload).map_err(|e| e.to_string())?;
+    }
 
     let mut buf = Vec::new();
     stream.read_to_end(&mut buf).map_err(|e| e.to_string())?;
-    let text = String::from_utf8_lossy(&buf);
-    let (head, body) = match text.split_once("\r\n\r\n") {
-        Some((h, b)) => (h.to_string(), b.to_string()),
-        None => (text.into_owned(), String::new()),
+    let (head, body_bytes) = match buf.windows(4).position(|w| w == b"\r\n\r\n") {
+        Some(i) => {
+            let (h, b) = buf.split_at(i);
+            (h.to_vec(), b[4..].to_vec())
+        }
+        None => (buf.clone(), Vec::new()),
     };
-    let status = head
+    let head_text = String::from_utf8_lossy(&head);
+    let status = head_text
         .lines()
         .next()
         .and_then(|l| l.split_whitespace().nth(1))
         .and_then(|s| s.parse::<u16>().ok())
         .unwrap_or(0);
-    if status != 200 {
-        return Err(format!("HTTP {status}"));
+    let content_type = head_text
+        .lines()
+        .find(|l| l.to_ascii_lowercase().starts_with("content-type:"))
+        .and_then(|l| l.splitn(2, ':').nth(1))
+        .map(|v| v.trim().to_string());
+    let headers = head_text
+        .lines()
+        .skip(1)
+        .filter_map(|l| {
+            let (name, value) = l.split_once(':')?;
+            Some((name.trim().to_string(), value.trim().to_string()))
+        })
+        .collect();
+    Ok(HttpResponse {
+        status,
+        content_type,
+        headers,
+        body: body_bytes,
+    })
+}
+
+/// Validate, de-duplicate and strip transport-owned headers.
+///
+/// The first occurrence wins. `Host`, `Connection`, `Content-Length` and
+/// `Transfer-Encoding` are always generated by this client so callers cannot
+/// accidentally create malformed or request-smuggling-prone messages.
+fn normalize_extra_headers<'a>(
+    extra_headers: &'a [(&'a str, &'a str)],
+) -> Result<Vec<(&'a str, &'a str)>, String> {
+    let mut seen = HashSet::new();
+    let mut normalized = Vec::new();
+    for &(name, value) in extra_headers {
+        let name = name.trim();
+        if !is_http_token(name) {
+            return Err(format!("invalid HTTP header name: {name:?}"));
+        }
+        if value.contains(['\r', '\n', '\0']) {
+            return Err(format!("invalid HTTP header value for {name}"));
+        }
+        let lower = name.to_ascii_lowercase();
+        if matches!(
+            lower.as_str(),
+            "host" | "connection" | "content-length" | "transfer-encoding"
+        ) {
+            continue;
+        }
+        if seen.insert(lower) {
+            normalized.push((name, value.trim()));
+        }
     }
-    match serde_json::from_str(body.trim()) {
-        Ok(v) => Ok(Some(v)),
-        Err(_) => Ok(None),
-    }
+    Ok(normalized)
+}
+
+fn is_http_token(value: &str) -> bool {
+    !value.is_empty()
+        && value.bytes().all(|b| {
+            b.is_ascii_alphanumeric()
+                || matches!(
+                    b,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
 }
 
 fn parse_url(url: &str) -> Result<(String, u16, String), String> {
@@ -68,6 +198,8 @@ fn parse_url(url: &str) -> Result<(String, u16, String), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::TcpListener;
+    use std::thread;
 
     #[test]
     fn url_parsing() {
@@ -83,5 +215,101 @@ mod tests {
         // Port 1 is virtually always closed; the client must return Err.
         let r = get_json("http://127.0.0.1:1/api/health", Duration::from_millis(500));
         assert!(r.is_err(), "{r:?}");
+    }
+
+    #[test]
+    fn generated_and_forwarded_headers_are_never_duplicated() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let capture = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut bytes = Vec::new();
+            let mut block = [0_u8; 1024];
+            while !bytes.windows(4).any(|w| w == b"\r\n\r\n") {
+                let read = stream.read(&mut block).unwrap();
+                if read == 0 {
+                    break;
+                }
+                bytes.extend_from_slice(&block[..read]);
+            }
+            let header_end = bytes
+                .windows(4)
+                .position(|w| w == b"\r\n\r\n")
+                .unwrap()
+                + 4;
+            let header_text = String::from_utf8_lossy(&bytes[..header_end]);
+            let content_length = header_text
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .unwrap_or(0);
+            while bytes.len() < header_end + content_length {
+                let read = stream.read(&mut block).unwrap();
+                if read == 0 {
+                    break;
+                }
+                bytes.extend_from_slice(&block[..read]);
+            }
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK")
+                .unwrap();
+            String::from_utf8(bytes).unwrap()
+        });
+
+        let response = request(
+            "POST",
+            &format!("http://127.0.0.1:{port}/upload"),
+            &[
+                ("User-Agent", "webview/1"),
+                ("user-agent", "duplicate/2"),
+                ("Accept", "application/json"),
+                ("Content-Type", "multipart/form-data; boundary=test"),
+                ("Host", "attacker.invalid"),
+                ("Connection", "keep-alive"),
+                ("Content-Length", "999"),
+            ],
+            Some(b"abc"),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert_eq!(response.status, 200);
+
+        let raw = capture.join().unwrap();
+        let count = |name: &str| {
+            raw.lines()
+                .filter(|line| {
+                    line.split_once(':')
+                        .is_some_and(|(key, _)| key.eq_ignore_ascii_case(name))
+                })
+                .count()
+        };
+        assert_eq!(count("Host"), 1);
+        assert_eq!(count("Connection"), 1);
+        assert_eq!(count("User-Agent"), 1);
+        assert_eq!(count("Accept"), 1);
+        assert_eq!(count("Content-Type"), 1);
+        assert_eq!(count("Content-Length"), 1);
+        assert!(raw.contains("Host: 127.0.0.1:"));
+        assert!(raw.contains("Content-Length: 3\r\n"));
+        assert!(raw.contains("User-Agent: webview/1\r\n"));
+    }
+
+    #[test]
+    fn rejects_header_injection_before_connecting() {
+        let result = request(
+            "GET",
+            "http://127.0.0.1:1/",
+            &[("X-Test", "safe\r\nInjected: yes")],
+            None,
+            Duration::from_millis(100),
+        );
+        assert!(result.unwrap_err().contains("invalid HTTP header value"));
     }
 }

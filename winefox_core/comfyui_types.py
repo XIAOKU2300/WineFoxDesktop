@@ -342,4 +342,21 @@ class ComfyUIResult:
                 meta=dict(self.meta),
             )
         except Exception:
-            return None
+            return CoreResultAdapter(
+                ok=self.ok,
+                data=None if not self.ok else {"images": list(self.images), "prompt_id": self.prompt_id},
+                error=None if self.ok else (self.error.user_message if self.error else "unknown error"),
+                error_kind=None if self.ok else (self.error.kind.value if self.error else ErrorKind.INTERNAL.value),
+                meta=dict(self.meta),
+            )
+
+
+@dataclasses.dataclass
+class CoreResultAdapter:
+    """Concrete fallback used after the parallel-agent stubs are removed."""
+
+    ok: bool
+    data: Any = None
+    error: Optional[str] = None
+    error_kind: Optional[str] = None
+    meta: Dict[str, Any] = dataclasses.field(default_factory=dict)

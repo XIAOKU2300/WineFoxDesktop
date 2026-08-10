@@ -6,7 +6,7 @@ JSON 序列化统一使用 snake_case 字段名。
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 
 @dataclass
@@ -21,6 +21,10 @@ class JobRecord:
     result: Optional[dict] = None  # 完成后的产出，如 {"imageIds": [...]}
     error: Optional[str] = None
     meta: Optional[dict] = None
+    progress: Optional[float] = None
+    queue_position: Optional[int] = None
+    image: Optional[dict] = None
+    seed: Optional[int] = None
 
     def to_dict(self) -> dict:
         return {
@@ -32,6 +36,10 @@ class JobRecord:
             "result": self.result,
             "error": self.error,
             "meta": self.meta,
+            "progress": self.progress,
+            "queue_position": self.queue_position,
+            "image": self.image,
+            "seed": self.seed,
         }
 
 
@@ -42,7 +50,7 @@ class HistoryEntry:
 
     id: str
     prompt: str
-    created_at: float
+    created_at: Any
     image_id: Optional[str] = None
     favorite: bool = False
     tags: list = field(default_factory=list)

@@ -22,6 +22,7 @@ import sys
 import threading
 import time
 import traceback
+from pathlib import Path
 
 from . import protocol
 from ._version import APP_VERSION
@@ -56,6 +57,20 @@ def _make_crash(seconds: float) -> None:
 
 
 def main(argv=None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    fake_flags = {
+        "--allow-simulate", "--no-ready", "--noise", "--bad-startup",
+        "--version-override", "--protocol-override", "--crash-after",
+        "--crash-on-shutdown",
+    }
+    if not any(flag in argv for flag in fake_flags):
+        repo_root = Path(__file__).resolve().parents[3]
+        if (repo_root / "desktop_runtime").is_dir() and str(repo_root) not in sys.path:
+            sys.path.insert(0, str(repo_root))
+        from desktop_runtime.sidecar import main as real_main
+
+        return real_main(argv)
+
     parser = argparse.ArgumentParser(prog="winefox-sidecar", description="WineFox desktop sidecar")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=0, help="0 = ephemeral port")

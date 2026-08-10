@@ -31,7 +31,10 @@ async function request(path, opts = {}) {
     const s = qs.toString();
     if (s) url += "?" + s;
   }
-  const init = { method, headers: { ...headers } };
+  const init = { method, credentials: "same-origin", headers: { ...headers } };
+  if (!["GET", "HEAD"].includes(method.toUpperCase())) {
+    init.headers["X-WineFox-Client"] = "1";
+  }
   if (body !== undefined) {
     init.body = body;
     if (!(body instanceof FormData)) init.headers["Content-Type"] = "application/json";
@@ -48,8 +51,11 @@ async function request(path, opts = {}) {
     try { data = await res.json(); } catch { data = null; }
   }
   if (!res.ok) {
-    const msg = data?.error || data?.message || res.statusText || `HTTP ${res.status}`;
+    const msg = data?.error?.message || data?.message || res.statusText || `HTTP ${res.status}`;
     throw new ApiError(res.status, msg, data);
+  }
+  if (data && typeof data === "object" && data.ok === true && Object.hasOwn(data, "data")) {
+    return data.data;
   }
   return data;
 }
@@ -63,15 +69,22 @@ export const api = {
   /* ---- 业务端点 ---- */
   health: () => request("/health"),
   settings: () => request("/settings"),
-  saveSettings: (patch) => request("/settings", { method: "PUT", body: JSON.stringify(patch) }),
+  saveSettings: (patch) => request("/settings", { method: "PATCH", body: JSON.stringify(patch) }),
   secrets: () => request("/secrets"),
   setSecret: (key, value) => request(`/secrets/${encodeURIComponent(key)}`, { method: "PUT", body: JSON.stringify({ value }) }),
   clearSecret: (key) => request(`/secrets/${encodeURIComponent(key)}`, { method: "DELETE" }),
   comfyui: () => request("/comfyui"),
-  probe: () => request("/probe", { method: "POST" }),
+  probe: () => request("/comfyui/probe", { method: "POST" }),
   catalog: () => request("/catalog"),
   models: () => request("/models"),
-  uploads: (formData) => request("/uploads", { method: "POST", body: formData }),
+  uploads: async (formData) => {
+    const result = await request("/uploads", { method: "POST", body: formData });
+    return {
+      ...result,
+      name: result.name || result.filename,
+      url: `/api/v1/uploads/${encodeURIComponent(result.uploadId)}`,
+    };
+  },
   submitJob: (payload) => request("/jobs", { method: "POST", body: JSON.stringify(payload) }),
   job: (id) => request(`/jobs/${encodeURIComponent(id)}`),
   cancelJob: (id) => request(`/jobs/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
@@ -126,7 +139,7 @@ export class JobPoller {
       this.backoff = 1;
       delay = this._intervalFor(job.status);
       this.onUpdate?.(job);
-      if (["completed", "failed", "cancelled"].includes(job.status)) {
+      if (["completed", "failed", "cancelled", "detached"].includes(job.status)) {
         this.active.delete(jobId);
         this.onDone?.(job);
         if (!this.active.size) return;

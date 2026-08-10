@@ -249,7 +249,7 @@ export function installMock({ scenario = "success" } = {}) {
 
     if (u.pathname === "/api/v1/health") return await wait(150), base.health();
     if (u.pathname === "/api/v1/settings" && method === "GET") return await wait(100), base.settings();
-    if (u.pathname === "/api/v1/settings" && method === "PUT") return await wait(120), base.settings();
+    if (u.pathname === "/api/v1/settings" && (method === "PUT" || method === "PATCH")) return await wait(120), base.settings();
     if (u.pathname === "/api/v1/secrets" && method === "GET") return await wait(100), base.secrets();
     if (u.pathname.startsWith("/api/v1/secrets/")) {
       const key = decodeURIComponent(u.pathname.split("/").pop());
@@ -257,7 +257,7 @@ export function installMock({ scenario = "success" } = {}) {
       if (method === "PUT") return json({ ok: true, key, configured: true });
     }
     if (u.pathname === "/api/v1/comfyui") return await wait(100), base.comfyui();
-    if (u.pathname === "/api/v1/probe") return await wait(600), base.probe();
+    if (u.pathname === "/api/v1/comfyui/probe" || u.pathname === "/api/v1/probe") return await wait(600), base.probe();
     if (u.pathname === "/api/v1/catalog") return await wait(150), base.catalog();
     if (u.pathname === "/api/v1/models") return await wait(150), base.models();
     if (u.pathname === "/api/v1/diagnostics/export") return json({ format: "json", content: JSON.stringify({ app: base.diagnostics(), note: "脱敏导出（mock）" }, null, 2) });

@@ -1,11 +1,7 @@
-/* WineFox Desktop — 应用引导
- * 主题 / 路由 / 向导门禁 / 连接状态 / 视图生命周期。
- * Dev mock：仅当 URL 带 mock=1 或 dev=1 时动态加载 desktop_ui/dev/mock.js（生产默认不启用）。
- */
+/* WineFox Desktop application composition and warm-start lifecycle. */
 import { el, $, $$, ic, esc, toast } from "./utils.js";
 import { api } from "./api.js";
 import { store } from "./store.js";
-import { Wizard } from "./views/wizard.js";
 import { GenerateView } from "./views/generate.js";
 import { HistoryView } from "./views/history.js";
 import { FavoritesView } from "./views/favorites.js";
@@ -14,7 +10,7 @@ import { SettingsView } from "./views/settings.js";
 import { DiagnosticsView } from "./views/diagnostics.js";
 
 const ROUTES = [
-  { id: "generate", label: "生成", icon: "gen", ctor: GenerateView, hint: "WineFox 绘图" },
+  { id: "generate", label: "生成", icon: "gen", ctor: GenerateView },
   { id: "history", label: "历史", icon: "history", ctor: HistoryView },
   { id: "favorites", label: "收藏", icon: "fav", ctor: FavoritesView },
   { id: "models", label: "模型与 LoRA", icon: "model", ctor: ModelsView },
@@ -22,165 +18,269 @@ const ROUTES = [
   { id: "diagnostics", label: "诊断", icon: "diag", ctor: DiagnosticsView },
 ];
 
-let currentView = null;
+let currentEntry = null;
 let connTimer = null;
+let viewToken = 0;
+let enterTimer = null;
+const viewCache = new Map();
 
 function parseRoute() {
   const hash = location.hash.replace(/^#\/?/, "");
-  const id = ROUTES.some((r) => r.id === hash) ? hash : "generate";
-  return id;
+  return ROUTES.some((route) => route.id === hash) ? hash : "generate";
+}
+
+function sendLaunchProgress(label) {
+  if (window.parent === window) return;
+  window.parent.postMessage({ type: "winefox-ui-progress", label }, "*");
+}
+
+function signalReady() {
+  if (window.parent === window) return;
+  window.parent.postMessage({ type: "winefox-ui-ready" }, "*");
 }
 
 function buildRail() {
   const rail = $("#rail");
   rail.innerHTML = "";
-  for (const r of ROUTES) {
-    const btn = el("a", { class: "rail-item", href: `#/${r.id}`, "aria-current": parseRoute() === r.id ? "page" : undefined, title: r.label }, [
-      ic(r.icon),
-      el("span", { class: "rail-label" }, esc(r.label)),
-    ]);
-    if (r.id === "generate") {
-      const badge = el("span", { class: "rail-count", id: "rail-jobs", hidden: true }, "0");
-      btn.append(badge);
+  for (const route of ROUTES) {
+    const link = el("a", {
+      class: "rail-item",
+      href: `#/${route.id}`,
+      "aria-current": parseRoute() === route.id ? "page" : undefined,
+      title: route.label,
+    }, [ic(route.icon), el("span", { class: "rail-label" }, esc(route.label))]);
+    if (route.id === "generate") {
+      link.append(el("span", { class: "rail-count", id: "rail-jobs", hidden: true }, "0"));
     }
-    rail.append(btn);
+    rail.append(link);
   }
   rail.append(
     el("div", { class: "rail-sep" }),
     el("div", { class: "rail-foot" }, [
+      el("span", { class: "rail-signature" }, "狐"),
       el("span", { class: "hint" }, "WineFox Desktop"),
-      el("span", { class: "hint" }, "v1.0 · 桌面端"),
+      el("span", { class: "hint" }, "v8.5.9 · 本地创作空间"),
     ]),
   );
 }
 
-async function switchView(routeId) {
-  if (currentView?.dispose) currentView.dispose();
-  currentView = null;
-  const root = $("#view-root");
-  root.innerHTML = "";
-  root.classList.remove("view"); // 生成页自带布局
-  const def = ROUTES.find((r) => r.id === routeId);
-  if (!def) return;
-  // 生成页使用全屏三栏；其余页面用标准 view 布局
-  if (routeId === "generate") {
-    root.classList.remove("view");
-  } else {
-    root.classList.add("view");
+function getViewEntry(routeId) {
+  if (viewCache.has(routeId)) return viewCache.get(routeId);
+
+  const definition = ROUTES.find((route) => route.id === routeId);
+  if (!definition) return null;
+  const root = el("div", {
+    class: routeId === "generate" ? "" : "view",
+    role: "region",
+    "aria-live": "polite",
+    hidden: true,
+  });
+  $("#main").append(root);
+  const view = new definition.ctor();
+  const entry = { routeId, root, view, mountPromise: null, hasEntered: false };
+  viewCache.set(routeId, entry);
+
+  // mount() runs synchronously until its first await, so the loading state is
+  // ready before this hidden root can become the active route.
+  try {
+    entry.mountPromise = Promise.resolve(view.mount(root));
+  } catch (error) {
+    entry.mountPromise = Promise.reject(error);
   }
-  const view = new def.ctor();
-  currentView = view;
-  await view.mount(root);
+  return entry;
 }
 
-/* ---------------- 连接状态 ---------------- */
-async function refreshHealth() {
-  const conn = $("#conn-status");
-  try {
-    const h = await api.health();
-    store.set("health", h);
-    if (!conn) return;
-    const cf = h.comfyui;
-    const connected = cf?.connected;
-    conn.className = "conn " + (connected ? "ok" : h.status === "degraded" ? "warn" : "err");
-    conn.querySelector(".conn-text").textContent = connected
-      ? "ComfyUI 已连接" + (cf.version ? " · " + cf.version : "")
-      : h.status === "degraded" ? "部分服务异常" : "ComfyUI 未连接";
-  } catch {
-    conn.className = "conn err";
-    conn.querySelector(".conn-text").textContent = "后端离线";
+function playViewEntrance(entry, token) {
+  if (entry.hasEntered) return;
+  entry.hasEntered = true;
+  clearTimeout(enterTimer);
+  entry.root.classList.remove("view-motion-enter");
+  requestAnimationFrame(() => {
+    if (token !== viewToken || currentEntry !== entry) return;
+    entry.root.classList.add("view-motion-enter");
+    enterTimer = setTimeout(() => {
+      if (currentEntry === entry) entry.root.classList.remove("view-motion-enter");
+    }, 620);
+  });
+}
+
+async function switchView(routeId) {
+  const token = ++viewToken;
+  const entry = getViewEntry(routeId);
+  if (!entry) return;
+
+  if (currentEntry && currentEntry !== entry) {
+    currentEntry.root.hidden = true;
+    currentEntry.root.removeAttribute("id");
+    currentEntry.root.classList.remove("view-motion-enter");
   }
-  // 每 10s 刷新一次状态（浅轮询）
+
+  currentEntry = entry;
+  entry.root.id = "view-root";
+  entry.root.hidden = false;
+  playViewEntrance(entry, token);
+
+  try {
+    await entry.mountPromise;
+  } catch (error) {
+    if (token === viewToken && currentEntry === entry) throw error;
+  }
+}
+
+function applyHealth(health) {
+  const conn = $("#conn-status");
+  if (!conn || !health) return;
+  if (health.status !== "ok") {
+    conn.className = "conn warn";
+    conn.querySelector(".conn-text").textContent = "部分服务异常";
+    return;
+  }
+  applyComfyUI(store.get("comfyui"));
+}
+
+function applyComfyUI(probe) {
+  const conn = $("#conn-status");
+  if (!conn) return;
+  if (!probe) {
+    conn.className = "conn warn";
+    conn.querySelector(".conn-text").textContent = "正在检测 ComfyUI";
+    return;
+  }
+  const connected = !!(probe.online ?? probe.ok ?? probe.connected);
+  conn.className = "conn " + (connected ? "ok" : "err");
+  conn.querySelector(".conn-text").textContent = connected
+    ? "ComfyUI 已连接" + (probe.version ? " · " + probe.version : "")
+    : "ComfyUI 未连接";
+}
+
+async function refreshHealth() {
+  const [healthResult, comfyResult] = await Promise.allSettled([api.health(), api.comfyui()]);
+  if (healthResult.status === "fulfilled") {
+    store.set("health", healthResult.value);
+  } else {
+    const conn = $("#conn-status");
+    if (conn) {
+      conn.className = "conn err";
+      conn.querySelector(".conn-text").textContent = "后端离线";
+    }
+  }
+  if (comfyResult.status === "fulfilled") store.set("comfyui", comfyResult.value);
+  applyHealth(store.get("health"));
   clearTimeout(connTimer);
   connTimer = setTimeout(refreshHealth, 10000);
 }
 
-/* ---------------- 主题 ---------------- */
 function bindTheme() {
   store.applyTheme();
-  $("#theme-toggle")?.addEventListener("click", () => {
-    store.toggleTheme();
+  const toggle = () => {
+    const change = () => store.toggleTheme();
+    const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (!reduced && document.startViewTransition) document.startViewTransition(change);
+    else change();
     toast(store.get("theme") === "dark" ? "已切换深色主题" : "已切换浅色主题", "info");
-  });
-  document.addEventListener("keydown", (e) => {
+  };
+  $("#theme-toggle")?.addEventListener("click", toggle);
+  document.addEventListener("keydown", (event) => {
     const tag = document.activeElement?.tagName;
-    if (e.key.toLowerCase() === "t" && !e.ctrlKey && !e.metaKey && !e.altKey && tag !== "INPUT" && tag !== "TEXTAREA" && tag !== "SELECT") {
-      store.toggleTheme();
-    }
+    if (event.key.toLowerCase() === "t" && !event.ctrlKey && !event.metaKey && !event.altKey && tag !== "INPUT" && tag !== "TEXTAREA" && tag !== "SELECT") toggle();
   });
 }
 
-/* ---------------- Dev mock ---------------- */
 async function maybeLoadMock() {
-  const qs = new URLSearchParams(location.search);
-  const enabled = qs.has("mock") || qs.has("dev");
-  if (!enabled) return false;
-  try {
-    const { installMock } = await import("../dev/mock.js");
-    installMock({ scenario: qs.get("scenario") || "success" });
-    console.info("[WineFox] dev mock 已启用，scenario =", qs.get("scenario") || "success");
-    return true;
-  } catch (e) {
-    console.warn("[WineFox] dev mock 加载失败", e);
-    return false;
-  }
+  const query = new URLSearchParams(location.search);
+  if (!query.has("mock") && !query.has("dev")) return;
+  const { installMock } = await import("../dev/mock.js");
+  installMock({ scenario: query.get("scenario") || "success" });
 }
 
-/* ---------------- 引导 ---------------- */
+function withTimeout(promise, ms = 4000) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("preload timeout")), ms);
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
+async function preloadWorkspace() {
+  sendLaunchProgress("正在读取设置与模型目录");
+  const catalog = api.catalog();
+  const sources = {
+    health: api.health(),
+    settings: api.settings(),
+    catalog,
+    models: catalog,
+    secrets: api.secrets(),
+    history: api.history({ limit: 24 }),
+    categories: api.categories(),
+    favorites: api.favorites({ limit: 24 }),
+    diagnostics: api.diagnostics(),
+    comfyui: api.comfyui(),
+  };
+  const entries = Object.entries(sources);
+  const results = await Promise.allSettled(entries.map(([, promise]) => withTimeout(promise)));
+  results.forEach((result, index) => {
+    if (result.status === "fulfilled") store.set(entries[index][0], result.value);
+  });
+  applyHealth(store.get("health"));
+  sendLaunchProgress("正在铺开创作界面");
+}
+
+function bindJobTally() {
+  store.subscribe((key, value) => {
+    if (key === "comfyui") {
+      applyComfyUI(value);
+      return;
+    }
+    if (key !== "jobTally") return;
+    const badge = $("#rail-jobs");
+    if (!badge) return;
+    const count = value.queued + value.running;
+    badge.hidden = count === 0;
+    badge.textContent = String(count);
+    if (count) badge.animate?.(
+      [{ transform: "scale(.8)", opacity: .5 }, { transform: "none", opacity: 1 }],
+      { duration: 260, easing: "cubic-bezier(.16,1,.3,1)" },
+    );
+  });
+}
+
 async function boot() {
   await maybeLoadMock();
   bindTheme();
   buildRail();
+  bindJobTally();
+  await preloadWorkspace();
 
-  // 先显示外壳
-  $("#app-root").hidden = false;
+  // Route roots are retained after their first mount. This preserves editing
+  // state and prevents rapid back-and-forth navigation from refetching data.
+  $("#view-root")?.remove();
 
-  // 健康 / 首启判断
-  let firstRun = true;
-  try {
-    const h = await api.health();
-    store.set("health", h);
-    firstRun = !!(h.first_run ?? true);
-  } catch {
-    firstRun = true; // 后端不可用时仍显示向导（离线可配置）
-  }
-  if (firstRun) {
-    store.set("wizardCompleted", false);
-    const wizard = new Wizard(() => {
-      refreshHealth();
-      buildRail();
-    });
-    await wizard.start();
-  } else {
-    store.set("wizardCompleted", true);
-  }
-
-  refreshHealth();
-
-  // 路由
-  const navigate = () => {
+  const navigate = async () => {
     const id = parseRoute();
-    $$("#rail .rail-item").forEach((a) => {
-      if (a.getAttribute("href") === `#/${id}`) a.setAttribute("aria-current", "page");
-      else a.removeAttribute("aria-current");
+    $$("#rail .rail-item").forEach((link) => {
+      if (link.getAttribute("href") === `#/${id}`) link.setAttribute("aria-current", "page");
+      else link.removeAttribute("aria-current");
     });
-    switchView(id);
+    await switchView(id);
   };
-  window.addEventListener("hashchange", navigate);
-  navigate();
+  window.addEventListener("hashchange", () => { void navigate(); });
+  await navigate();
 
-  // 队列计数角标
-  store.subscribe((k, v) => {
-    if (k !== "jobTally") return;
-    const badge = $("#rail-jobs");
-    if (!badge) return;
-    const n = v.queued + v.running;
-    badge.hidden = n === 0;
-    badge.textContent = String(n);
-  });
+  $("#app-root").hidden = false;
+  requestAnimationFrame(() => document.body.classList.add("ui-ready"));
+  connTimer = setTimeout(refreshHealth, 10000);
+  signalReady();
 }
 
-window.addEventListener("DOMContentLoaded", boot);
+window.addEventListener("DOMContentLoaded", () => {
+  boot().catch((error) => {
+    console.error("WineFox boot failed", error);
+    $("#app-root").hidden = false;
+    signalReady();
+    toast("界面启动不完整，请打开诊断页查看", "err", 6000);
+  });
+});
 
-/* 导出供诊断页等复用（避免循环导入） */
 export { toast };
