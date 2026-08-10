@@ -39,7 +39,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest
+          pip install pytest aiohttp Pillow pyyaml
       - name: Run existing unit tests (tests/)
         run: python -m pytest tests/ -q --no-header
       - name: Compile-check all plugin modules
@@ -58,7 +58,7 @@ jobs:
           pip install --upgrade pip
           pip install aiohttp pytest Pillow pyyaml
       - name: Run Agent 10 integration suite (fake server, no ComfyUI needed)
-        run: 'python -m pytest desktop_integration_tests/ -c desktop_integration_tests/pytest.ini --junitxml=reports/integration-junit.xml -o junit_family=xunit'
+        run: 'python -m pytest desktop_integration_tests/ -c desktop_integration_tests/pytest.ini --junitxml=reports/integration-junit.xml -o junit_family=xunit2'
       - name: List desktop-gate (pending) coverage
         run: 'python -m pytest desktop_integration_tests/test_api_v1_integration.py -c desktop_integration_tests/pytest.ini -m desktop_gate -rs --no-header -q'
       - uses: actions/upload-artifact@v4
@@ -96,6 +96,7 @@ jobs:
           python-version: "3.12"
       - name: Generate SBOM (pip + requirements, JSON)
         run: |
+          New-Item -ItemType Directory -Force reports | Out-Null
           pip install -r requirements.txt --dry-run --report reports/pip-report.json
           python -c "import json; rep=json.load(open('reports/pip-report.json', encoding='utf-8')); deps=rep.get('install', []); sbom={'bomFormat':'SPDX-ish (minimal)','specVersion':'1.0','component':{'type':'application','name':'winefox-desktop','version':'0.1.0'},'dependencies':[{'name':d.get('metadata',{}).get('name'),'version':d.get('metadata',{}).get('version'),'license':(d.get('metadata',{}).get('license') or {}).get('expression') or 'unknown'} for d in deps]}; json.dump(sbom, open('reports/sbom-python.json','w',encoding='utf-8'), indent=2, ensure_ascii=False); print('SBOM entries:', len(sbom['dependencies']))"
       - uses: actions/upload-artifact@v4
