@@ -2,7 +2,7 @@
  * 布局：左（模型族/工作流/LoRA/队列）｜中（画布，拖放）｜右（参数）
  * 支持 txt2img / img2img；任务轮询 running 1s / queued 2s / 错误退避至 10s。
  */
-import { el, $, $$, ic, esc, sanitizeName, fmtRelative, STATUS_META, toast } from "../utils.js";
+import { el, $, $$, ic, esc, sanitizeName, fmtRelative, loadingState, STATUS_META, toast } from "../utils.js";
 import { api } from "../api.js";
 import { JobPoller } from "../api.js";
 import { store } from "../store.js";
@@ -29,10 +29,16 @@ export class GenerateView {
       result: null,     // 最近完成结果 { job, url }
       seed: -1,
       workflowOverrides: false,
+      loraExpanded: false,
+      loraQuery: "",
       loraVisible: 40,
     };
     store.set("genParams", this.state);
     this.root = null;
+    this.loraObserver = null;
+    this.loraFallbackTarget = null;
+    this.loraFallbackHandler = null;
+    this.loraPageFrame = null;
   }
 
   async mount(container) {
@@ -51,6 +57,8 @@ export class GenerateView {
 
   render() {
     const root = this.root;
+    this.teardownLoraPagination();
+    root.classList.add("generate-view");
     root.innerHTML = "";
     root.append(el("div", { class: "gen" }, [this.leftPanel(), this.centerPanel(), this.rightPanel()]));
     this.afterMount();
@@ -61,7 +69,7 @@ export class GenerateView {
     const cat = store.get("catalog") || {};
     const families = cat.families?.length ? cat.families : [{ id: "anima", label: "Anima" }, { id: "illustrious", label: "Illustrious" }];
     const workflows = (cat.workflows || []).filter((w) => !w.mode || w.mode === this.state.mode || w.mode === "any");
-    const loras = cat.loras || [];
+    const loras = this.familyLoras(cat.loras || []);
 
     return el("aside", { class: "gen-panel gen-left", "aria-label": "生成导航" }, [
       el("div", { class: "panel-head" }, [ic("model"), esc("模型与工作流")]),
@@ -78,18 +86,20 @@ export class GenerateView {
             : [el("option", { value: "" }, "默认（后端选择）")]),
         ]),
         el("div", { class: "divider" }),
-        el("div", { class: "row-between" }, [
-          el("label", { class: "text-sm", style: "font-weight:600" }, "LoRA"),
+        el("div", { class: "lora-heading" }, [
+          el("button", {
+            class: "lora-disclosure", id: "g-lora-toggle", type: "button",
+            "aria-expanded": this.state.loraExpanded ? "true" : "false",
+            "aria-controls": "g-lora-drawer",
+            "aria-label": `${this.state.loraExpanded ? "收起" : "展开"} LoRA 列表`,
+          }, [
+            el("span", { class: "lora-chevron", "aria-hidden": "true" }),
+            el("span", {}, "LoRA"),
+            el("span", { class: "lora-total", id: "g-lora-total" }, this.loraCountText(loras.length)),
+          ]),
           el("button", { class: "icon-btn", id: "g-refresh-loras", type: "button", title: "刷新 LoRA 列表", "aria-label": "刷新 LoRA 列表" }, [ic("refresh")]),
         ]),
-        el("div", { class: "lora-list", role: "listbox", "aria-label": "LoRA 列表" }, loras.length
-          ? [
-              ...loras.slice(0, this.state.loraVisible).map((l) => this.loraChip(l)),
-              loras.length > this.state.loraVisible
-                ? el("button", { class: "btn btn-sm", id: "g-lora-more", type: "button" }, `再显示 ${Math.min(40, loras.length - this.state.loraVisible)} 个`)
-                : null,
-            ]
-          : [el("p", { class: "text-xs text-muted" }, "未检测到 LoRA（可在「模型与 LoRA」页查看状态）")]),
+        this.loraDrawer(loras),
         el("div", { class: "divider" }),
         el("div", { class: "stack-2" }, [
           el("label", { class: "text-sm", style: "font-weight:600" }, "队列"),
@@ -99,20 +109,191 @@ export class GenerateView {
     ]);
   }
 
+  loraCountText(total) {
+    const selected = this.state.loras.size;
+    return selected ? `${selected} 已选 · ${total}` : String(total);
+  }
+
+  familyLoras(loras) {
+    const family = this.state.family;
+    return (loras || []).filter((lora) => {
+      const value = String(lora?.family || "any").toLowerCase();
+      return value === "any" || !value || value === family;
+    });
+  }
+
+  normalizeLoraSearch(value) {
+    return String(value ?? "")
+      .normalize("NFKC")
+      .toLocaleLowerCase("zh-CN")
+      .replace(/[\\/_.-]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  loraSearchText(lora) {
+    const values = [];
+    const append = (value) => {
+      if (Array.isArray(value)) value.forEach(append);
+      else if (value != null && value !== "") values.push(String(value));
+    };
+    for (const key of ["id", "name", "label", "character", "aliases", "tags", "normalized_key", "normalizedKey", "trigger_words"]) {
+      append(lora?.[key]);
+    }
+    return this.normalizeLoraSearch(values.join(" "));
+  }
+
+  filteredLoras(loras) {
+    const query = this.normalizeLoraSearch(this.state.loraQuery);
+    if (!query) return loras;
+    const terms = query.split(" ").filter(Boolean);
+    return loras.filter((lora) => {
+      const haystack = this.loraSearchText(lora);
+      const compactHaystack = haystack.replace(/\s+/g, "");
+      return terms.every((term) => haystack.includes(term) || compactHaystack.includes(term.replace(/\s+/g, "")));
+    });
+  }
+
+  loraDrawer(loras) {
+    const filtered = this.filteredLoras(loras);
+    return el("section", {
+      class: "lora-drawer", id: "g-lora-drawer",
+      hidden: !this.state.loraExpanded,
+      "aria-label": "LoRA 选择器",
+    }, [
+      el("div", { class: "lora-search" }, [
+        ic("search", { "aria-hidden": "true" }),
+        el("input", {
+          id: "g-lora-search", class: "input", type: "search",
+          value: this.state.loraQuery, autocomplete: "off",
+          placeholder: "搜索名称、角色或中文别名…",
+          "aria-label": "搜索 LoRA 名称、角色或别名",
+        }),
+        el("button", {
+          class: "lora-search-clear", id: "g-lora-search-clear", type: "button",
+          hidden: !this.state.loraQuery, title: "清除搜索", "aria-label": "清除 LoRA 搜索",
+        }, [ic("x")]),
+      ]),
+      el("div", { class: "lora-result-meta", id: "g-lora-result-meta", role: "status", "aria-live": "polite" },
+        this.loraResultLabel(loras.length, filtered.length)),
+      el("div", {
+        class: "lora-list", id: "g-lora-list", role: "listbox",
+        tabindex: "0", "aria-label": "LoRA 列表", "aria-multiselectable": "true",
+      }, this.loraListContent(loras, filtered)),
+    ]);
+  }
+
+  loraResultLabel(total, filtered) {
+    if (!total) return "尚未检测到 LoRA";
+    return this.state.loraQuery ? `匹配 ${filtered} / ${total} 项` : `${total} 项 · 可搜索中文别名`;
+  }
+
+  loraListContent(loras, filtered = this.filteredLoras(loras)) {
+    if (!loras.length) {
+      return [el("p", { class: "lora-empty text-xs text-muted" }, "未检测到 LoRA（可在「模型与 LoRA」页查看状态）")];
+    }
+    if (!filtered.length) {
+      return [el("p", { class: "lora-empty text-xs text-muted" }, "没有匹配项，换一个名称、角色名或别名试试。")];
+    }
+    const visible = filtered.slice(0, this.state.loraVisible);
+    const nodes = visible.map((lora) => this.loraChip(lora));
+    if (visible.length < filtered.length) {
+      nodes.push(el("div", { class: "lora-sentinel", id: "g-lora-sentinel" }, [
+        loadingState("正在载入更多 LoRA", { compact: true }),
+      ]));
+    }
+    return nodes;
+  }
+
+  renderLoraResults() {
+    const list = $("#g-lora-list", this.root);
+    if (!list) return;
+    this.teardownLoraPagination();
+    const loras = this.familyLoras(store.get("catalog")?.loras || []);
+    const filtered = this.filteredLoras(loras);
+    list.replaceChildren(...this.loraListContent(loras, filtered));
+    const meta = $("#g-lora-result-meta", this.root);
+    if (meta) meta.textContent = this.loraResultLabel(loras.length, filtered.length);
+    const clear = $("#g-lora-search-clear", this.root);
+    if (clear) clear.hidden = !this.state.loraQuery;
+    this.updateLoraCount(loras.length);
+    if (this.state.loraExpanded) this.setupLoraPagination();
+  }
+
+  updateLoraCount(total = this.familyLoras(store.get("catalog")?.loras || []).length) {
+    const count = $("#g-lora-total", this.root);
+    if (count) count.textContent = this.loraCountText(total);
+  }
+
+  setupLoraPagination() {
+    this.teardownLoraPagination();
+    const list = $("#g-lora-list", this.root);
+    const sentinel = $("#g-lora-sentinel", this.root);
+    if (!list || !sentinel || !this.state.loraExpanded) return;
+
+    if (typeof IntersectionObserver === "function") {
+      this.loraObserver = new IntersectionObserver((entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) this.loadMoreLoras();
+      }, { root: list, rootMargin: "72px 0px", threshold: 0.01 });
+      this.loraObserver.observe(sentinel);
+      return;
+    }
+
+    this.loraFallbackTarget = list;
+    this.loraFallbackHandler = () => {
+      if (list.scrollHeight - list.scrollTop - list.clientHeight <= 72) this.loadMoreLoras();
+    };
+    list.addEventListener("scroll", this.loraFallbackHandler, { passive: true });
+  }
+
+  teardownLoraPagination() {
+    this.loraObserver?.disconnect();
+    this.loraObserver = null;
+    if (this.loraFallbackTarget && this.loraFallbackHandler) {
+      this.loraFallbackTarget.removeEventListener("scroll", this.loraFallbackHandler);
+    }
+    this.loraFallbackTarget = null;
+    this.loraFallbackHandler = null;
+  }
+
+  loadMoreLoras() {
+    if (this.loraPageFrame != null) return;
+    this.loraObserver?.disconnect();
+    this.loraPageFrame = requestAnimationFrame(() => {
+      this.loraPageFrame = null;
+      const loras = this.familyLoras(store.get("catalog")?.loras || []);
+      const filtered = this.filteredLoras(loras);
+      if (this.state.loraVisible >= filtered.length) return;
+      this.state.loraVisible = Math.min(this.state.loraVisible + 40, filtered.length);
+      this.renderLoraResults();
+    });
+  }
+
   loraChip(l) {
-    const active = this.state.loras.has(l.id);
+    const id = l.id ?? l.name;
+    const label = l.label || l.name || id || "未命名 LoRA";
+    const active = this.state.loras.has(id);
+    const aliases = [l.character, ...(Array.isArray(l.aliases) ? l.aliases : []), ...(Array.isArray(l.tags) ? l.tags : [])].filter(Boolean);
     const btn = el("button", {
       type: "button", class: "lora-chip", role: "option",
       "aria-pressed": active ? "true" : "false",
-      title: esc(l.label),
+      "aria-selected": active ? "true" : "false",
+      title: esc(aliases.length ? `${label} · ${aliases.join("、")}` : label),
     }, [
-      el("span", { class: "l-name" }, esc(l.label)),
-      el("span", { class: "l-strength" }, active ? this.state.loras.get(l.id).strength.toFixed(1) : "—"),
+      el("span", { class: "l-name" }, esc(label)),
+      el("span", { class: "l-strength" }, active ? Number(this.state.loras.get(id).strength).toFixed(1) : "—"),
     ]);
     btn.addEventListener("click", () => {
-      if (this.state.loras.has(l.id)) this.state.loras.delete(l.id);
-      else this.state.loras.set(l.id, { label: l.label, strength: l.strength ?? 0.8 });
-      this.render();
+      if (this.state.loras.has(id)) this.state.loras.delete(id);
+      else {
+        const strength = Number(l.strength);
+        this.state.loras.set(id, { label, strength: Number.isFinite(strength) ? strength : 0.8 });
+      }
+      const selected = this.state.loras.has(id);
+      btn.setAttribute("aria-pressed", selected ? "true" : "false");
+      btn.setAttribute("aria-selected", selected ? "true" : "false");
+      btn.querySelector(".l-strength").textContent = selected ? this.state.loras.get(id).strength.toFixed(1) : "—";
+      this.updateLoraCount();
     });
     return btn;
   }
@@ -161,7 +342,7 @@ export class GenerateView {
     return el("section", { class: "gen-panel gen-center", "aria-label": "画布" }, [
       el("div", { class: "canvas-wrap" }, [
         el("div", { class: "canvas-area" + (s.mode === "img2img" ? "" : ""), id: "canvas-area", tabindex: "0", role: "img" }, content),
-        el("div", { class: "gen-actions" }, [
+        el("div", { class: "gen-actions gen-submit-bar" }, [
           el("button", { class: "btn btn-primary", id: "g-submit", type: "button", disabled: !!s.job }, [
             s.mode === "img2img" ? ic("wand") : ic("play"),
             esc(s.job ? "生成中…" : "开始生成"),
@@ -314,12 +495,42 @@ export class GenerateView {
     });
 
     // 家族 / 工作流
-    g("g-family")?.addEventListener("change", (e) => { s.family = e.target.value; });
+    g("g-family")?.addEventListener("change", (e) => {
+      s.family = e.target.value;
+      s.loraVisible = 40;
+      const workflows = (store.get("catalog")?.workflows || []).filter((workflow) =>
+        !workflow.mode || workflow.mode === s.mode || workflow.mode === "any");
+      const familyWorkflows = workflows.filter((workflow) => !workflow.family || workflow.family === "any" || workflow.family === s.family);
+      if (!familyWorkflows.some((workflow) => workflow.id === s.workflow)) s.workflow = familyWorkflows[0]?.id || workflows[0]?.id || "";
+      this.render();
+    });
     g("g-workflow")?.addEventListener("change", (e) => { s.workflow = e.target.value; });
-    g("g-lora-more")?.addEventListener("click", () => { s.loraVisible += 40; this.render(); });
+    g("g-lora-toggle")?.addEventListener("click", (event) => {
+      s.loraExpanded = !s.loraExpanded;
+      event.currentTarget.setAttribute("aria-expanded", s.loraExpanded ? "true" : "false");
+      event.currentTarget.setAttribute("aria-label", `${s.loraExpanded ? "收起" : "展开"} LoRA 列表`);
+      const drawer = g("g-lora-drawer");
+      if (drawer) drawer.hidden = !s.loraExpanded;
+      if (s.loraExpanded) this.setupLoraPagination();
+      else this.teardownLoraPagination();
+    });
+    g("g-lora-search")?.addEventListener("input", (event) => {
+      s.loraQuery = event.target.value;
+      s.loraVisible = 40;
+      this.renderLoraResults();
+    });
+    g("g-lora-search-clear")?.addEventListener("click", () => {
+      s.loraQuery = "";
+      s.loraVisible = 40;
+      const input = g("g-lora-search");
+      if (input) input.value = "";
+      this.renderLoraResults();
+      input?.focus();
+    });
     g("g-refresh-loras")?.addEventListener("click", async () => {
       try {
         store.set("catalog", await api.catalog());
+        s.loraVisible = 40;
         this.render();
         toast("模型与 LoRA 目录已更新", "ok");
       } catch (error) {
@@ -363,6 +574,7 @@ export class GenerateView {
     g("g-prompt")?.addEventListener("keydown", (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); this.submit(); }
     });
+    if (s.loraExpanded) this.setupLoraPagination();
   }
 
   setMode(mode, { restoreFocus = false } = {}) {
@@ -557,6 +769,9 @@ export class GenerateView {
   }
 
   dispose() {
+    this.teardownLoraPagination();
+    if (this.loraPageFrame != null) cancelAnimationFrame(this.loraPageFrame);
+    this.loraPageFrame = null;
     this.poller.dispose();
   }
 }

@@ -39,7 +39,7 @@
 .conn.warn .dot { background: var(--warn); }
 
 /* ================= 侧栏导航 ================= */
-.shell { flex: 1; min-height: 0; display: flex; }
+.shell { flex: 1; min-width: 0; min-height: 0; display: flex; overflow: hidden; }
 .rail {
   width: var(--rail-w); flex: none;
   display: flex; flex-direction: column;
@@ -69,33 +69,44 @@
 .rail-foot .hint { font-size: var(--fs-xs); color: var(--faint); }
 
 /* 主内容区 */
-.main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+.main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .view { flex: 1; min-height: 0; overflow-y: auto; padding: var(--sp-5); display: flex; flex-direction: column; gap: var(--sp-4); }
 .view-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--sp-4); flex-wrap: wrap; }
 .view-head .h1 { font-size: var(--fs-2xl); }
 .view-head .lead { color: var(--muted); font-size: var(--fs-sm); margin-top: 2px; }
 
 /* ================= 生成页：三栏 ================= */
-.gen { flex: 1; min-height: 0; display: flex; gap: var(--sp-4); padding: var(--sp-4); }
+.generate-view {
+  flex: 1; width: 100%; height: 100%; min-width: 0; min-height: 0;
+  display: flex; overflow: hidden;
+}
+.gen {
+  flex: 1; width: 100%; max-width: 100%; min-width: 0; min-height: 0;
+  display: flex; gap: var(--sp-4); padding: var(--sp-4); overflow: hidden;
+}
 .gen-panel {
-  display: flex; flex-direction: column; min-height: 0;
+  display: flex; flex-direction: column; min-width: 0; min-height: 0;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
   overflow: hidden;
 }
-.gen-left { width: 232px; flex: none; }
+.gen-left { width: clamp(208px, 18vw, 232px); flex: none; }
 .gen-center { flex: 1; min-width: 0; }
-.gen-right { width: 300px; flex: none; }
+.gen-right { width: clamp(268px, 23vw, 300px); flex: none; }
 .gen-panel .panel-head {
-  display: flex; align-items: center; gap: var(--sp-2);
+  flex: none; display: flex; align-items: center; gap: var(--sp-2);
   padding: var(--sp-3) var(--sp-4);
   border-bottom: 1px solid var(--hairline);
   font-size: var(--fs-sm); font-weight: 600; color: var(--text-2);
   letter-spacing: 0;
 }
 .gen-panel .panel-head > svg { width: 16px; height: 16px; flex: none; color: var(--primary); }
-.gen-panel .panel-body { flex: 1; min-height: 0; overflow-y: auto; padding: var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-4); }
+.gen-panel .panel-body {
+  flex: 1; min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden;
+  overscroll-behavior: contain; padding: var(--sp-4);
+  display: flex; flex-direction: column; gap: var(--sp-4);
+}
 
 /* 模式切换（txt2img / img2img） */
 .mode-switch {
@@ -121,10 +132,64 @@
 .mode-switch button[aria-checked="true"] { color: var(--primary); font-weight: 650; }
 .mode-switch button:focus-visible { outline: var(--focus-outline); outline-offset: 0; }
 
-/* LoRA 列表（生成页左栏） */
-.lora-list { display: flex; flex-direction: column; gap: 6px; }
+/* LoRA 档案抽屉（生成页左栏） */
+.lora-heading { flex: none; display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+.lora-disclosure {
+  flex: 1; min-width: 0; min-height: 30px;
+  display: flex; align-items: center; gap: 8px;
+  color: var(--text-2); font-size: var(--fs-sm); font-weight: 650; text-align: left;
+  border-radius: var(--r-sm);
+  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.lora-disclosure:hover { color: var(--primary); background: var(--primary-soft); }
+.lora-chevron {
+  width: 7px; height: 7px; flex: none;
+  border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg); transform-origin: center;
+  transition: transform 180ms var(--ease-out);
+}
+.lora-disclosure[aria-expanded="true"] .lora-chevron { transform: rotate(45deg) translate(-1px, -1px); }
+.lora-total {
+  margin-left: auto; padding: 1px 7px; max-width: 86px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  border: 1px solid var(--border); border-radius: var(--r-full);
+  background: var(--surface-2); color: var(--muted);
+  font-size: var(--fs-xs); font-weight: 550; font-variant-numeric: tabular-nums;
+}
+.lora-drawer {
+  flex: none; min-width: 0;
+  display: flex; flex-direction: column; gap: var(--sp-2);
+  padding: var(--sp-3); border-left: 1px solid color-mix(in srgb, var(--primary) 52%, var(--border));
+  background: var(--surface-2);
+  animation: loraDrawerOpen 200ms var(--ease-out) both;
+}
+.lora-search { position: relative; flex: none; min-width: 0; }
+.lora-search > svg {
+  position: absolute; z-index: 1; left: 9px; top: 50%; width: 14px; height: 14px;
+  transform: translateY(-50%); color: var(--faint); pointer-events: none;
+}
+.lora-search .input { width: 100%; min-width: 0; padding-left: 30px; padding-right: 30px; }
+.lora-search-clear {
+  position: absolute; right: 5px; top: 50%; width: 26px; height: 26px;
+  display: grid; place-items: center; transform: translateY(-50%);
+  border-radius: 6px; color: var(--muted);
+  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.lora-search-clear:hover { color: var(--text); background: var(--surface); }
+.lora-search-clear svg { width: 13px; height: 13px; }
+.lora-result-meta {
+  flex: none; min-height: 16px; color: var(--muted);
+  font-size: var(--fs-xs); font-variant-numeric: tabular-nums;
+}
+.lora-list {
+  height: clamp(156px, 32vh, 320px); min-height: 0; min-width: 0;
+  display: flex; flex-direction: column; gap: 6px;
+  overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain;
+  padding-right: 3px; scrollbar-gutter: stable;
+}
+.lora-list:focus-visible { outline-offset: -2px; }
 .lora-chip {
-  display: flex; align-items: center; gap: var(--sp-2);
+  flex: none; display: flex; align-items: center; gap: var(--sp-2);
   padding: 6px 8px; border-radius: var(--r-sm);
   border: 1px solid var(--border); background: var(--surface-2);
   font-size: var(--fs-sm); text-align: left; width: 100%;
@@ -135,11 +200,18 @@
 .lora-chip .l-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lora-chip .l-strength { width: 56px; flex: none; font-size: var(--fs-xs); color: var(--muted); font-family: var(--font-mono); text-align: right; }
 .lora-chip[aria-pressed="false"] .l-strength { opacity: 0.45; }
+.lora-empty { flex: none; padding: var(--sp-4) var(--sp-2); line-height: 1.65; text-align: center; }
+.lora-sentinel { flex: none; min-height: 70px; overflow: hidden; }
+.lora-sentinel .wfx-loading { min-height: 70px; gap: var(--sp-2); }
+.lora-sentinel .wfx-loading-mark { width: min(132px, 100%); }
+.lora-sentinel .wfx-loading-ink { width: calc(100% - 22px); }
+.lora-sentinel .wfx-loading-label { font-size: var(--fs-xs); }
+@keyframes loraDrawerOpen { from { opacity: 0; transform: translateY(-4px); } }
 
 /* ================= 画布（生成页中部） ================= */
 .canvas-wrap { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .canvas-area {
-  position: relative; flex: 1; min-height: 0; margin: var(--sp-4);
+  position: relative; flex: 1; min-width: 0; min-height: 0; margin: var(--sp-4);
   display: flex; align-items: center; justify-content: center;
   border: 1px dashed var(--border-strong);
   border-radius: var(--r-md);
@@ -182,11 +254,18 @@
 
 /* 底部操作条（生成页） */
 .gen-actions {
-  display: flex; align-items: center; gap: var(--sp-2);
+  display: flex; align-items: center; gap: var(--sp-2); min-width: 0;
   padding: var(--sp-3) var(--sp-4);
   border-top: 1px solid var(--hairline);
 }
 .gen-actions .queue-info { margin-left: auto; font-size: var(--fs-xs); color: var(--muted); }
+.canvas-wrap > .gen-submit-bar {
+  position: relative; z-index: 3; flex: none; min-height: 56px;
+  flex-wrap: wrap; background: var(--surface);
+  box-shadow: 0 -1px 0 var(--hairline);
+}
+.gen-submit-bar #g-submit { min-width: 132px; min-height: 36px; }
+.gen-submit-bar .queue-info { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ================= 向导（首次运行） ================= */
 .wizard { position: fixed; inset: 0; z-index: 50; background: var(--canvas); display: flex; flex-direction: column; }
@@ -447,6 +526,11 @@
 @media (max-width: 860px) { .preview-body { grid-template-columns: 1fr; } }
 
 /* ================= 响应式 ================= */
+@media (max-width: 1180px) {
+  .gen { gap: var(--sp-3); padding: var(--sp-3); }
+  .gen-left { width: 208px; }
+  .gen-right { width: 272px; }
+}
 @media (max-width: 1100px) {
   .rail { width: var(--rail-w-collapsed); padding: var(--sp-3) var(--sp-2); }
   .rail-item { justify-content: center; padding: 8px 0; }
@@ -454,11 +538,27 @@
   .rail-item[aria-current="page"]::before { left: -8px; }
 }
 @media (max-width: 980px) {
-  .gen { flex-direction: column; overflow-y: auto; }
-  .gen-left, .gen-right { width: 100%; }
-  .gen-center { min-height: 420px; }
+  .gen-left { width: 188px; }
+  .gen-right { width: 248px; }
+  .gen-panel .panel-body { padding: var(--sp-3); gap: var(--sp-3); }
   .settings-layout { grid-template-columns: 1fr; }
   .wizard-rail { display: none; }
+}
+@media (max-width: 720px) {
+  .generate-view { overflow-y: auto; overflow-x: hidden; }
+  .gen {
+    height: auto; min-height: 100%; overflow: visible;
+    flex-direction: column;
+  }
+  .gen-center {
+    order: -1; width: 100%; flex: none;
+    min-height: clamp(340px, calc(100dvh - var(--topbar-h) - 32px), 520px);
+  }
+  .gen-left, .gen-right { width: 100%; flex: none; }
+  .gen-left .panel-body, .gen-right .panel-body { max-height: none; }
+  .lora-list { height: min(280px, 44vh); }
+  .gen-actions { flex-wrap: wrap; }
+  .gen-actions .queue-info { width: 100%; margin-left: 0; }
 }
 @media (max-width: 720px) {
   .topbar { padding: 0 var(--sp-3); }
@@ -473,4 +573,19 @@
   .rail { width: 100%; height: 48px; flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--border); padding: 6px var(--sp-2); }
   .shell { flex-direction: column; }
   .rail-item { flex: none; }
+  .gen-center { min-height: clamp(320px, calc(100dvh - var(--topbar-h) - 72px), 460px); }
+}
+
+@media (max-height: 640px) and (min-width: 721px) {
+  .gen { gap: var(--sp-2); padding: var(--sp-2); }
+  .gen-panel .panel-head { padding-block: var(--sp-2); }
+  .gen-panel .panel-body { padding: var(--sp-3); gap: var(--sp-3); }
+  .canvas-area { margin: var(--sp-2); }
+  .canvas-wrap > .gen-submit-bar { min-height: 48px; padding-block: var(--sp-2); }
+  .lora-list { height: clamp(132px, 30vh, 220px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lora-drawer { animation: none; }
+  .lora-chevron { transition-duration: 0.01ms; }
 }
