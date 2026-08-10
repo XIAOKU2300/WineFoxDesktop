@@ -120,7 +120,7 @@ export class DiagnosticsView {
                 failure.action ? el("div", { class: "m-sub" }, esc(failure.action)) : null,
               ]),
               el("span", { class: `badge ${failure.status === "fail" ? "danger" : "warn"}` }, esc(failure.code || "注意")),
-            ])),
+            ]))),
         ]),
       );
     }
