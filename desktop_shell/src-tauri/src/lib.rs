@@ -62,6 +62,8 @@ pub fn run() {
             commands::confirm_exit,
             commands::cancel_exit,
             commands::save_base64_image,
+            commands::pick_comfyui_root,
+            commands::pick_comfyui_python,
             commands::check_update,
             commands::get_update_state,
             commands::download_update,
