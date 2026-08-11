@@ -145,6 +145,17 @@ class UiPerformanceContractTests(unittest.TestCase):
         self.assertIn("data.families", source)
         self.assertNotIn("data.modelFamilies", source)
 
+    def test_room_bridge_reply_is_handled_and_waiters_route_by_type(self) -> None:
+        # 房间桥请求的回复必须被监听并 resolve 对应 waiter（此前缺失
+        # winefox-ui-room-reply 处理，导致每次房间操作 20s 超时提示
+        # "本地服务无响应"）；等待队列须按消息类型路由。
+        source = self.source("desktop_ui/js/utils.js")
+
+        self.assertIn('event.data?.type === "winefox-ui-room-reply"', source)
+        self.assertIn("roomWaiters.get(event.data.id)", source)
+        self.assertIn("roomWaiters.delete(event.data.id)", source)
+        self.assertIn('messageType === "winefox-ui-room" ? roomWaiters : debugWaiters', source)
+
 
 if __name__ == "__main__":
     unittest.main()

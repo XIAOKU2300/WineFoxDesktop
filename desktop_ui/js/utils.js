@@ -361,6 +361,12 @@ window.addEventListener("message", (event) => {
     waiter.resolve(event.data);
   } else if (event.data?.type === "winefox-ui-debug-state") {
     debugStateListeners.forEach((fn) => { try { fn(!!event.data.enabled); } catch { /* 忽略 */ } });
+  } else if (event.data?.type === "winefox-ui-room-reply") {
+    const waiter = roomWaiters.get(event.data.id);
+    if (!waiter) return;
+    roomWaiters.delete(event.data.id);
+    clearTimeout(waiter.timer);
+    waiter.resolve(event.data);
   } else if (event.data?.type === "winefox-ui-room-state") {
     roomStateListeners.forEach((fn) => { try { fn(event.data.state); } catch { /* 忽略 */ } });
   }
@@ -372,12 +378,13 @@ function bridgeRequest(prefix, messageType, action, payload = {}) {
       resolve({ ok: false, error: "未运行在桌面壳中" });
       return;
     }
+    const waiters = messageType === "winefox-ui-room" ? roomWaiters : debugWaiters;
     const id = prefix + "-" + (++bridgeSeq) + "-" + Date.now();
     const timer = setTimeout(() => {
-      debugWaiters.delete(id);
+      waiters.delete(id);
       resolve({ ok: false, error: "本地服务无响应" });
     }, 20000);
-    const p = new Promise((res) => debugWaiters.set(id, { timer, resolve: res }));
+    const p = new Promise((res) => waiters.set(id, { timer, resolve: res }));
     window.parent.postMessage({ type: messageType, action, ...payload, id }, "*");
     p.then(resolve);
   });

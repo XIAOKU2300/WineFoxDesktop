@@ -86,6 +86,21 @@ if os.path.isdir(room_ui):
 else:
     print("[spec] WARN: desktop_room/room_ui not found, guest UI will be unavailable", file=sys.stderr)
 
+# setup manifest: 环境中心安装清单。desktop_runtime/setup_manifest.py 在 frozen
+# 下从 _MEIPASS/plugin_data/resources 读取，仓库根 resources/ 是唯一来源。
+repo_resources = os.path.join(ROOT, "resources")
+if os.path.isdir(repo_resources):
+    datas.append((repo_resources, os.path.join("plugin_data", "resources")))
+else:
+    print("[spec] WARN: resources/ not found, setup manifest unavailable", file=sys.stderr)
+
+# LoraBridge 随包分发（环境中心安装桥接器时从 _MEIPASS/plugin_data 复制）。
+bridge_src = os.path.join(ROOT, "comfyui_custom_nodes", "ComfyUI-AstrBot-LoraBridge")
+if os.path.isdir(bridge_src):
+    datas.append((bridge_src, os.path.join("plugin_data", "comfyui_custom_nodes", "ComfyUI-AstrBot-LoraBridge")))
+else:
+    print("[spec] WARN: ComfyUI-AstrBot-LoraBridge not found, bridge install will be unavailable", file=sys.stderr)
+
 # ---------------------------------------------------------------------------
 # exclusions: heavy / out-of-scope dependencies
 # ---------------------------------------------------------------------------

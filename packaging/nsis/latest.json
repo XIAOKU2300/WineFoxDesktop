@@ -1,12 +1,12 @@
 {
-  "version": "8.6.1",
-  "notes": "8.6.1: 自定义端口/绑定地址、http 公网入口、聊天室独立窗口与入室向导、网页端手机适配",
-  "pub_date": "2026-08-11T15:57:57.616863+00:00",
+  "version": "8.6.2",
+  "notes": "修复房间桥接超时（本地服务无响应）",
+  "pub_date": "2026-08-11T16:30:28.695366+00:00",
   "platforms": {
     "windows-x86_64": {
-      "url": "https://github.com/XIAOKU2300/WineFoxDesktop/releases/download/v8.6.1/WineFox-Setup-8.6.1-x64.exe",
-      "signature": "0Y/TeQSUdn8RlOwUk7btnEymOyEJ7tYcChW8OZU3+M5QjFsSeK3ki1Q9vk5fLGT1hTbTkb6lzBuZo5C1qeHIDQ==",
-      "size": 19692841
+      "url": "https://github.com/XIAOKU2300/WineFoxDesktop/releases/download/v8.6.2/WineFox-Setup-8.6.2-x64.exe",
+      "signature": "1XQxgw2nwbdizSZx8fAq5bM9LHchRboYaH7ULqRLwHfHQqxBmNIh45Ods1sIRFuCoiHz+m3R44I/4UFWCL7IDA==",
+      "size": 19791694
     }
   }
 }
