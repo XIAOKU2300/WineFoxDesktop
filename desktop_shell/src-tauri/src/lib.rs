@@ -38,9 +38,15 @@ pub fn run() {
             let _ = app.emit("focus-requested", ());
         }))
         .manage(state.clone())
-        .register_uri_scheme_protocol(panel_protocol::PANEL_SCHEME, move |_ctx, request| {
-            panel_protocol::handle(&protocol_state, request)
-        })
+        .register_asynchronous_uri_scheme_protocol(
+            panel_protocol::PANEL_SCHEME,
+            move |_ctx, request, responder| {
+                let request_state = Arc::clone(&protocol_state);
+                std::thread::spawn(move || {
+                    responder.respond(panel_protocol::handle(&request_state, request));
+                });
+            },
+        )
         .invoke_handler(tauri::generate_handler![
             commands::get_status,
             commands::start_sidecar,
