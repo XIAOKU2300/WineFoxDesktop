@@ -20,6 +20,7 @@ import asyncio
 import hashlib
 import logging
 import secrets
+import time
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -29,6 +30,7 @@ from . import protocol
 from .auth import error_response, resolve_member
 from .models import job_public, message_payload
 from .protocol import parse_client_request_id
+from .rooms import _ChatRateBucket
 from .storage import RoomStorage
 from .uploads import ImageErrorDetail, _process_image, _store_file, _store_thumb
 
@@ -320,8 +322,8 @@ class GenerationBridge:
                 await self._finalize(room_job_id, record)
                 return
             elif status == "failed":
-                await self._fail(room_job_id, getattr(record, "error", None) or "生成失败",
-                                 "GENERATION_FAILED")
+                # 不把引擎原始错误透传给访客（可能含本地路径/模型名等内部信息）。
+                await self._fail(room_job_id, "生成失败，请稍后再试", "GENERATION_FAILED")
                 return
             else:  # cancelled / detached
                 await self._cancel(room_job_id)
@@ -515,6 +517,14 @@ def _sanitize_request(raw: dict[str, Any], settings: dict[str, Any]) -> dict[str
     if isinstance(raw.get("loras"), list):
         cleaned = [item for item in raw["loras"] if isinstance(item, dict)]
         if cleaned:
+            # allowedLoras 为显式列表时强校验（空列表 = 房主未放行任何 LoRA）。
+            allowed_loras = settings.get("allowedLoras")
+            if allowed_loras is not None:
+                allowed_set = {str(x) for x in allowed_loras}
+                for item in cleaned:
+                    ident = str(item.get("id") or item.get("name") or "")
+                    if ident not in allowed_set:
+                        raise GenerationError("该 LoRA 未获得房主允许", "LORA_NOT_ALLOWED", 403)
             out["loras"] = cleaned[:_MAX_LORAS]
 
     ref_id = raw.get("refAttachmentId")
@@ -524,11 +534,13 @@ def _sanitize_request(raw: dict[str, Any], settings: dict[str, Any]) -> dict[str
         except (TypeError, ValueError):
             raise GenerationError("refAttachmentId 无效", "BAD_REQUEST", 400)
 
-    allowed_families = settings.get("allowedModelFamilies") or []
-    if allowed_families and out.get("family") and str(out["family"]) not in allowed_families:
+    # 白名单语义：键未配置（None）→ 默认放行；显式列表（含空列表）→ 严格校验，
+    # 使"房主未勾选任何工作流/模型系列"表现为拒绝非默认项而非全放行。
+    allowed_families = settings.get("allowedModelFamilies")
+    if allowed_families is not None and out.get("family") and str(out["family"]) not in allowed_families:
         raise GenerationError("该模型系列未获得房主允许", "MODEL_NOT_ALLOWED", 403)
-    allowed_workflows = settings.get("allowedWorkflowIds") or []
-    if allowed_workflows and out.get("workflow") and str(out["workflow"]) not in allowed_workflows:
+    allowed_workflows = settings.get("allowedWorkflowIds")
+    if allowed_workflows is not None and out.get("workflow") and str(out["workflow"]) not in allowed_workflows:
         raise GenerationError("该工作流未获得房主允许", "WORKFLOW_NOT_ALLOWED", 403)
     return out
 
@@ -651,6 +663,9 @@ async def _enhance_handler(request: web.Request) -> web.Response:
     room_id = int(request.app["room_id"])
     if not storage.room_settings_map(room_id).get("allowPromptEnhancement"):
         return error_response("房主已关闭提示词增强", "ENHANCEMENT_DISABLED", 403)
+    now = time.monotonic()
+    if not request.app["prompt_limiter"].try_acquire(int(member["id"]), now, limit=5, window=60.0):
+        return error_response("操作过于频繁，请稍后再试", "PROMPT_RATE_LIMITED", 429)
     bridge = _bridge(request)
     if bridge is None:
         return error_response("生图服务不可用", "GENERATION_UNAVAILABLE", 503)
@@ -675,6 +690,9 @@ async def _analyze_handler(request: web.Request) -> web.Response:
     room_id = int(request.app["room_id"])
     if not storage.room_settings_map(room_id).get("allowImg2img"):
         return error_response("房主已关闭图片参考/分析", "IMG2IMG_DISABLED", 403)
+    now = time.monotonic()
+    if not request.app["prompt_limiter"].try_acquire(int(member["id"]), now, limit=5, window=60.0):
+        return error_response("操作过于频繁，请稍后再试", "PROMPT_RATE_LIMITED", 429)
     bridge = _bridge(request)
     if bridge is None:
         return error_response("生图服务不可用", "GENERATION_UNAVAILABLE", 503)
@@ -697,6 +715,7 @@ async def _analyze_handler(request: web.Request) -> web.Response:
 
 def install_generation_routes(app: web.Application) -> None:
     app["generation_paused"] = False
+    app["prompt_limiter"] = _ChatRateBucket()
     # 静态路径必须注册在 {job_id} 之前。
     app.router.add_post("/room/v1/generations/enhance", _enhance_handler)
     app.router.add_post("/room/v1/generations/analyze", _analyze_handler)

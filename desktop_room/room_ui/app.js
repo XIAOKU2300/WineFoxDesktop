@@ -386,6 +386,8 @@
         void loadCatalog();
         break;
       case "room.closing":
+        // 标记房间为 closing，阻止 scheduleReconnect 继续重连（它只在 online 时重连）。
+        if (state.room) state.room.state = "closing";
         setClosed(data?.reason === "host-closed" ? "房主已关闭房间。" : "房间已关闭。");
         break;
       case "room.error":
@@ -702,8 +704,13 @@
 
   async function saveResult() {
     if (!state.result) return;
+    const url = safeAttachmentUrl(state.result.url);
+    if (!url) {
+      toast("结果链接无效", "err");
+      return;
+    }
     const a = document.createElement("a");
-    a.href = state.result.url;
+    a.href = url;
     a.download = "winefox_room.png";
     a.target = "_blank";
     a.rel = "noopener";
@@ -754,7 +761,7 @@
     if (state.result) {
       const img = document.createElement("img");
       img.className = "canvas-img";
-      img.src = state.result.url;
+      img.src = safeAttachmentUrl(state.result.url);
       img.alt = "生成结果";
       img.addEventListener("click", () => openLightbox(state.result.url));
       area.append(img);
@@ -823,9 +830,16 @@
     input.remove();
   }
 
+  function safeAttachmentUrl(url) {
+    if (typeof url === "string" && /^\/room\/v1\/attachments\/\d+(\/thumb)?$/.test(url)) return url;
+    return "";
+  }
+
   function openLightbox(url) {
+    const safe = safeAttachmentUrl(url);
+    if (!safe) return;
     const lb = $("lightbox");
-    $("lightbox-img").src = url;
+    $("lightbox-img").src = safe;
     lb.hidden = false;
   }
   $("lightbox-close").addEventListener("click", () => { $("lightbox").hidden = true; $("lightbox-img").src = ""; });

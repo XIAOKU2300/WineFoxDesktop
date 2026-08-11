@@ -16,7 +16,7 @@ from aiohttp import web
 
 from . import protocol
 from .gateway import create_room_app
-from .security import hash_password, new_host_token, new_session_token
+from .security import hash_password, new_host_token, new_session_token, normalize_lookup
 from .storage import RoomStorage, new_public_id, utcnow_iso
 from .tunnel import TunnelValidationError, validate_tunnel_url_syntax, verify_tunnel
 
@@ -156,7 +156,7 @@ class RoomManager:
         storage.add_member(
             room_id=room_id,
             display_name=owner_name,
-            normalized_name=owner_name.lower(),
+            normalized_name=normalize_lookup(owner_name),
             role=protocol.ROLE_OWNER,
             session_hash=owner_hash,
         )

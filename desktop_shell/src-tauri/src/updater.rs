@@ -237,7 +237,11 @@ impl UpdateManager {
         }
         self.emit(app);
 
-        verify_installer_signature(resolve_pubkey_b64(), signature, &body)?;
+        verify_installer_signature(resolve_pubkey_b64(), signature, &body).map_err(|e| {
+            // 校验失败时清理磁盘上未经验证的文件，避免留毒。
+            let _ = std::fs::remove_file(&installer_path);
+            e
+        })?;
 
         // 签名通过 → 关闭 sidecar → 启动静默安装 → 退出
         {

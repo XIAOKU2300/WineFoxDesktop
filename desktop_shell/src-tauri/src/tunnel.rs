@@ -28,7 +28,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 ///   * 返回的 room public_id 必须与当前房间一致
 pub fn verify_public_url(url: &str, expected_public_id: Option<&str>) -> Result<String, String> {
     let parsed = parse_public_url(url)?;
-    let base = format!("{}://{}", parsed.scheme, parsed.host);
+    let base = parsed.base();
     let info_url = format!("{base}/room/v1/info");
     let body = winhttp::https_get(&info_url, Duration::from_secs(12), None)
         .map_err(|e| format!("无法访问房间信息端点：{e}"))?;
@@ -67,12 +67,25 @@ fn parse_public_url(url: &str) -> Result<ParseOutcome, String> {
     Ok(ParseOutcome {
         scheme,
         host: host.to_string(),
+        port: parsed.port(),
     })
 }
 
 struct ParseOutcome {
     scheme: String,
     host: String,
+    port: Option<u16>,
+}
+
+impl ParseOutcome {
+    /// 规范化后的 base URL。非标准端口显式携带（标准端口 url::Url::port()
+    /// 返回 None，无需重复拼接），避免探测 /room/v1/info 时端口被静默丢弃。
+    fn base(&self) -> String {
+        match self.port {
+            Some(p) => format!("{}://{}:{}", self.scheme, self.host, p),
+            None => format!("{}://{}", self.scheme, self.host),
+        }
+    }
 }
 
 /// TunnelProvider 抽象：自动内网穿透提供方。

@@ -21,6 +21,10 @@ from .storage import RoomStorage
 
 log = logging.getLogger(__name__)
 
+# 单成员/全局 WS 连接上限，防单账户开无限连接拖垮网关。
+MAX_WS_PER_MEMBER = 3
+MAX_WS_TOTAL = 100
+
 
 def ws_packet(event: str, data: Any) -> dict[str, Any]:
     return {"event": event, "data": data}
@@ -47,6 +51,12 @@ class ChatHub:
 
     def sockets_for(self, member_id: int) -> list[web.WebSocketResponse]:
         return list(self._connections.get(member_id, ()))
+
+    def member_socket_count(self, member_id: int) -> int:
+        return len(self._connections.get(member_id, ()))
+
+    def total_sockets(self) -> int:
+        return sum(len(sockets) for sockets in self._connections.values())
 
     def count(self) -> int:
         return len(self._connections)
@@ -87,11 +97,14 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     room = storage.get_room(request.app["room_id"])
     if room is None:
         raise web.HTTPNotFound(text="房间不存在")
+    member_id = int(member["id"])
+    if hub.member_socket_count(member_id) >= MAX_WS_PER_MEMBER or hub.total_sockets() >= MAX_WS_TOTAL:
+        raise web.HTTPTooManyRequests(text="连接过多，请稍后再试")
 
     ws = web.WebSocketResponse(heartbeat=30.0)
     await ws.prepare(request)
-    hub.connect(int(member["id"]), ws)
-    storage.touch_last_seen(int(member["id"]))
+    hub.connect(member_id, ws)
+    storage.touch_last_seen(member_id)
 
     # 接入即推全量快照（房间信息 + 成员 + 最近消息）
     snapshot = room_snapshot(storage, int(room["id"]), int(member["id"]))

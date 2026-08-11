@@ -487,7 +487,9 @@ class RoomGenerationTests(unittest.IsolatedAsyncioTestCase):
                     if event["event"] == "job.failed":
                         break
                 self.assertEqual(event["data"]["job"]["state"], "failed")
-                self.assertEqual(event["data"]["error"], "boom")
+                # 安全要求：引擎原始错误（含本地路径/模型名等）绝不透传给访客。
+                self.assertEqual(event["data"]["error"], "生成失败，请稍后再试")
+                self.assertNotEqual(event["data"]["error"], "boom")
                 self.assertTrue(await self._wait_job_state(manager, job_id, "failed"))
         finally:
             await session.close()
