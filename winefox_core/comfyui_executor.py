@@ -61,6 +61,9 @@ _IGNORED_LORA_MARKERS = (
     "t2i_adapter", "adapter",
 )
 
+_HISTORY_IMAGE_FIELDS = ("images", "image", "gifs", "gif", "previews", "files")
+_COMFY_VIEW_TYPES = frozenset({"input", "output", "temp"})
+
 
 def _is_ignored_lora_name(name: str) -> bool:
     filename = Path(str(name or "").strip()).name.lower()
@@ -79,7 +82,7 @@ def sanitize_comfy_name(value: str, *, allow_subfolder: bool = False) -> str:
     raw = str(value or "").strip().replace("\\", "/")
     if not raw or raw in (".", ".."):
         raise ComfyUIFileError("上传/引用文件名非法（空或 .）")
-    if raw.startswith("/") or raw.startswith("//"):
+    if raw.startswith("/") or raw.startswith("//") or re.match(r"^[A-Za-z]:", raw):
         raise ComfyUIFileError("不允许使用绝对路径文件名")
     parts = [p for p in raw.split("/") if p not in ("", ".")]
     if not parts or any(p == ".." for p in parts):
@@ -104,6 +107,27 @@ def _queue_contains_prompt_id(value: Any, prompt_id: str) -> bool:
     if isinstance(value, (list, tuple, set)):
         return any(_queue_contains_prompt_id(item, prompt_id) for item in value)
     return str(value or "") == prompt_id
+
+
+def _queue_item_prompt_id(value: Any) -> str:
+    """Extract a prompt id from mappings and native ComfyUI queue arrays."""
+    if isinstance(value, Mapping):
+        for key in ("prompt_id", "id"):
+            candidate = str(value.get(key) or "").strip()
+            if candidate:
+                return candidate
+        return ""
+    if isinstance(value, (list, tuple)):
+        # Core ComfyUI uses [queue_number, prompt_id, workflow, ...].
+        if len(value) > 1 and not isinstance(value[1], (dict, list, tuple, set)):
+            candidate = str(value[1] or "").strip()
+            if candidate:
+                return candidate
+        for item in value:
+            candidate = _queue_item_prompt_id(item)
+            if candidate:
+                return candidate
+    return ""
 
 
 class ComfyUIExecutor:
@@ -177,11 +201,17 @@ class ComfyUIExecutor:
         pending = data.get("queue_pending") or data.get("pending") or []
         running = running if isinstance(running, list) else []
         pending = pending if isinstance(pending, list) else []
+        running_ids = tuple(
+            prompt_id for item in running if (prompt_id := _queue_item_prompt_id(item))
+        )
+        pending_ids = tuple(
+            prompt_id for item in pending if (prompt_id := _queue_item_prompt_id(item))
+        )
         return QueueSnapshot(
             running=len(running),
             pending=len(pending),
-            running_ids=tuple(str(x.get("prompt_id") or x.get("id") or "") for x in running if isinstance(x, dict)),
-            pending_ids=tuple(str(x.get("prompt_id") or x.get("id") or "") for x in pending if isinstance(x, dict)),
+            running_ids=running_ids,
+            pending_ids=pending_ids,
         )
 
     async def fetch_models(self) -> ModelInventory:
@@ -510,7 +540,13 @@ class ComfyUIExecutor:
     # ------------------------------------------------------------------
     async def fetch_history(self, prompt_id: str) -> Dict[str, Any]:
         data = await self._transport.get_json(f"/history/{prompt_id}")
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            return {}
+        if prompt_id in data:
+            return data
+        if any(key in data for key in ("outputs", "status", "prompt")):
+            return {prompt_id: data}
+        return data
 
     async def wait_for_completion(
         self, prompt_id: str, snapshot: ExecutionSnapshot, *, resumed: Optional[bool] = None
@@ -571,6 +607,8 @@ class ComfyUIExecutor:
                     return self._result_error(error, meta, started, snapshot, resume=resumed)
                 outputs = history_item.get("outputs", {}) or {}
                 images = self._collect_output_images(outputs, snapshot.output_node_id)
+                if not images:
+                    images = self._collect_output_images({"history": history_item}, None)
                 if images:
                     try:
                         downloaded = await self._download_images(
@@ -634,17 +672,53 @@ class ComfyUIExecutor:
         self, outputs: Mapping[str, Any], output_node_id: Optional[str]
     ) -> List[Dict[str, Any]]:
         """收集所有输出图片（优先 output_node_id 节点）。"""
+        if not isinstance(outputs, Mapping):
+            return []
         node_id = str(output_node_id or "").strip()
-        if node_id and node_id in outputs:
-            imgs = (outputs.get(node_id) or {}).get("images", []) if isinstance(outputs.get(node_id), dict) else []
-            if imgs:
-                return [x for x in imgs if isinstance(x, dict) and x.get("filename")]
+        ordered: List[Any] = []
+        preferred_key: Any = None
+        if node_id:
+            preferred_key = next((key for key in outputs if str(key) == node_id), None)
+            if preferred_key is not None:
+                ordered.append(outputs.get(preferred_key))
+        ordered.extend(value for key, value in outputs.items() if key != preferred_key)
+
         out: List[Dict[str, Any]] = []
-        for node_out in outputs.values():
-            if isinstance(node_out, dict) and node_out.get("images"):
-                for img in node_out["images"]:
-                    if isinstance(img, dict) and img.get("filename"):
-                        out.append(img)
+        seen: set[tuple[str, str, str]] = set()
+        for node_out in ordered:
+            if not isinstance(node_out, Mapping):
+                continue
+            containers = [node_out]
+            ui = node_out.get("ui")
+            if isinstance(ui, Mapping):
+                containers.append(ui)
+            for container in containers:
+                for field in _HISTORY_IMAGE_FIELDS:
+                    raw_items = container.get(field)
+                    if raw_items is None:
+                        continue
+                    if isinstance(raw_items, (str, Mapping)):
+                        raw_items = [raw_items]
+                    if not isinstance(raw_items, (list, tuple)):
+                        continue
+                    for raw in raw_items:
+                        item = (
+                            {"filename": raw}
+                            if isinstance(raw, str)
+                            else dict(raw)
+                            if isinstance(raw, Mapping)
+                            else {}
+                        )
+                        filename = str(item.get("filename") or "").strip()
+                        if not filename:
+                            continue
+                        subfolder = str(item.get("subfolder") or "").strip()
+                        image_type = str(item.get("type") or "output").strip().lower()
+                        marker = (filename, subfolder, image_type)
+                        if marker in seen:
+                            continue
+                        seen.add(marker)
+                        out.append(item)
         return out
 
     async def _download_images(
@@ -656,21 +730,38 @@ class ComfyUIExecutor:
         image_type: str,
     ) -> List[bytes]:
         downloaded: List[bytes] = []
+        failures: List[ComfyUIError] = []
         for img in images:
-            filename = sanitize_comfy_name(str(img.get("filename") or ""))
-            subfolder = str(img.get("subfolder") or "").strip()
-            subfolder = sanitize_comfy_name(subfolder, allow_subfolder=True) if subfolder else ""
-            params = {
-                "filename": filename,
-                "subfolder": subfolder,
-                "type": str(img.get("type") or image_type),
-            }
-            data = await self._transport.get_bytes("/view", params=params)
-            if decode_check:
-                self._verify_image_bytes(data, label=filename)
-            downloaded.append(data)
-            meta.setdefault("image_filenames", []).append(filename)
+            try:
+                filename = sanitize_comfy_name(str(img.get("filename") or ""))
+                subfolder = str(img.get("subfolder") or "").strip()
+                subfolder = sanitize_comfy_name(subfolder, allow_subfolder=True) if subfolder else ""
+                ref_type = str(img.get("type") or image_type or "output").strip().lower()
+                if ref_type not in _COMFY_VIEW_TYPES:
+                    ref_type = "output"
+                params = {
+                    "filename": filename,
+                    "subfolder": subfolder,
+                    "type": ref_type,
+                }
+                data = await self._transport.get_bytes("/view", params=params)
+                if decode_check:
+                    self._verify_image_bytes(data, label=filename)
+                downloaded.append(data)
+                meta.setdefault("image_filenames", []).append(filename)
+            except ComfyUIError as exc:
+                if exc.kind in (ErrorKind.AUTH, ErrorKind.TLS):
+                    raise
+                failures.append(exc)
+                logger.warning(
+                    "[ComfyUIExecutor] skipped unusable history image reference (%s)",
+                    exc.kind.value,
+                )
+        if failures:
+            meta["image_download_failures"] = len(failures)
         if not downloaded:
+            if failures:
+                raise failures[-1]
             raise ComfyUIImageDecodeError("输出节点没有可下载的图片", kind=ErrorKind.IMAGE_DECODE)
         return downloaded
 

@@ -136,7 +136,14 @@ class LoraProfile:
         """从档案字典构建。兼容插件 lora_profile JSON 的字段名。"""
         data = dict(data or {})
         aliases: list[str] = []
-        for field_name in ("match_terms", "official_aliases", "nickname_aliases", "aliases"):
+        for field_name in (
+            "match_terms",
+            "official_aliases",
+            "nickname_aliases",
+            "aliases",
+            "search_terms",
+            "source_aliases",
+        ):
             raw = data.get(field_name) or []
             if isinstance(raw, str):
                 raw = re.split(r"[,，;；\n\r]+", raw)
@@ -148,6 +155,10 @@ class LoraProfile:
                     for piece in re.split(r"[,，;；\n\r]+", str(item))
                 ]
             aliases.extend(str(item).strip() for item in raw if str(item).strip())
+        for field_name in ("search_query",):
+            value = str(data.get(field_name) or "").strip()
+            if value:
+                aliases.append(value)
 
         role_terms: list[str] = []
         raw_roles = data.get("role_terms") or data.get("roles") or []
@@ -166,6 +177,10 @@ class LoraProfile:
             data.get("trigger_words")
             or data.get("profile_activation_tags")
             or data.get("trigger_prompt")
+            or data.get("activation_tags")
+            or data.get("trained_words")
+            or data.get("trainedWords")
+            or data.get("char_prompt")
             or []
         )
         if isinstance(raw_trigger, str):

@@ -186,6 +186,35 @@ def resolve_prompt_loras(
     )
 
 
+def resolve_selected_lora_triggers(
+    service: LoraService,
+    family: str,
+    selections: Iterable[dict[str, Any]],
+) -> tuple[str, ...]:
+    """Return trigger tags for LoRAs explicitly selected by the desktop UI."""
+    profiles = {
+        normalize_lora_key(profile.lora_name): profile
+        for profile in service.profiles_for(family).values()
+        if normalize_lora_key(profile.lora_name)
+    }
+    triggers: list[str] = []
+    seen: set[str] = set()
+    for selection in selections:
+        if not isinstance(selection, dict):
+            continue
+        name = selection.get("name") or selection.get("id") or selection.get("lora_name")
+        profile = profiles.get(normalize_lora_key(name))
+        if profile is None:
+            continue
+        for trigger in profile.trigger_words:
+            value = str(trigger or "").strip()
+            marker = value.casefold()
+            if value and marker not in seen:
+                seen.add(marker)
+                triggers.append(value)
+    return tuple(triggers)
+
+
 def merge_prompt_tags(prompt: str, tags: Iterable[str]) -> str:
     parts = [part.strip() for part in str(prompt or "").split(",") if part.strip()]
     seen = {part.casefold() for part in parts}

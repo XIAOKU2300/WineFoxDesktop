@@ -27,7 +27,12 @@ from winefox_core.workflow_service import WorkflowEntry, WorkflowService
 
 from .config_adapter import DesktopConfigAdapter
 from .llm_client import OpenAICompatibleLLMClient, resolve_provider
-from .lora_profiles import load_lora_profiles, merge_prompt_tags, resolve_prompt_loras
+from .lora_profiles import (
+    load_lora_profiles,
+    merge_prompt_tags,
+    resolve_prompt_loras,
+    resolve_selected_lora_triggers,
+)
 from .upload_store import FileUploadStore
 from .workflow_builder import prepare_workflow
 
@@ -409,7 +414,23 @@ class DesktopEngine:
             await executor.transport.get_json("/object_info", retries=1)
             inventory = await executor.fetch_models()
             auto_lora = None
-            if not execution_payload.get("loras"):
+            selected_loras = (
+                [item for item in execution_payload.get("loras", []) if isinstance(item, dict)]
+                if isinstance(execution_payload.get("loras"), list)
+                else []
+            )
+            if selected_loras:
+                selected_triggers = resolve_selected_lora_triggers(
+                    self.lora_service,
+                    str(payload.get("family") or "illustrious"),
+                    selected_loras,
+                )
+                if selected_triggers:
+                    prompt_result.final_prompt = merge_prompt_tags(
+                        prompt_result.final_prompt, selected_triggers
+                    )
+                    execution_payload["prompt"] = prompt_result.final_prompt
+            else:
                 auto_lora = resolve_prompt_loras(
                     self.lora_service,
                     raw_prompt,
