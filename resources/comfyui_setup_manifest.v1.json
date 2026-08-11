@@ -1,0 +1,471 @@
+{
+  "format_version": 1,
+  "manifest_version": "1.0.0",
+  "generated_at": "2026-08-11",
+  "source_of_truth": "scripts/astrbot_comfyui_setup.bat",
+  "description": "ComfyUI 环境中心安装清单：模型/节点/Bridge/Python 规则，逐项对齐旧 BAT 真实行为。",
+
+  "bridge": {
+    "source": "comfyui_custom_nodes/ComfyUI-AstrBot-LoraBridge",
+    "dest_folder": "ComfyUI-AstrBot-LoraBridge",
+    "version": "1.4.1",
+    "allow_local_requests_without_token": false,
+    "allowed_hosts": [
+      "civitai.com", "civitai.red", "civitaired.com",
+      "huggingface.co", "hf-mirror.com",
+      "github.com", "raw.githubusercontent.com", "objects.githubusercontent.com",
+      "github-releases.githubusercontent.com", "release-assets.githubusercontent.com"
+    ],
+    "config_defaults": {
+      "token": "",
+      "chunk_size_mb": 1,
+      "connect_timeout": 30,
+      "sock_read_timeout": 120,
+      "fetch_timeout": 45,
+      "max_concurrent_downloads": 1,
+      "proxy_cooldown": 60,
+      "proxy": ""
+    }
+  },
+
+  "python": {
+    "min_version": [3, 10],
+    "probe_requires_pip": true,
+    "candidate_priority": [
+      "env:COMFYUI_PYTHON",
+      "running_processes",
+      "paths:root_parent/python_embeded/python.exe",
+      "paths:root_parent/python/python.exe",
+      "paths:root_parent/python310/python.exe",
+      "paths:root_parent/python311/python.exe",
+      "paths:root_parent/python312/python.exe",
+      "paths:root/python_embeded/python.exe",
+      "paths:root/python/python.exe",
+      "paths:root/venv/Scripts/python.exe",
+      "paths:root/.venv/Scripts/python.exe",
+      "paths:root_parent/python_embeded/python.exe",
+      "paths:root_parent/python/python.exe",
+      "paths:root_parent/venv/Scripts/python.exe",
+      "paths:root_parent/.venv/Scripts/python.exe",
+      "conda_envs",
+      "system_python"
+    ]
+  },
+
+  "directories": {
+    "custom_nodes": "custom_nodes",
+    "checkpoints": "models/checkpoints",
+    "controlnet": "models/controlnet",
+    "vae": "models/vae",
+    "text_encoders": "models/text_encoders",
+    "loras": "models/loras",
+    "unet": "models/unet",
+    "diffusion_models": "models/diffusion_models",
+    "clip_vision": "models/clip_vision",
+    "ultralytics_bbox": "models/ultralytics/bbox",
+    "ultralytics_segm": "models/ultralytics/segm"
+  },
+
+  "model_groups": [
+    "core", "minimal", "wan", "wan_clip_vision", "wan_quality", "anima"
+  ],
+
+  "models": [
+    {
+      "id": "core.depth_anything_v2_vitl",
+      "name": "depth_anything_v2_vitl.pth",
+      "kind": "pth",
+      "dest": "custom_nodes/comfyui_controlnet_aux/ckpts/depth-anything/Depth-Anything-V2-Large/depth_anything_v2_vitl.pth",
+      "min_gb": 1.0,
+      "sha256": "",
+      "sources": [
+        {"host": "huggingface.co", "url": "https://huggingface.co/depth-anything/Depth-Anything-V2-Large/resolve/main/depth_anything_v2_vitl.pth?download=true"},
+        {"host": "hf-mirror.com", "url": "https://hf-mirror.com/depth-anything/Depth-Anything-V2-Large/resolve/main/depth_anything_v2_vitl.pth?download=true"}
+      ],
+      "group": "core"
+    },
+    {
+      "id": "minimal.illustrious_xl_v2",
+      "name": "Illustrious-XL-v2.0.safetensors",
+      "kind": "safetensors",
+      "dest": "models/checkpoints/Illustrious-XL-v2.0.safetensors",
+      "min_gb": 5.5,
+      "sha256": "",
+      "sources": [
+        {"host": "huggingface.co", "url": "https://huggingface.co/OnomaAIResearch/Illustrious-XL-v2.0/resolve/main/Illustrious-XL-v2.0.safetensors?download=true"},
+        {"host": "hf-mirror.com", "url": "https://hf-mirror.com/OnomaAIResearch/Illustrious-XL-v2.0/resolve/main/Illustrious-XL-v2.0.safetensors?download=true"}
+      ],
+      "group": "minimal"
+    },
+    {
+      "id": "minimal.wai_illustrious_v170",
+      "name": "waiIllustriousSDXL_v170.safetensors",
+      "kind": "safetensors",
+      "dest": "models/checkpoints/waiIllustriousSDXL_v170.safetensors",
+      "min_gb": 5.5,
+      "sha256": "",
+      "sources": [
+        {"host": "huggingface.co", "url": "https://huggingface.co/nnnn1111/models-moved/resolve/main/waiIllustriousSDXL_v170.safetensors?download=true"},
+        {"host": "hf-mirror.com", "url": "https://hf-mirror.com/nnnn1111/models-moved/resolve/main/waiIllustriousSDXL_v170.safetensors?download=true"}
+      ],
+      "group": "minimal"
+    },
+    {
+      "id": "minimal.illustrious_depth_v20",
+      "name": "illustriousXLDepth_v20.safetensors",
+      "kind": "safetensors",
+      "dest": "models/controlnet/illustriousXLDepth_v20.safetensors",
+      "min_gb": 4.0,
+      "sha256": "",
+      "sources": [
+        {"host": "huggingface.co", "url": "https://huggingface.co/azr43l/controlnets/resolve/main/illustriousXLDepth_v20.safetensors?download=true"},
+        {"host": "hf-mirror.com", "url": "https://hf-mirror.com/azr43l/controlnets/resolve/main/illustriousXLDepth_v20.safetensors?download=true"}
+      ],
+      "group": "minimal"
+    },
+    {
+      "id": "minimal.foot_yolov8l",
+      "name": "foot-yolov8l.pt",
+      "kind": "pt",
+      "dest": "models/ultralytics/bbox/foot-yolov8l.pt",
+      "min_gb": 0.05,
+      "sha256": "",
+      "sources": [
+        {"host": "huggingface.co", "url": "https://huggingface.co/AunyMoons/loras-pack/resolve/main/foot-yolov8l.pt?download=true"},
+        {"host": "hf-mirror.com", "url": "https://hf-mirror.com/AunyMoons/loras-pack/resolve/main/foot-yolov8l.pt?download=true"}
+      ],
+      "group": "minimal"
+    },
+    {
+      "id": "minimal.face_yolov8m",
+      "name": "face_yolov8m.pt",
+      "kind": "pt",
+      "dest": "models/ultralytics/bbox/face_yolov8m.pt",
+      "min_gb": 0.04,
+      "sha256": "",
+      "sources": [
+        {"host": "huggingface.co", "url": "https://huggingface.co/Bingsu/adetailer/resolve/main/face_yolov8m.pt?download=true"},
+        {"host": "hf-mirror.com", "url": "https://hf-mirror.com/Bingsu/adetailer/resolve/main/face_yolov8m.pt?download=true"}
+      ],
+      "group": "minimal"
+    },
+    {
+      "id": "minimal.person_yolov8s_seg",
+      "name": "person_yolov8s-seg.pt",
+      "kind": "pt",
+      "dest": "models/ultralytics/segm/person_yolov8s-seg.pt",
+      "min_gb": 0.02,
+      "sha256": "",
+      "sources": [
+        {"host": "huggingface.co", "url": "https://huggingface.co/Bingsu/adetailer/resolve/main/person_yolov8s-seg.pt?download=true"},
+        {"host": "hf-mirror.com", "url": "https://hf-mirror.com/Bingsu/adetailer/resolve/main/person_yolov8s-seg.pt?download=true"}
+      ],
+      "group": "minimal"
+    },
+    {
+      "id": "wan.high_noise_q4",
+      "name": "wan2.2_i2v_A14b_high_noise_lightx2v_4step_1030-Q4_K_M.gguf",
+      "kind": "gguf",
+      "dest": "models/unet/wan2.2_i2v_A14b_high_noise_lightx2v_4step_1030-Q4_K_M.gguf",
+      "min_gb": 8.5,
+      "sha256": "",
+      "sources": [
+        {"host": "huggingface.co", "url": "https://huggingface.co/jayn7/WAN2.2-I2V_A14B-DISTILL-LIGHTX2V-4STEP-GGUF/resolve/main/high_noise_1030/wan2.2_i2v_A14b_high_noise_lightx2v_4step_1030-Q4_K_M.gguf?download=true"},
+        {"host": "hf-mirror.com", "url": "https://hf-mirror.com/jayn7/WAN2.2-I2V_A14B-DISTILL-LIGHTX2V-4STEP-GGUF/resolve/main/high_noise_1030/wan2.2_i2v_A14b_high_noise_lightx2v_4step_1030-Q4_K_M.gguf?download=true"}
+      ],
+      "group": "wan"
+    },
+    {
+      "id": "wan.low_noise_q4",
+      "name": "wan2.2_i2v_A14b_low_noise_lightx2v_4step-Q4_K_M.gguf",
+      "kind": "gguf",
+      "dest": "models/unet/wan2.2_i2v_A14b_low_noise_lightx2v_4step-Q4_K_M.gguf",
+      "min_gb": 8.5,
+      "sha256": "",
+      "sources": [
+        {"host": "huggingface.co", "url": "https://huggingface.co/jayn7/WAN2.2-I2V_A14B-DISTILL-LIGHTX2V-4STEP-GGUF/resolve/main/low_noise/wan2.2_i2v_A14b_low_noise_lightx2v_4step-Q4_K_M.gguf?download=true"},
+        {"host": "hf-mirror.com", "url": "https://hf-mirror.com/jayn7/WAN2.2-I2V_A14B-DISTILL-LIGHTX2V-4STEP-GGUF/resolve/main/low_noise/wan2.2_i2v_A14b_low_noise_lightx2v_4step-Q4_K_M.gguf?download=true"}
+      ],
+      "group": "wan"
+    },
+    {
+      "id": "wan.umt5_text_encoder",
+      "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "kind": "safetensors",
+      "dest": "models/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "min_gb": 5.5,
+      "sha256": "",
+      "sources": [
+        {"host": "huggingface.co", "url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors?download=true"},
+        {"host": "hf-mirror.com", "url": "https://hf-mirror.com/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors?download=true"}
+      ],
+      "group": "wan"
+    },
+    {
+      "id": "wan.vae",
+      "name": "Wan2.1_VAE.safetensors",
+      "kind": "safetensors",
+      "dest": "models/vae/Wan2.1_VAE.safetensors",
+      "min_gb": 0.2,
+      "sha256": "",
+      "sources": [
+        {"host": "huggingface.co", "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors?download=true"},
+        {"host": "hf-mirror.com", "url": "https://hf-mirror.com/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors?download=true"}
+      ],
+      "group": "wan"
+    },
+    {
+      "id": "wan_clip_vision.clip_vision_h",
+      "name": "clip_vision_h.safetensors",
+      "kind": "safetensors",
+      "dest": "models/clip_vision/clip_vision_h.safetensors",
+      "min_gb": 1.0,
+      "sha256": "",
+      "sources": [
+        {"host": "huggingface.co", "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/clip_vision/clip_vision_h.safetensors?download=true"},
+        {"host": "hf-mirror.com", "url": "https://hf-mirror.com/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/clip_vision/clip_vision_h.safetensors?download=true"}
+      ],
+      "group": "wan_clip_vision"
+    },
+    {
+      "id": "wan_quality.high_noise_fp8",
+      "name": "wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors",
+      "kind": "safetensors",
+      "dest": "models/unet/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors",
+      "min_gb": 13.0,
+      "sha256": "",
+      "sources": [
+        {"host": "huggingface.co", "url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors?download=true"},
+        {"host": "hf-mirror.com", "url": "https://hf-mirror.com/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors?download=true"}
+      ],
+      "group": "wan_quality"
+    },
+    {
+      "id": "wan_quality.low_noise_fp8",
+      "name": "wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors",
+      "kind": "safetensors",
+      "dest": "models/unet/wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors",
+      "min_gb": 13.0,
+      "sha256": "",
+      "sources": [
+        {"host": "huggingface.co", "url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors?download=true"},
+        {"host": "hf-mirror.com", "url": "https://hf-mirror.com/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors?download=true"}
+      ],
+      "group": "wan_quality"
+    },
+    {
+      "id": "anima.base_v10",
+      "name": "anima_baseV10.safetensors",
+      "kind": "safetensors",
+      "dest": "models/diffusion_models/anima_baseV10.safetensors",
+      "min_gb": 3.0,
+      "sha256": "",
+      "sources": [
+        {"host": "huggingface.co", "url": "https://huggingface.co/LyliaEngine/anima_baseV10/resolve/main/anima_baseV10.safetensors?download=true"},
+        {"host": "hf-mirror.com", "url": "https://hf-mirror.com/LyliaEngine/anima_baseV10/resolve/main/anima_baseV10.safetensors?download=true"}
+      ],
+      "group": "anima"
+    },
+    {
+      "id": "anima.qwen_text_encoder",
+      "name": "qwen_3_06b_base.safetensors",
+      "kind": "safetensors",
+      "dest": "models/text_encoders/qwen_3_06b_base.safetensors",
+      "min_gb": 0.9,
+      "sha256": "",
+      "sources": [
+        {"host": "huggingface.co", "url": "https://huggingface.co/Qwen/Qwen3-0.6B-Base/resolve/main/model.safetensors?download=true"},
+        {"host": "hf-mirror.com", "url": "https://hf-mirror.com/Qwen/Qwen3-0.6B-Base/resolve/main/model.safetensors?download=true"}
+      ],
+      "group": "anima"
+    },
+    {
+      "id": "anima.qwen_vae",
+      "name": "qwen_image_vae.safetensors",
+      "kind": "safetensors",
+      "dest": "models/vae/qwen_image_vae.safetensors",
+      "min_gb": 0.2,
+      "sha256": "",
+      "sources": [
+        {"host": "huggingface.co", "url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors?download=true"},
+        {"host": "hf-mirror.com", "url": "https://hf-mirror.com/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors?download=true"}
+      ],
+      "group": "anima"
+    },
+    {
+      "id": "anima.lllite",
+      "name": "anima-lllite-any-test-like-1-step2000.safetensors",
+      "kind": "safetensors",
+      "dest": "models/controlnet/Anima-LLLite/anima-lllite-any-test-like-1-step2000.safetensors",
+      "min_gb": 0.01,
+      "sha256": "",
+      "sources": [
+        {"host": "huggingface.co", "url": "https://huggingface.co/kohya-ss/Anima-LLLite/resolve/main/anima-lllite-any-test-like-1-step2000.safetensors?download=true"},
+        {"host": "hf-mirror.com", "url": "https://hf-mirror.com/kohya-ss/Anima-LLLite/resolve/main/anima-lllite-any-test-like-1-step2000.safetensors?download=true"}
+      ],
+      "group": "anima"
+    },
+    {
+      "id": "anima.highres_boost",
+      "name": "anima-highres-aesthetic-boost.safetensors",
+      "kind": "safetensors",
+      "dest": "models/loras/anima-highres-aesthetic-boost.safetensors",
+      "min_gb": 0.1,
+      "sha256": "",
+      "sources": [
+        {"host": "huggingface.co", "url": "https://huggingface.co/LyliaEngine/anima-highres-aesthetic-boost/resolve/main/anima-highres-aesthetic-boost.safetensors?download=true"},
+        {"host": "hf-mirror.com", "url": "https://hf-mirror.com/LyliaEngine/anima-highres-aesthetic-boost/resolve/main/anima-highres-aesthetic-boost.safetensors?download=true"}
+      ],
+      "group": "anima"
+    }
+  ],
+
+  "node_groups": {
+    "minimal": {
+      "nodes": ["minimal.controlnet_aux", "minimal.impact_pack", "minimal.impact_subpack"],
+      "pip_packages": ["ultralytics"]
+    },
+    "hq": {
+      "nodes": ["hq.ultimatesdupscale"],
+      "pip_packages": []
+    },
+    "anima": {
+      "nodes": ["anima.lllite_node", "anima.layerstyle"],
+      "pip_packages": []
+    },
+    "wan": {
+      "nodes": ["wan.gguf", "wan.videohelpersuite", "wan.wanmoeksampler"],
+      "pip_packages": []
+    }
+  },
+
+  "nodes": [
+    {
+      "id": "minimal.controlnet_aux",
+      "name": "comfyui_controlnet_aux",
+      "repo": "Fannovel16/comfyui_controlnet_aux",
+      "ref": "e8b689a513c3e6b63edc44066560ca5919c0576e",
+      "ref_kind": "commit",
+      "install_requirements": false
+    },
+    {
+      "id": "minimal.impact_pack",
+      "name": "ComfyUI-Impact-Pack",
+      "repo": "ltdrdata/ComfyUI-Impact-Pack",
+      "ref": "429d0159ad429e64d2b3916e6e7be9c22d025c3c",
+      "ref_kind": "commit",
+      "install_requirements": true
+    },
+    {
+      "id": "minimal.impact_subpack",
+      "name": "ComfyUI-Impact-Subpack",
+      "repo": "ltdrdata/ComfyUI-Impact-Subpack",
+      "ref": "50c7b71a6a224734cc9b21963c6d1926816a97f1",
+      "ref_kind": "commit",
+      "install_requirements": true
+    },
+    {
+      "id": "hq.ultimatesdupscale",
+      "name": "ComfyUI_UltimateSDUpscale",
+      "repo": "ssitu/ComfyUI_UltimateSDUpscale",
+      "ref": "a5547db9e1d07d3318bb21e9e9c474f4c1e9c8df",
+      "ref_kind": "commit",
+      "install_requirements": false
+    },
+    {
+      "id": "anima.lllite_node",
+      "name": "ComfyUI-Anima-LLLite",
+      "repo": "kohya-ss/ComfyUI-Anima-LLLite",
+      "ref": "b7495bd8eb876e334509976896702484ed19cdbb",
+      "ref_kind": "commit",
+      "install_requirements": false
+    },
+    {
+      "id": "anima.layerstyle",
+      "name": "ComfyUI_LayerStyle",
+      "repo": "chflame163/ComfyUI_LayerStyle",
+      "ref": "64f976fec8492ea4930c0e30c32369573189b23d",
+      "ref_kind": "commit",
+      "install_requirements": false
+    },
+    {
+      "id": "wan.gguf",
+      "name": "ComfyUI-GGUF",
+      "repo": "city96/ComfyUI-GGUF",
+      "ref": "6ea2651e7df66d7585f6ffee804b20e92fb38b8a",
+      "ref_kind": "commit",
+      "install_requirements": false
+    },
+    {
+      "id": "wan.videohelpersuite",
+      "name": "ComfyUI-VideoHelperSuite",
+      "repo": "Kosinkadink/ComfyUI-VideoHelperSuite",
+      "ref": "4ee72c065db22c9d96c2427954dc69e7b908444b",
+      "ref_kind": "commit",
+      "install_requirements": false
+    },
+    {
+      "id": "wan.wanmoeksampler",
+      "name": "ComfyUI-WanMoeKSampler",
+      "repo": "stduhpf/ComfyUI-WanMoeKSampler",
+      "ref": "ee8fa8ffb356dc5d9f456a0cdb211e60e543cb59",
+      "ref_kind": "commit",
+      "install_requirements": false
+    }
+  ],
+
+  "tiers": {
+    "lite": [
+      {"step": "nodes", "group": "minimal"},
+      {"step": "models", "group": "core"},
+      {"step": "bridge"}
+    ],
+    "full": [
+      {"step": "nodes", "group": "minimal"},
+      {"step": "models", "group": "minimal"},
+      {"step": "nodes", "group": "hq"},
+      {"step": "nodes", "group": "anima"},
+      {"step": "nodes", "group": "wan"},
+      {"step": "bridge"}
+    ],
+    "complete": [
+      {"step": "nodes", "group": "minimal"},
+      {"step": "models", "group": "minimal"},
+      {"step": "nodes", "group": "hq"},
+      {"step": "nodes", "group": "anima"},
+      {"step": "models", "group": "anima"},
+      {"step": "nodes", "group": "wan"},
+      {"step": "models", "group": "wan"},
+      {"step": "models", "group": "wan_clip_vision"},
+      {"step": "bridge"}
+    ]
+  },
+
+  "manual_files": [
+    {
+      "name": "anima-preview-3-masterpieces-v5.safetensors",
+      "dest": "models/loras/anima-preview-3-masterpieces-v5.safetensors",
+      "note": "历史工作流默认 LoRA，未找到稳定公开直链；可用 Civitai 搜索/导入或手动放入 models\\loras。"
+    },
+    {
+      "name": "qwen_image_union_diffsynth_lora.safetensors",
+      "dest": "models/loras/qwen_image_union_diffsynth_lora.safetensors",
+      "note": "Union Control 旧链路 LoRA，未找到稳定公开直链；仅使用该旧工作流时需要。"
+    },
+    {
+      "name": "PVC / 3d_style / AnimeFigure_ANIMA / XDetail_light",
+      "dest": "models/loras",
+      "note": "PVC 画风包，按文件名从 Civitai/Hugging Face 手动确认来源后放入 models\\loras。"
+    },
+    {
+      "name": "nova3DCGXL_ilV90.safetensors",
+      "dest": "models/checkpoints/nova3DCGXL_ilV90.safetensors",
+      "note": "newpvc checkpoint，按文件名手动确认来源后放入 models\\checkpoints。"
+    },
+    {
+      "name": "Subsurface_Scattering / addDetail_Aesthetic",
+      "dest": "models/loras",
+      "note": "newpvc 辅助 LoRA，按文件名手动确认来源后放入 models\\loras。"
+    }
+  ]
+}
