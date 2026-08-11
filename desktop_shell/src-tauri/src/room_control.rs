@@ -19,8 +19,12 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 /// 房主开启房间时的设置（来自实验室页面，透传给 Python）。
+/// 字段契约：前端只发送它实际设置的字段；其余依赖 Python 权威校验的缺省
+/// 语义（白名单缺省=None 放行、队列 1/10、保留 7 天）。故全部字段经
+/// `#[serde(default)]` 容忍缺失，且白名单/队列字段在 None 时序列化省略，
+/// 让 Python `.get(...)` 命中缺省，而不是收到空列表（空列表=严格拒绝）。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct RoomSettings {
     pub name: String,
     pub owner_name: String,
@@ -31,12 +35,18 @@ pub struct RoomSettings {
     pub allow_generation: bool,
     pub allow_img2img: bool,
     pub allow_prompt_enhancement: bool,
-    pub allowed_model_families: Vec<String>,
-    pub allowed_workflow_ids: Vec<String>,
-    pub allowed_loras: Vec<String>,
-    pub per_member_queue_limit: u32,
-    pub room_queue_limit: u32,
-    pub message_retention_days: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_model_families: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_workflow_ids: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_loras: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub per_member_queue_limit: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub room_queue_limit: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_retention_days: Option<u32>,
     /// 端口，None=随机端口（Python 权威校验）。
     pub port: Option<u16>,
     /// 绑定地址，取值 "0.0.0.0" 或 "127.0.0.1"（Python 权威校验）。
@@ -372,5 +382,59 @@ mod tests {
         assert_eq!(value["port"], 51423);
         assert_eq!(value["bindHost"], "0.0.0.0");
         assert!(value.get("owner_name").is_none());
+    }
+
+    #[test]
+    fn minimal_frontend_payload_deserializes_and_omits_optional_keys() {
+        // lab.js readForm() 只发送这 11 个基础字段；RoomSettings 必须容忍缺失
+        // （此前缺 allowedModelFamilies 直接报 missing field 导致 start_room 失败），
+        // 且序列化给 Python 时省略未配置的白名单/队列键，让 Python 走缺省语义
+        // （白名单 None=放行、队列 1/10、保留 7 天），而不是收到空列表。
+        let minimal = serde_json::json!({
+            "name": "测试房间",
+            "ownerName": "房主",
+            "password": "secret",
+            "maxMembers": 8,
+            "port": null,
+            "bindHost": "0.0.0.0",
+            "allowChat": true,
+            "allowUpload": true,
+            "allowGeneration": true,
+            "allowImg2img": true,
+            "allowPromptEnhancement": true,
+        });
+        let settings: RoomSettings = serde_json::from_value(minimal).unwrap();
+        assert_eq!(settings.name, "测试房间");
+        assert!(settings.allowed_model_families.is_none());
+        assert!(settings.allowed_workflow_ids.is_none());
+        assert!(settings.per_member_queue_limit.is_none());
+        assert!(settings.room_queue_limit.is_none());
+        assert!(settings.message_retention_days.is_none());
+
+        let to_python = serde_json::to_value(&settings).unwrap();
+        assert!(to_python.get("allowedModelFamilies").is_none());
+        assert!(to_python.get("allowedWorkflowIds").is_none());
+        assert!(to_python.get("allowedLoras").is_none());
+        assert!(to_python.get("perMemberQueueLimit").is_none());
+        assert!(to_python.get("roomQueueLimit").is_none());
+        assert!(to_python.get("messageRetentionDays").is_none());
+    }
+
+    #[test]
+    fn explicit_allowlist_is_preserved_when_sent() {
+        let settings = RoomSettings {
+            name: "R".into(),
+            owner_name: "O".into(),
+            password: "p".into(),
+            allowed_model_families: Some(vec!["sdxl".into(), "anima".into()]),
+            per_member_queue_limit: Some(3),
+            ..RoomSettings::default()
+        };
+        let value = serde_json::to_value(&settings).unwrap();
+        assert_eq!(
+            value["allowedModelFamilies"],
+            serde_json::json!(["sdxl", "anima"])
+        );
+        assert_eq!(value["perMemberQueueLimit"], 3);
     }
 }
