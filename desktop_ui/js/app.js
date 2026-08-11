@@ -1,5 +1,5 @@
 /* WineFox Desktop application composition and warm-start lifecycle. */
-import { el, $, $$, ic, esc, toast } from "./utils.js";
+import { el, $, $$, ic, esc, toast, loadingState } from "./utils.js";
 import { api } from "./api.js";
 import { store } from "./store.js";
 import { GenerateView } from "./views/generate.js";
@@ -22,6 +22,7 @@ let currentEntry = null;
 let connTimer = null;
 let viewToken = 0;
 let enterTimer = null;
+let healthRefreshPromise = null;
 const viewCache = new Map();
 
 function parseRoute() {
@@ -74,20 +75,57 @@ function getViewEntry(routeId) {
     role: "region",
     "aria-live": "polite",
     hidden: true,
-  });
+  }, [loadingState(`正在打开${definition.label}`)]);
   $("#main").append(root);
   const view = new definition.ctor();
-  const entry = { routeId, root, view, mountPromise: null, hasEntered: false };
+  const entry = {
+    routeId,
+    root,
+    view,
+    mountPromise: null,
+    mountScheduled: false,
+    mounted: false,
+    hasEntered: false,
+  };
   viewCache.set(routeId, entry);
-
-  // mount() runs synchronously until its first await, so the loading state is
-  // ready before this hidden root can become the active route.
-  try {
-    entry.mountPromise = Promise.resolve(view.mount(root));
-  } catch (error) {
-    entry.mountPromise = Promise.reject(error);
-  }
   return entry;
+}
+
+function renderMountFailure(entry, error) {
+  console.error(`WineFox route mount failed: ${entry.routeId}`, error);
+  entry.root.replaceChildren(
+    el("div", { class: "empty", role: "alert" }, [
+      ic("warn"),
+      el("div", { class: "empty-title" }, "页面暂时无法打开"),
+      el("div", { class: "empty-desc" }, "后台操作已停止，请稍后重新进入此页面。"),
+    ]),
+  );
+}
+
+function scheduleMount(entry) {
+  if (entry.mounted || entry.mountScheduled) return;
+  entry.mountScheduled = true;
+
+  // Allow the loading state and route selection to paint before a view does
+  // any synchronous DOM construction. Rapidly skipped routes are not mounted
+  // in the background, so they cannot compete with the active page.
+  requestAnimationFrame(() => {
+    setTimeout(() => {
+      entry.mountScheduled = false;
+      if (entry.mounted || currentEntry !== entry) return;
+      entry.mounted = true;
+      try {
+        entry.mountPromise = Promise.resolve(entry.view.mount(entry.root));
+      } catch (error) {
+        entry.mountPromise = Promise.reject(error);
+      }
+      entry.mountPromise = entry.mountPromise.catch((error) => {
+        entry.mounted = false;
+        renderMountFailure(entry, error);
+        return null;
+      });
+    }, 0);
+  });
 }
 
 function playViewEntrance(entry, token) {
@@ -104,7 +142,7 @@ function playViewEntrance(entry, token) {
   });
 }
 
-async function switchView(routeId) {
+function switchView(routeId) {
   const token = ++viewToken;
   const entry = getViewEntry(routeId);
   if (!entry) return;
@@ -119,12 +157,7 @@ async function switchView(routeId) {
   entry.root.id = "view-root";
   entry.root.hidden = false;
   playViewEntrance(entry, token);
-
-  try {
-    await entry.mountPromise;
-  } catch (error) {
-    if (token === viewToken && currentEntry === entry) throw error;
-  }
+  scheduleMount(entry);
 }
 
 function applyHealth(health) {
@@ -153,21 +186,31 @@ function applyComfyUI(probe) {
     : "ComfyUI 未连接";
 }
 
-async function refreshHealth() {
-  const [healthResult, comfyResult] = await Promise.allSettled([api.health(), api.comfyui()]);
-  if (healthResult.status === "fulfilled") {
-    store.set("health", healthResult.value);
-  } else {
-    const conn = $("#conn-status");
-    if (conn) {
-      conn.className = "conn err";
-      conn.querySelector(".conn-text").textContent = "后端离线";
+function refreshHealth() {
+  if (healthRefreshPromise) return healthRefreshPromise;
+  healthRefreshPromise = Promise.allSettled([
+    withTimeout(api.health(), 5000),
+    withTimeout(api.comfyui(), 5000),
+  ]).then(([healthResult, comfyResult]) => {
+    if (healthResult.status === "fulfilled") {
+      store.set("health", healthResult.value);
+    } else {
+      const conn = $("#conn-status");
+      if (conn) {
+        conn.className = "conn err";
+        conn.querySelector(".conn-text").textContent = "后端离线";
+      }
     }
-  }
-  if (comfyResult.status === "fulfilled") store.set("comfyui", comfyResult.value);
-  applyHealth(store.get("health"));
-  clearTimeout(connTimer);
-  connTimer = setTimeout(refreshHealth, 10000);
+    if (comfyResult.status === "fulfilled") store.set("comfyui", comfyResult.value);
+    applyHealth(store.get("health"));
+  }).catch((error) => {
+    console.warn("WineFox health refresh failed", error);
+  }).finally(() => {
+    healthRefreshPromise = null;
+    clearTimeout(connTimer);
+    connTimer = setTimeout(refreshHealth, document.hidden ? 30000 : 10000);
+  });
+  return healthRefreshPromise;
 }
 
 function bindTheme() {
@@ -215,7 +258,6 @@ async function preloadWorkspace() {
     history: api.history({ limit: 24 }),
     categories: api.categories(),
     favorites: api.favorites({ limit: 24 }),
-    diagnostics: api.diagnostics(),
     comfyui: api.comfyui(),
   };
   const entries = Object.entries(sources);
@@ -257,16 +299,16 @@ async function boot() {
   // state and prevents rapid back-and-forth navigation from refetching data.
   $("#view-root")?.remove();
 
-  const navigate = async () => {
+  const navigate = () => {
     const id = parseRoute();
     $$("#rail .rail-item").forEach((link) => {
       if (link.getAttribute("href") === `#/${id}`) link.setAttribute("aria-current", "page");
       else link.removeAttribute("aria-current");
     });
-    await switchView(id);
+    switchView(id);
   };
-  window.addEventListener("hashchange", () => { void navigate(); });
-  await navigate();
+  window.addEventListener("hashchange", navigate);
+  navigate();
 
   $("#app-root").hidden = false;
   requestAnimationFrame(() => document.body.classList.add("ui-ready"));

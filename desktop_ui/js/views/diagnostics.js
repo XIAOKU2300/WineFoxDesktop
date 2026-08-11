@@ -10,18 +10,20 @@ export class DiagnosticsView {
   constructor() {
     this.data = null;
     this.error = null;
+    this.loadToken = 0;
+    this.loading = false;
+    this.detailTimer = null;
   }
 
-  async mount(container) {
+  mount(container) {
     this.root = container;
     this.render();
     const prefetched = store.get("diagnostics");
-    store.set("diagnostics", null);
     if (prefetched) {
       this.data = prefetched;
       this.renderBody();
     } else {
-      await this.load();
+      void this.load();
     }
   }
 
@@ -41,27 +43,49 @@ export class DiagnosticsView {
       ]),
       el("div", { id: "d-body", class: "stack-4" }, [loadingState("正在汇集诊断信息")]),
     );
-    $("#d-refresh")?.addEventListener("click", () => this.load());
-    $("#d-export")?.addEventListener("click", () => this.exportLogs());
+    $("#d-refresh", root)?.addEventListener("click", () => { void this.load(); });
+    $("#d-export", root)?.addEventListener("click", () => { void this.exportLogs(); });
   }
 
   async load() {
-    const body = $("#d-body");
-    if (!body) return;
+    if (this.loading) return;
+    const body = $("#d-body", this.root);
+    if (!body?.isConnected) return;
+    const token = ++this.loadToken;
+    this.loading = true;
+    const refresh = $("#d-refresh", this.root);
+    if (refresh) refresh.disabled = true;
+    this.cancelDetailRender();
     body.replaceChildren(loadingState("正在汇集诊断信息"));
     try {
-      this.data = await api.diagnostics();
+      const data = await withDeadline(this.requestDiagnostics(), 12000, "诊断请求超过 12 秒，已停止等待");
+      if (token !== this.loadToken) return;
+      this.data = data;
       this.error = null;
+      store.set("diagnostics", data);
     } catch (e) {
+      if (token !== this.loadToken) return;
       this.data = null;
       this.error = e;
+    } finally {
+      if (token === this.loadToken) {
+        this.loading = false;
+        if (refresh) refresh.disabled = false;
+      }
     }
+    if (token !== this.loadToken) return;
     this.renderBody();
   }
 
+  async requestDiagnostics() {
+    return await api.diagnostics();
+  }
+
   renderBody() {
-    const body = $("#d-body");
+    const body = $("#d-body", this.root);
     if (!body) return;
+    const renderToken = ++this.loadToken;
+    this.cancelDetailRender();
     body.replaceChildren();
     if (!this.data) {
       body.append(
@@ -110,26 +134,33 @@ export class DiagnosticsView {
     body.append(grid);
 
     if (failures.length) {
+      const visibleFailures = failures.slice(0, 16);
       body.append(
         el("div", { class: "section-card" }, [
           el("div", { class: "sec-head" }, [el("h3", {}, "需要处理")]),
-          el("div", { class: "sec-body stack-2" }, failures.map((failure) =>
-            el("div", { class: "model-row" }, [
-              el("div", { class: "grow" }, [
-                el("div", { class: "m-name" }, esc(failure.message || failure.code || "诊断项异常")),
-                failure.action ? el("div", { class: "m-sub" }, esc(failure.action)) : null,
-              ]),
-              el("span", { class: `badge ${failure.status === "fail" ? "danger" : "warn"}` }, esc(failure.code || "注意")),
-            ]))),
+          el("div", { class: "sec-body stack-2" }, [
+            ...visibleFailures.map((failure) =>
+              el("div", { class: "model-row" }, [
+                el("div", { class: "grow" }, [
+                  el("div", { class: "m-name" }, esc(failure.message || failure.code || "诊断项异常")),
+                  failure.action ? el("div", { class: "m-sub" }, esc(failure.action)) : null,
+                ]),
+                el("span", { class: `badge ${failure.status === "fail" ? "danger" : "warn"}` }, esc(failure.code || "注意")),
+              ])),
+            failures.length > visibleFailures.length
+              ? el("p", { class: "text-sm text-muted" }, `另有 ${failures.length - visibleFailures.length} 项，已在导出的诊断日志中保留。`)
+              : null,
+          ]),
         ]),
       );
     }
 
     // 配置健康
+    const visibleConfig = cfg.slice(0, 24);
     body.append(
       el("div", { class: "section-card" }, [
         el("div", { class: "sec-head" }, [el("h3", {}, "配置健康")]),
-        el("div", { class: "sec-body stack-2" }, cfg.length ? cfg.map((c) =>
+        el("div", { class: "sec-body stack-2" }, cfg.length ? visibleConfig.map((c) =>
           el("div", { class: "model-row" }, [
             el("div", { class: "grow" }, [el("div", { class: "m-name" }, esc(c.label || c.id)), el("div", { class: "m-sub" }, esc(c.detail || ""))]),
             el("span", { class: "badge " + ({ ok: "ok", warn: "warn", fail: "danger" }[c.status] || "") }, esc({ ok: "正常", warn: "注意", fail: "异常" }[c.status] || c.status)),
@@ -137,45 +168,69 @@ export class DiagnosticsView {
         ]),
     );
 
-    // 缺失节点
-    if (nodes.missing?.length) {
-      body.append(
+    const details = el("div", { class: "stack-4" }, [loadingState("正在整理节点与日志", { compact: true })]);
+    body.append(details);
+    this.detailTimer = setTimeout(() => {
+      this.detailTimer = null;
+      if (renderToken !== this.loadToken || !details.isConnected) return;
+      details.replaceChildren(...this.buildDetails(d));
+    }, 0);
+  }
+
+  cancelDetailRender() {
+    if (this.detailTimer != null) clearTimeout(this.detailTimer);
+    this.detailTimer = null;
+  }
+
+  buildDetails(data) {
+    const result = [];
+    const nodes = data.nodes || {};
+    const missing = Array.isArray(nodes.missing) ? nodes.missing : [];
+    const visibleMissing = missing.slice(0, 80);
+    if (visibleMissing.length) {
+      result.push(
         el("div", { class: "section-card" }, [
           el("div", { class: "sec-head" }, [el("h3", {}, "缺失节点")]),
-          el("div", { class: "sec-body stack-2" }, nodes.missing.map((n) =>
-            el("div", { class: "model-row missing" }, [
-              el("div", { class: "grow" }, [el("div", { class: "m-name" }, esc(sanitizeName(n)))]),
+          el("div", { class: "sec-body stack-2" }, [
+            ...visibleMissing.map((name) => el("div", { class: "model-row missing" }, [
+              el("div", { class: "grow" }, [el("div", { class: "m-name" }, esc(sanitizeName(name)))]),
               el("span", { class: "m-warn" }, "请通过 ComfyUI Manager 安装后重启"),
-            ]))),
+            ])),
+            missing.length > visibleMissing.length
+              ? el("p", { class: "text-sm text-muted" }, `其余 ${missing.length - visibleMissing.length} 项请查看导出的诊断日志。`)
+              : null,
+          ]),
         ]),
       );
     }
 
-    // 节点明细来自同一份诊断快照，避免额外触发一次完整 ComfyUI 探测。
+    // Node details come from this same snapshot. Never trigger a second probe.
     const customNodes = Array.isArray(nodes.items) ? nodes.items : [];
-    if (customNodes?.length) {
-      body.append(
+    const visibleNodes = customNodes.slice(0, 120);
+    if (visibleNodes.length) {
+      result.push(
         el("div", { class: "section-card" }, [
           el("div", { class: "sec-head" }, [el("h3", {}, "自定义节点")]),
-          el("div", { class: "sec-body stack-2" }, customNodes.map((n) =>
-            el("div", { class: "model-row" + (n.installed === false ? " missing" : "") }, [
-              el("div", { class: "grow" }, [el("div", { class: "m-name" }, esc(sanitizeName(n.name)))]),
-              el("span", { class: "badge " + (n.installed === false ? "warn" : "ok") }, n.installed === false ? "缺失" : "就绪"),
+          el("div", { class: "sec-body stack-2" }, visibleNodes.map((node) =>
+            el("div", { class: "model-row" + (node.installed === false ? " missing" : "") }, [
+              el("div", { class: "grow" }, [el("div", { class: "m-name" }, esc(sanitizeName(node.name)))]),
+              el("span", { class: "badge " + (node.installed === false ? "warn" : "ok") }, node.installed === false ? "缺失" : "就绪"),
             ]))),
         ]),
       );
     }
 
-    // 最近错误 / 日志摘要
-    const logTail = d.log_tail || {};
-    body.append(
+    const logTail = data.log_tail || {};
+    const lines = Array.isArray(logTail.lines) ? logTail.lines.slice(-80) : [];
+    result.push(
       el("div", { class: "section-card" }, [
         el("div", { class: "sec-head" }, [el("h3", {}, "日志摘要"), el("span", { class: "text-xs text-muted" }, esc(logTail.truncated ? "已截断" : "已脱敏"))]),
-        el("div", { class: "sec-body" }, logTail.lines?.length
-          ? el("div", { class: "log-box", tabindex: "0", "aria-label": "日志摘要" }, logTail.lines.map((line) => this.logLine(line)))
+        el("div", { class: "sec-body" }, lines.length
+          ? el("div", { class: "log-box", tabindex: "0", "aria-label": "日志摘要" }, lines.map((line) => this.logLine(line)))
           : el("p", { class: "text-sm text-muted" }, esc(logTail.detail || "当前还没有可读取的运行日志。"))),
       ]),
     );
+    return result;
   }
 
   item(label, value, sub, hint) {
@@ -199,10 +254,11 @@ export class DiagnosticsView {
   }
 
   async exportLogs() {
-    const btn = $("#d-export");
+    const btn = $("#d-export", this.root);
+    if (btn?.disabled) return;
     if (btn) btn.disabled = true;
     try {
-      const res = await api.exportDiagnostics();
+      const res = await withDeadline(api.exportDiagnostics(), 10000, "导出诊断信息超时");
       const content = res.content || JSON.stringify(res, null, 2);
       downloadText(`winefox_diagnostics_${new Date().toISOString().slice(0, 10)}.log`, content, "text/plain");
       toast("已导出脱敏日志", "ok");
@@ -218,4 +274,14 @@ export class DiagnosticsView {
 
 function urlHost(url) {
   try { return new URL(url).host; } catch { return "—"; }
+}
+
+function withDeadline(promise, ms, message) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
 }

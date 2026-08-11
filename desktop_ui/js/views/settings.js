@@ -2,7 +2,7 @@
  * 分组：ComfyUI / TLS / 认证 / AI 提供商 / 默认参数 / 界面。
  * 密钥只显示配置状态（GET /secrets），值仅写入不回读；token 不落 localStorage。
  */
-import { el, $, $$, ic, esc, toast } from "../utils.js";
+import { el, $, $$, ic, esc, toast, loadingState } from "../utils.js";
 import { api } from "../api.js";
 import { store } from "../store.js";
 
@@ -12,22 +12,28 @@ export class SettingsView {
     this.settings = null;
     this.secrets = [];
     this.loaded = false;
+    this.sectionNodes = new Map();
+    this.sectionToken = 0;
+    this.loadToken = 0;
+    this.saving = false;
+    this.probing = false;
   }
 
   async mount(container) {
     this.root = container;
     this.render();
-    this.settings = store.get("settings");
+    const token = ++this.loadToken;
+    const cachedSettings = store.get("settings");
     const cachedSecrets = store.get("secrets");
-    store.set("settings", null);
-    store.set("secrets", null);
-    if (!this.settings) {
-      try { this.settings = await api.settings(); } catch { this.settings = null; }
-    }
-    if (cachedSecrets) this.secrets = cachedSecrets.items || [];
-    else {
-      try { this.secrets = (await api.secrets()).items || []; } catch { this.secrets = []; }
-    }
+    const [settingsResult, secretsResult] = await Promise.allSettled([
+      cachedSettings ? Promise.resolve(cachedSettings) : withDeadline(api.settings(), 6000, "读取设置超时"),
+      cachedSecrets ? Promise.resolve(cachedSecrets) : withDeadline(api.secrets(), 6000, "读取密钥状态超时"),
+    ]);
+    if (token !== this.loadToken) return;
+    this.settings = settingsResult.status === "fulfilled" ? settingsResult.value : null;
+    this.secrets = secretsResult.status === "fulfilled" ? secretsResult.value?.items || [] : [];
+    if (this.settings) store.set("settings", this.settings);
+    if (secretsResult.status === "fulfilled") store.set("secrets", { items: this.secrets });
     this.renderBody();
     this.loaded = true;
   }
@@ -47,31 +53,55 @@ export class SettingsView {
           ["comfyui", "ComfyUI 连接"], ["tls", "TLS"], ["auth", "认证与密钥"], ["ai_provider", "AI 提供商"], ["defaults", "默认参数"], ["ui", "界面"],
         ].map(([id, label]) => {
           const b = el("button", { type: "button", "aria-current": this.section === id ? "true" : "false", dataset: { sec: id } }, esc(label));
-          b.addEventListener("click", () => { this.section = id; this.renderNav(); this.renderBody(); });
+          b.addEventListener("click", () => this.activateSection(id));
           return b;
         })),
-        el("div", { class: "settings-main", id: "s-body" }, [el("div", { class: "load-more" }, "加载中…")]),
+        el("div", { class: "settings-main", id: "s-body" }, [loadingState("正在读取设置")]),
       ]),
     );
+    this.bindEvents();
+    this._eventsBound = true;
   }
 
   renderNav() {
     $$(".settings-nav button", this.root).forEach((b) => b.setAttribute("aria-current", b.dataset.sec === this.section ? "true" : "false"));
   }
 
-  renderBody() {
-    const body = $("#s-body");
-    if (!body) return;
-    if (!this.settings) {
-      body.innerHTML = "";
-      body.append(el("div", { class: "empty" }, [ic("warn"), el("div", { class: "empty-title" }, "无法读取设置"), el("div", { class: "empty-desc" }, "请检查后端服务是否可用。")]));
+  activateSection(section) {
+    if (section === this.section) return;
+    this.section = section;
+    this.renderNav();
+    if (this.sectionNodes.has(section)) {
+      this.renderBody();
       return;
     }
-    body.innerHTML = "";
-    const content = this[`sec_${this.section}`]();
-    body.append(...(Array.isArray(content) ? content : [content]));
-    this.attachSaveButtons();
-    if (!this._eventsBound) { this.bindEvents(); this._eventsBound = true; }
+    const token = ++this.sectionToken;
+    const body = $("#s-body", this.root);
+    body?.replaceChildren(loadingState("正在整理设置", { compact: true }));
+    requestAnimationFrame(() => {
+      setTimeout(() => {
+        if (token === this.sectionToken && section === this.section) this.renderBody();
+      }, 0);
+    });
+  }
+
+  renderBody() {
+    const body = $("#s-body", this.root);
+    if (!body) return;
+    if (!this.settings) {
+      body.replaceChildren(el("div", { class: "empty" }, [ic("warn"), el("div", { class: "empty-title" }, "无法读取设置"), el("div", { class: "empty-desc" }, "请检查后端服务是否可用。")]));
+      return;
+    }
+    let nodes = this.sectionNodes.get(this.section);
+    if (!nodes) {
+      const content = this[`sec_${this.section}`]();
+      nodes = Array.isArray(content) ? content : [content];
+      this.sectionNodes.set(this.section, nodes);
+      body.replaceChildren(...nodes);
+      this.attachSaveButtons();
+      return;
+    }
+    body.replaceChildren(...nodes);
   }
 
   input(id, value, opts = {}) {
@@ -186,20 +216,56 @@ export class SettingsView {
       ]);
     });
     const wrap = el("div", { class: "stack-2" }, rows);
-    wrap.addEventListener("click", async (e) => {
+    wrap.addEventListener("click", (e) => {
       const setBtn = e.target.closest("[data-set]");
       const clearBtn = e.target.closest("[data-clear]");
       if (setBtn) this.setSecretDialog(setBtn.dataset.set);
-      if (clearBtn) {
-        try {
-          await api.clearSecret(clearBtn.dataset.clear);
-          this.secrets = (await api.secrets()).items || [];
-          toast("已清除", "ok");
-          this.renderBody();
-        } catch (err) { toast("操作失败：" + err.message, "err"); }
+      if (clearBtn && !clearBtn.disabled) {
+        clearBtn.disabled = true;
+        const key = clearBtn.dataset.clear;
+        void (async () => {
+          try {
+            await withDeadline(api.clearSecret(key), 6000, "清除密钥超时");
+            this.setSecretState(key, false);
+            toast("已清除", "ok");
+          } catch (err) {
+            clearBtn.disabled = false;
+            toast("操作失败：" + err.message, "err");
+          }
+        })();
       }
     });
     return wrap;
+  }
+
+  setSecretState(key, configured) {
+    const current = this.secrets.find((item) => item.key === key) || { key };
+    this.secrets = this.secrets.filter((item) => item.key !== key);
+    this.secrets.push({ ...current, key, configured, updated_at: configured ? current.updated_at : null });
+    store.set("secrets", { items: this.secrets });
+
+    for (const root of [this.root, ...[...this.sectionNodes.values()].flat()]) {
+      if (!root) continue;
+      const buttons = $$('button[data-set], button[data-clear]', root);
+      for (const button of buttons) {
+        if ((button.dataset.set || button.dataset.clear) !== key) continue;
+        const row = button.closest(".secret-row");
+        const badge = row?.querySelector(".badge");
+        const label = row?.querySelector(".s-name")?.textContent || key;
+        if (badge) {
+          badge.className = `badge ${configured ? "ok" : "warn"}`;
+          badge.textContent = configured ? "已配置" : "未配置";
+        }
+        delete button.dataset.set;
+        delete button.dataset.clear;
+        if (configured) button.dataset.clear = key;
+        else button.dataset.set = key;
+        button.className = configured ? "btn btn-sm btn-danger" : "btn btn-sm";
+        button.textContent = configured ? "清除" : "设置";
+        button.setAttribute("aria-label", `${configured ? "清除" : "设置"} ${label}`);
+        button.disabled = false;
+      }
+    }
   }
 
   setSecretDialog(key) {
@@ -252,13 +318,18 @@ export class SettingsView {
     $("#sk-save", overlay)?.addEventListener("click", async () => {
       const v = $("#sk-val", overlay).value.trim();
       if (!v) { toast("内容不能为空", "warn"); return; }
+      const save = $("#sk-save", overlay);
+      if (save?.disabled) return;
+      if (save) disabledButton(save, true, "保存中…");
       try {
-        await api.setSecret(key, v);
-        this.secrets = (await api.secrets()).items || [];
+        await withDeadline(api.setSecret(key, v), 6000, "保存密钥超时");
+        this.setSecretState(key, true);
         close();
         toast("已保存", "ok");
-        this.renderBody();
-      } catch (e) { toast("保存失败：" + e.message, "err"); }
+      } catch (e) {
+        if (save) disabledButton(save, false, "保存");
+        toast("保存失败：" + e.message, "err");
+      }
     });
     $("#sk-val", overlay)?.focus();
   }
@@ -329,7 +400,7 @@ export class SettingsView {
             el("span", {}, esc("跟随提示词 AI 的接口、模型和密钥")),
           ]),
           el("div", { class: "notice info" }, [
-            ic("info"),
+            ic("info", { width: "16", height: "16" }),
             el("span", { id: "s-vision-follow-note" }, followsText
               ? "当前沿用提示词 AI 的 Base URL、主模型和 API Key；视觉请求仍使用下方独立超时。"
               : "当前使用独立视觉接口和 vision_api_key，不会读取提示词 AI 的密钥。"),
@@ -392,7 +463,7 @@ export class SettingsView {
             ]),
           ]),
           el("div", { class: "notice info" }, [
-            ic("info"),
+            ic("info", { width: "16", height: "16" }),
             el("span", {}, "步数、CFG、采样器和调度器默认使用工作流内置值；仅在生成页显式开启高级覆盖时才会改写。"),
           ]),
           el("div", { class: "form-row" }, [
@@ -436,7 +507,7 @@ export class SettingsView {
 
   /* ---------- 事件（挂载时一次性绑定） ---------- */
   bindEvents() {
-    const body = $("#s-body");
+    const body = $("#s-body", this.root);
     if (!body) return;
     // TLS 开关联动子选项
     body.addEventListener("change", (e) => {
@@ -461,20 +532,21 @@ export class SettingsView {
       }
       const t = e.target.closest("#s-theme-light") || e.target.closest("#s-theme-dark");
       if (t) {
-        store.toggleTheme();
-        $$("#s-body .cat-chip[aria-pressed]").forEach((c) => c.setAttribute("aria-pressed", "false"));
+        const wantsDark = t.id === "s-theme-dark";
+        if ((store.get("theme") === "dark") !== wantsDark) store.toggleTheme();
+        $$(".cat-chip[aria-pressed]", body).forEach((c) => c.setAttribute("aria-pressed", "false"));
         t.setAttribute("aria-pressed", "true");
       }
     });
     // 保存按钮（委托）
     body.addEventListener("click", (e) => {
       const btn = e.target.closest("[data-save-section]");
-      if (btn) this.saveSection(btn.dataset.saveSection);
+      if (btn) void this.saveSection(btn.dataset.saveSection, btn);
     });
   }
 
   attachSaveButtons() {
-    const body = $("#s-body");
+    const body = $("#s-body", this.root);
     if (!body) return;
     // 每个 section-card 底部追加保存按钮
     $$(".section-card", body).forEach((card) => {
@@ -485,17 +557,26 @@ export class SettingsView {
   }
 
   async testConnection() {
+    if (this.probing) return;
+    this.probing = true;
+    const btn = $("#s-test", this.root);
+    if (btn) disabledButton(btn, true, "检测中…");
     try {
-      const res = await api.probe();
+      const res = await withDeadline(api.probe(), 12000, "连接检测超时，后台可能仍在等待 ComfyUI");
       store.set("comfyui", res);
       toast(res.result === "ok" ? "连接正常" : "连接异常：" + (res.summary || ""), res.result === "ok" ? "ok" : "err");
     } catch (e) {
       toast("连接失败：" + e.message, "err");
+    } finally {
+      this.probing = false;
+      if (btn) disabledButton(btn, false, "测试连接");
     }
   }
 
-  async saveSection(section) {
-    const body = $("#s-body");
+  async saveSection(section, button) {
+    if (this.saving) return;
+    const body = $("#s-body", this.root);
+    if (!body) return;
     const val = (id) => body.querySelector("#" + id)?.value;
     const checked = (id) => !!body.querySelector("#" + id)?.checked;
     const patch = {};
@@ -568,9 +649,38 @@ export class SettingsView {
     } else if (section === "ui") {
       patch.ui = { reduced_motion: checked("s-reduced") };
     }
-    await api.saveSettings(patch);
-    this.settings = await api.settings();
-    store.set("settings", this.settings);
-    toast("已保存", "ok");
+    this.saving = true;
+    if (button) disabledButton(button, true, "保存中…");
+    try {
+      const updated = await withDeadline(api.saveSettings(patch), 8000, "保存设置超时");
+      this.settings = updated || { ...this.settings, ...patch };
+      store.set("settings", this.settings);
+      // Keep the currently visible controls untouched. Dropping only this
+      // cached reference makes the normalized server values appear the next
+      // time the section is opened without discarding drafts in other tabs.
+      this.sectionNodes.delete(section);
+      toast("已保存", "ok");
+    } catch (error) {
+      toast("保存失败：" + error.message, "err");
+    } finally {
+      this.saving = false;
+      if (button) disabledButton(button, false, "保存");
+    }
   }
+}
+
+function withDeadline(promise, ms, message) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
+function disabledButton(button, disabled, label) {
+  if (!button.dataset.wfxIcon && button.querySelector("svg")) button.dataset.wfxIcon = "refresh";
+  button.disabled = disabled;
+  button.replaceChildren(...(!disabled && button.dataset.wfxIcon ? [ic(button.dataset.wfxIcon), label] : [label]));
 }
