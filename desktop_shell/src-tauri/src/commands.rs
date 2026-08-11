@@ -198,9 +198,69 @@ pub fn save_base64_image(app: AppHandle, data_url: String, filename: String) -> 
     Ok(path.to_string_lossy().into_owned())
 }
 
+/// 目录选择结果（Rust 侧只取路径；是否可用由后端 re-resolve 验证）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PickPathResult {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    pub cancelled: bool,
+}
+
+/// 弹出系统目录选择框，让用户指定 ComfyUI 根目录。取消时 `cancelled=true`。
+#[tauri::command]
+pub fn pick_comfyui_root(app: AppHandle) -> PickPathResult {
+    use tauri_plugin_dialog::DialogExt;
+    let picked = app.dialog().file().blocking_pick_folder();
+    match picked {
+        Some(folder) => match folder.into_path() {
+            Ok(p) => PickPathResult {
+                path: Some(p.to_string_lossy().into_owned()),
+                cancelled: false,
+            },
+            Err(_) => PickPathResult {
+                path: None,
+                cancelled: true,
+            },
+        },
+        None => PickPathResult {
+            path: None,
+            cancelled: true,
+        },
+    }
+}
+
+/// 弹出系统文件选择框，让用户指定 ComfyUI 的 Python 可执行文件。
+#[tauri::command]
+pub fn pick_comfyui_python(app: AppHandle) -> PickPathResult {
+    use tauri_plugin_dialog::DialogExt;
+    let picked = app
+        .dialog()
+        .file()
+        .set_title("选择 ComfyUI 的 Python 可执行文件")
+        .add_filter("Python", &["exe", "bat", "cmd"])
+        .blocking_pick_file();
+    match picked {
+        Some(file) => match file.into_path() {
+            Ok(p) => PickPathResult {
+                path: Some(p.to_string_lossy().into_owned()),
+                cancelled: false,
+            },
+            Err(_) => PickPathResult {
+                path: None,
+                cancelled: true,
+            },
+        },
+        None => PickPathResult {
+            path: None,
+            cancelled: true,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::ExitDecision;
+    use super::{ExitDecision, PickPathResult};
 
     #[test]
     fn exit_decision_serializes_as_flat_camel_case_contract() {
@@ -209,6 +269,26 @@ mod tests {
         assert_eq!(value["busy"], true);
         assert_eq!(value["tasks"], 2);
         assert!(value.get("needs_choice").is_none());
+    }
+
+    #[test]
+    fn pick_path_result_serializes_camel_case() {
+        let ok = serde_json::to_value(PickPathResult {
+            path: Some("D:/ComfyUI".into()),
+            cancelled: false,
+        })
+        .unwrap();
+        assert_eq!(ok["path"], "D:/ComfyUI");
+        assert_eq!(ok["cancelled"], false);
+        assert!(ok.get("path").is_some());
+
+        let cancelled = serde_json::to_value(PickPathResult {
+            path: None,
+            cancelled: true,
+        })
+        .unwrap();
+        assert_eq!(cancelled["cancelled"], true);
+        assert!(cancelled.get("path").is_none());
     }
 }
 

@@ -152,6 +152,18 @@ async function boot() {
         .then((path) => reply({ ok: true, path }))
         .catch((error) => reply({ ok: false, error: String(error) }));
     }
+    if (event.data.type === "winefox-ui-pick-dir") {
+      const reply = (payload) => {
+        panel.contentWindow.postMessage({ type: "winefox-ui-pick-dir-reply", id: event.data.id, ...payload }, "*");
+      };
+      const command = event.data.kind === "comfyui_python" ? "pick_comfyui_python" : "pick_comfyui_root";
+      invoke(command)
+        .then((result) => {
+          if (result?.cancelled || !result?.path) reply({ ok: false, cancelled: true, error: "已取消" });
+          else reply({ ok: true, path: result.path });
+        })
+        .catch((error) => reply({ ok: false, error: String(error) }));
+    }
     if (event.data.type === "winefox-ui-update") {
       const reply = (payload) => {
         panel.contentWindow.postMessage({ type: "winefox-ui-update-reply", id: event.data.id, ...payload }, "*");
