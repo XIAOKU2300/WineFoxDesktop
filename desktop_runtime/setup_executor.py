@@ -313,7 +313,8 @@ class SetupExecutor:
                 await asyncio.to_thread(self._restore_entry, entry)
             except OSError as exc:
                 failures.append(str(entry.target))
-                job.emit("rollback_item_failed", target=str(entry.target), message=str(exc))
+                # 不把绝对路径写进事件流：只带文件名 + 无路径的错误原因
+                job.emit("rollback_item_failed", target=entry.target.name, message=f"恢复文件失败: {exc.strerror or '权限不足'}")
         if failures:
             job.status = JOB_FAILED
             job.error_code = SetupErrorCode.ROLLBACK_FAILED
@@ -343,10 +344,10 @@ class SetupExecutor:
             if job.cancel_requested.is_set():
                 return
             spec: ModelSpec = item.spec  # type: ignore[assignment]
-            job.emit("item_started", step=state.index, type="model", id=spec.id)
+            job.emit("item_started", step=state.index, kind="model", id=spec.id)
             await self._download_model(job, spec)
             state.items_done += 1
-            job.emit_throttled("item_finished", step=state.index, type="model", id=spec.id)
+            job.emit_throttled("item_finished", step=state.index, kind="model", id=spec.id)
 
     async def _run_nodes(self, job: SetupJob, state: StepState, plan_step) -> None:
         state.items_total = len(plan_step.items)
@@ -354,10 +355,10 @@ class SetupExecutor:
             if job.cancel_requested.is_set():
                 return
             node: NodeSpec = item.spec  # type: ignore[assignment]
-            job.emit("item_started", step=state.index, type="node", id=node.id)
+            job.emit("item_started", step=state.index, kind="node", id=node.id)
             await self._install_node(job, node)
             state.items_done += 1
-            job.emit_throttled("item_finished", step=state.index, type="node", id=node.id)
+            job.emit_throttled("item_finished", step=state.index, kind="node", id=node.id)
 
     async def _run_bridge(self, job: SetupJob, state: StepState, plan_step) -> None:
         custom_nodes = job.root / "custom_nodes"
@@ -495,7 +496,7 @@ class SetupExecutor:
                     fh.write(chunk)
                     job.emit_throttled(
                         "item_progress",
-                        type="model",
+                        kind="model",
                         id=model.id,
                         size=part.stat().st_size if part.exists() else 0,
                     )
