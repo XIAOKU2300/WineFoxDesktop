@@ -4,12 +4,14 @@
 import { el, $, $$, ic, esc, sanitizeResourceName, fmtBytes, loadingState, copyText, toast } from "../utils.js";
 import { api } from "../api.js";
 import { store } from "../store.js";
+import { EnvSetupView } from "../setup.js";
 
 export class ModelsView {
   constructor() {
     this.tab = "checkpoints";
     this.data = null;
     this.loaded = false;
+    this.envView = null;
     this.visible = { checkpoints: 40, loras: 40, nodes: 40 };
     this.resourceObserver = null;
     this.resourceFallback = null;
@@ -48,7 +50,7 @@ export class ModelsView {
         el("button", { class: "btn btn-sm", id: "m-refresh", type: "button" }, [ic("refresh"), esc("重新扫描")]),
       ]),
       el("div", { class: "family-tabs", role: "tablist", "aria-label": "资源类型" }, [
-        ["checkpoints", "Checkpoint 主模型"], ["loras", "LoRA"], ["nodes", "自定义节点"],
+        ["checkpoints", "Checkpoint 主模型"], ["loras", "LoRA"], ["nodes", "自定义节点"], ["env", "环境配置"],
       ].map(([id, label]) => {
         const b = el("button", { class: "cat-chip", type: "button", role: "tab", "aria-selected": this.tab === id ? "true" : "false", dataset: { tab: id } }, esc(label));
         b.addEventListener("click", () => { this.tab = id; this.renderTabs(); this.renderBody(); });
@@ -84,6 +86,10 @@ export class ModelsView {
     if (!body) return;
     this.teardownPagination();
     this.paginationState = null;
+    if (this.tab === "env") {
+      this.mountEnv(body);
+      return;
+    }
     const d = this.data || {};
     const summary = el("div", { class: "row wrap gap-2" }, [
       el("span", { class: "badge ok" }, esc(`${(d.checkpoints || []).length} 个 checkpoint`)),
@@ -424,6 +430,23 @@ export class ModelsView {
 
   empty(title, desc) {
     return el("div", { class: "empty" }, [ic("model"), el("div", { class: "empty-title" }, title), el("div", { class: "empty-desc" }, desc)]);
+  }
+
+  mountEnv(container) {
+    if (!this.envView) this.envView = new EnvSetupView();
+    this.envView.attach(container);
+  }
+
+  // app.js 在离开视图时调用 deactivate，返回时调用 activate（可选链，无需改 app.js）
+  deactivate() {
+    this.envView?.dispose();
+  }
+
+  activate() {
+    if (this.tab === "env" && this.root) {
+      const body = $("#m-body", this.root);
+      if (body) this.mountEnv(body);
+    }
   }
 
   dispose() {
