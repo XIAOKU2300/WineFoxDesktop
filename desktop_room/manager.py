@@ -16,7 +16,13 @@ from aiohttp import web
 
 from . import protocol
 from .gateway import create_room_app
-from .security import hash_password, new_host_token, new_session_token, normalize_lookup
+from .security import (
+    contains_lone_surrogate,
+    hash_password,
+    new_host_token,
+    new_session_token,
+    normalize_lookup,
+)
 from .storage import RoomStorage, new_public_id, utcnow_iso
 from .tunnel import (
     TunnelValidationError,
@@ -33,18 +39,21 @@ _ROOM_STOP_GRACE_SECONDS = 3.0
 _ROOM_STOPPED = "stopped"
 
 
-def _detect_lan_url(port: int) -> str | None:
-    """探测本机局域网 IP 并返回 http://<LAN-IP>:<port>/（绑定 0.0.0.0 时供同网段设备访问）。"""
+def _lan_ips() -> list[str]:
+    """本机局域网 IPv4 列表（绑定 0.0.0.0 时放行这些 Host，供同网段设备直连）。"""
     import socket
 
     try:
         _, _, ips = socket.gethostbyname_ex(socket.gethostname())
     except Exception:  # pragma: no cover - 探测失败不影响主流程
-        return None
-    for ip in ips:
-        if ip and not ip.startswith("127.") and "." in ip:
-            return f"http://{ip}:{port}/"
-    return None
+        return []
+    return [ip for ip in ips if ip and not ip.startswith("127.") and "." in ip]
+
+
+def _detect_lan_url(port: int) -> str | None:
+    """探测本机局域网 IP 并返回 http://<LAN-IP>:<port>/（绑定 0.0.0.0 时供同网段设备访问）。"""
+    ips = _lan_ips()
+    return f"http://{ips[0]}:{port}/" if ips else None
 
 
 class RoomStartError(Exception):
@@ -130,6 +139,9 @@ class RoomManager:
         password = str(settings.get("password") or "")
         if not name or not owner_name or not password:
             raise RoomStartError("房间名称、房主名称和密码为必填项", "MISSING_FIELDS")
+        for label, value in (("房间名称", name), ("房主名称", owner_name), ("密码", password)):
+            if contains_lone_surrogate(value):
+                raise RoomStartError(f"{label}包含无法识别的字符，请重新输入", "INVALID_CHARACTERS")
         if len(name) > 64:
             raise RoomStartError("房间名称过长", "INVALID_ROOM_NAME")
         if len(owner_name) > 24:
@@ -205,6 +217,8 @@ class RoomManager:
             self._runner = runner
             self._gateway = site
             self._app = app
+            if bind_host == "0.0.0.0":
+                app["lan_hosts"] = _lan_ips()
             self._room_id = room_id
             self._data_dir = data_dir
             self._status = {
@@ -324,7 +338,10 @@ class RoomManager:
             verify_warning = None
             if scheme == "https":
                 if not await verify_tunnel(validated, public_id):
-                    raise TunnelValidationError("Tunnel 不可达或未指向本房间，请检查穿透配置")
+                    verify_warning = (
+                        f"公网探测失败（证书或可达性问题）：请确认穿透已把该地址转发到本机端口 {port}，"
+                        "且证书对访问域名有效"
+                    )
             else:
                 if not await verify_tunnel(validated, public_id):
                     verify_warning = (

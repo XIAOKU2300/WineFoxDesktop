@@ -23,8 +23,17 @@ _STDOUT_LOCK = threading.Lock()
 
 def emit(value: dict[str, Any]) -> None:
     with _STDOUT_LOCK:
-        sys.stdout.write(json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n")
-        sys.stdout.flush()
+        line = json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n"
+        try:
+            data = line.encode("utf-8")
+        except UnicodeEncodeError:
+            # 负载含孤立代理字符（Windows IME/剪贴板可能产生）时，UTF-8 无法编码。
+            # 退回全转义序列（Rust 侧 serde_json 可正常解析 \uXXXX），
+            # 保证 sidecar 永不因编码错误崩溃。
+            line = json.dumps(value, ensure_ascii=True, separators=(",", ":")) + "\n"
+            data = line.encode("utf-8")
+        sys.stdout.buffer.write(data)
+        sys.stdout.buffer.flush()
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -18,6 +18,7 @@ from .models import member_public, message_payload
 from .rate_limit import LoginRateLimiter
 from .security import (
     NameErrorDetail,
+    contains_lone_surrogate,
     new_session_token,
     normalize_lookup,
     validate_name,
@@ -227,6 +228,8 @@ async def _messages_post_handler(request: web.Request) -> web.Response:
         return error_response("消息不能为空", "EMPTY_TEXT", 400)
     if len(text) > MAX_TEXT_LENGTH:
         return error_response(f"消息过长（最多 {MAX_TEXT_LENGTH} 字）", "TEXT_TOO_LONG", 400)
+    if contains_lone_surrogate(text):
+        return error_response("消息包含无法识别的字符，请重新输入", "INVALID_CHARACTERS", 400)
     text = text.strip()
 
     client_message_id = body.get("clientMessageId")

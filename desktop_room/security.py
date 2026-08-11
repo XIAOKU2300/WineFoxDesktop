@@ -36,6 +36,15 @@ _CONTROL_REMOVED = str.maketrans("", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\t
                                  "\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\x7f")
 
 
+def contains_lone_surrogate(text: str) -> bool:
+    """是否含孤立代理字符（U+D800–U+DFFF）。
+
+    Windows IME/剪贴板可能产生孤立代理字符；它们无法 UTF-8 编码，
+    Argon2id 哈希与 sqlite 写入都会因此抛 UnicodeEncodeError。
+    """
+    return any(0xD800 <= ord(ch) <= 0xDFFF for ch in text)
+
+
 class NameErrorDetail(Exception):
     """名称校验失败。message 为面向用户的明确提示。"""
 

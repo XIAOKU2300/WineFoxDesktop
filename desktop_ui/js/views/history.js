@@ -1,7 +1,7 @@
 /* WineFox Desktop — 历史页
  * cursor 分页 + 搜索 + 预览 + 收藏 + 回收站（软删除）。
  */
-import { el, $, $$, ic, esc, fmtRelative, sanitizeName, debouncedSearchInput, toast } from "../utils.js";
+import { el, $, $$, ic, esc, fmtRelative, sanitizeName, debouncedSearchInput, toast, isDegenerate } from "../utils.js";
 import { api } from "../api.js";
 import { store } from "../store.js";
 
@@ -41,7 +41,8 @@ export class HistoryView {
   render() {
     const root = this.root;
     root.innerHTML = "";
-    root.append(
+    // replaceChildren/append 收到 null 会渲染出文本 "null"，末尾条件项需过滤。
+    root.append(...[
       el("div", { class: "view-head" }, [
         el("div", {}, [
           el("h1", { class: "h1" }, this.trash ? "回收站" : "历史"),
@@ -68,7 +69,7 @@ export class HistoryView {
         el("div", { class: "load-more" }, "加载中…"),
       ]),
       this.selectMode ? this.batchBar() : null,
-    );
+    ].filter(Boolean));
     const filter = $("#h-filter");
     if (filter) {
       filter.value = this.filter;
@@ -223,18 +224,23 @@ export class HistoryView {
   cell(it) {
     const fav = !!it.favorite;
     const selected = this.selectMode && this.selected.has(it.id);
+    // prompt 退化（null/undefined/"null" 字符串等）时回退到 id，绝不显示 "null"。
+    const promptText = !isDegenerate(it.prompt)
+      ? (it.prompt.length > 60 ? it.prompt.slice(0, 60) + "…" : it.prompt)
+      : (isDegenerate(it.id) ? "" : it.id);
+    const labelText = promptText || it.id || "历史记录";
     const cell = el("figure", {
       class: "img-cell" + (this.trash ? " trashed" : "") + (selected ? " selected" : ""),
       tabindex: "0",
       role: "button",
-      "aria-label": `预览记录：${it.prompt || it.id}`,
+      "aria-label": `预览记录：${labelText}`,
       dataset: { id: it.id },
     }, [
       this.selectMode ? el("span", { class: "cell-check" + (selected ? " on" : ""), "aria-hidden": "true" }, [ic("check")]) : null,
-      el("img", { src: it.image?.url || "", alt: "", loading: "lazy" }),
+      el("img", { src: it.image?.url || "", alt: labelText, loading: "lazy" }),
       fav ? el("span", { class: "fav-dot" }, [ic("fav")]) : null,
       el("figcaption", { class: "cell-meta" }, [
-        el("span", {}, esc(it.prompt ? (it.prompt.length > 60 ? it.prompt.slice(0, 60) + "…" : it.prompt) : it.id)),
+        el("span", {}, esc(promptText)),
         el("span", {}, esc(fmtRelative(it.created_at))),
       ]),
       el("div", { class: "cell-actions" }, [
@@ -298,7 +304,7 @@ export class HistoryView {
         el("button", { class: "icon-btn", type: "button", "aria-label": "关闭" }, [ic("x")]),
       ]),
       el("div", { class: "preview-body" }, [
-        el("img", { src: it.image?.url || "", alt: it.prompt || "历史图片" }),
+        el("img", { src: it.image?.url || "", alt: isDegenerate(it.prompt) ? "历史图片" : it.prompt }),
         el("div", { class: "preview-meta" }, [
           el("div", { class: "pm-block" }, [el("span", { class: "pm-label" }, "提示词"), el("span", { class: "pm-val" }, esc(it.prompt || "—"))]),
           el("div", { class: "pm-block" }, [el("span", { class: "pm-label" }, "负面提示词"), el("span", { class: "pm-val" }, esc(it.negative_prompt || "—"))]),

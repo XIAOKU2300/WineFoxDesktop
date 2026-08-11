@@ -86,6 +86,10 @@ def host_origin_middleware(host_token: str):
         # 3) 用户手动配置的 Tunnel 公网域名（访客只能走这里进来）
         if hostname in request.app.get("allow_tunnel_hosts", ()):
             return await handler(request)
+        # 4) 本机局域网 IP（绑定全部网卡时由 manager 填充，供同网段设备直连；
+        #    不进入隧道确认流程，生命周期与房间一致）
+        if hostname in request.app.get("lan_hosts", ()):
+            return await handler(request)
         return web.json_response({"error": "forbidden", "errorCode": "HOST_ORIGIN_REJECTED"}, status=403)
 
     return middleware
@@ -181,6 +185,8 @@ def create_room_app(*, storage: RoomStorage, room_id: int, host_token: str,
     app["data_dir"] = data_dir
     # 用户配置的 Tunnel 公网域名（只允许显式放行的 Host）。
     app["allow_tunnel_hosts"] = []
+    # 本机局域网 IP（绑定全部网卡时由 manager 填充，供同网段设备直连）。
+    app["lan_hosts"] = []
     # 会话/聊天/限流/实时推送
     app["chat_hub"] = ChatHub()
     app["rate_limiter"] = LoginRateLimiter()

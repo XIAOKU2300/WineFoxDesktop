@@ -26,8 +26,20 @@ export function el(tag, attrs = {}, children = []) {
  * Text values are inserted by `el()` with textContent, so HTML escaping here
  * would render entities literally (for example `&amp;`). Keep this helper as
  * a compatibility boundary for existing views, but return display text.
+ *
+ * Degenerate tokens (null/undefined/NaN/None) are swallowed to display text:
+ * they can only appear via upstream serialization bugs, and should never be
+ * shown verbatim to the user.
  */
-export const esc = (s) => String(s ?? "");
+const DEGENERATE_TEXT = /^(?:null|undefined|nan|none)$/i;
+export const esc = (s) => {
+  const text = String(s ?? "");
+  return DEGENERATE_TEXT.test(text.trim()) ? "" : text;
+};
+
+/** True when a value should be treated as "no display content" (never "null" text). */
+export const isDegenerate = (value) =>
+  value == null || DEGENERATE_TEXT.test(String(value).trim());
 
 /** Create trusted inline SVG markup in the SVG namespace.
  * `markup` is only used with static literals from the bundled UI; untrusted
@@ -134,12 +146,18 @@ export function downloadText(filename, text, mime = "text/plain") {
   setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
-/** Copy plain text without storing it outside the current process. */
+/** Copy plain text without storing it outside the current process.
+ * 优先 navigator.clipboard；被拒绝（权限/非安全上下文）时回退 execCommand。
+ * 只在真正复制成功时 resolve，失败则 reject（调用方可据此提示）。 */
 export async function copyText(text) {
   const value = String(text ?? "");
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(value);
-    return;
+  if (value && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // writeText 被拒绝（如 WebView2 未授予权限）→ 走下方回退，不吞掉失败
+    }
   }
 
   const input = el("textarea", {
@@ -147,10 +165,12 @@ export async function copyText(text) {
     "aria-hidden": "true",
     style: "position:fixed;left:-9999px;top:0;opacity:0",
   }, value);
+  input.value = value; // 显式赋值，避免任何 textarea 默认值语义差异
   document.body.append(input);
   let copied = false;
   try {
     input.select();
+    input.setSelectionRange(0, value.length);
     copied = document.execCommand("copy");
   } finally {
     input.remove();

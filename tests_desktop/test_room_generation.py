@@ -329,6 +329,14 @@ class RoomGenerationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(resp.status, 400)
             self.assertEqual((await resp.json())["errorCode"], "EMPTY_PROMPT")
 
+    async def test_submit_rejects_lone_surrogate_prompt(self) -> None:
+        async with await self._submit(self._request("一只猫\udcac")) as resp:
+            self.assertEqual(resp.status, 400)
+            self.assertEqual((await resp.json())["errorCode"], "INVALID_CHARACTERS")
+        async with await self._submit(self._request("正常猫", negative_prompt="坏\udcac")) as resp:
+            self.assertEqual(resp.status, 400)
+            self.assertEqual((await resp.json())["errorCode"], "INVALID_CHARACTERS")
+
     async def test_submit_rejects_ref_when_img2img_disabled(self) -> None:
         tmp = tempfile.TemporaryDirectory()
         manager = self._new_manager(dict(BASE_SETTINGS, allowImg2img=False), FakeEngine(), tmp)
