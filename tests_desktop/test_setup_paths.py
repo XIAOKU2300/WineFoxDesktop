@@ -11,7 +11,7 @@ from desktop_runtime.setup_paths import (
     is_root_drive,
     is_system_dir,
     safe_comfyui_path,
-    test_root,
+    test_root as is_comfyui_root,  # 别名避免 pytest 将其收集为测试（test_* 前缀）
     validate_comfyui_root,
 )
 
@@ -28,20 +28,20 @@ class TestRootTests(unittest.TestCase):
     def test_valid_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = make_comfyui_root(Path(tmp))
-            self.assertTrue(test_root(root))
+            self.assertTrue(is_comfyui_root(root))
 
     def test_models_only_is_not_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "ComfyUI"
             (root / "models").mkdir(parents=True)
-            self.assertFalse(test_root(root))
+            self.assertFalse(is_comfyui_root(root))
 
     def test_main_py_plus_models_counts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "ComfyUI"
             (root / "models").mkdir(parents=True)
             (root / "main.py").write_text("", encoding="utf-8")
-            self.assertTrue(test_root(root))
+            self.assertTrue(is_comfyui_root(root))
 
 
 class ValidateRootTests(unittest.TestCase):
