@@ -1,15 +1,17 @@
 # WineFox Packaging（Agent 09）
 
 版本单一来源：`packaging/version.json`（当前 `app` = 8.5.11，`protocol` = 1）。
-主程序与 sidecar 的版本由此文件统一盖章（build.ps1 → `_version.py` /
-VSVersionInfo / tauri.conf.json / generated_version.nsh），并在构建期与
-安装期双重校验一致。
+完整的 Windows 安装包构建、验证与桌面交付流程见
+[`WINDOWS_BUILD_RUNBOOK.md`](WINDOWS_BUILD_RUNBOOK.md)。发布前需按手册同步 shell
+版本；`build.ps1` 会继续生成 sidecar 的 `_version.py`、VSVersionInfo 与
+`generated_version.nsh`，并在构建期和安装期双重校验一致。
 
 ## 目录
 
 | 路径 | 说明 |
 |---|---|
 | `version.json` | 版本/协议唯一来源 |
+| `WINDOWS_BUILD_RUNBOOK.md` | 给后续 AI/维护者的完整 Windows 打包流程 |
 | `build.ps1` | 总入口：venv → PyInstaller → 打包产物自检 → 体积策略检查 → 暂存 externalBin → tauri build → NSIS |
 | `pyinstaller/winefox-sidecar.spec` | onedir、windowed、收集 workflow/templates/assets/desktop_ui |
 | `pyinstaller/requirements-sidecar.txt` | sidecar 构建依赖（独立于插件根 requirements.txt） |
