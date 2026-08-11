@@ -74,7 +74,7 @@ export const api = {
   setSecret: (key, value) => request(`/secrets/${encodeURIComponent(key)}`, { method: "PUT", body: JSON.stringify({ value }) }),
   clearSecret: (key) => request(`/secrets/${encodeURIComponent(key)}`, { method: "DELETE" }),
   comfyui: () => request("/comfyui"),
-  probe: () => request("/comfyui/probe", { method: "POST" }),
+  probe: (payload = {}) => request("/comfyui/probe", { method: "POST", body: JSON.stringify(payload) }),
   catalog: () => request("/catalog"),
   models: () => request("/models"),
   uploads: async (formData) => {

@@ -207,9 +207,10 @@ function refreshHealth({ manual = false } = {}) {
     const connText = $("#conn-status .conn-text");
     if (connText) connText.textContent = "正在重新检测…";
   }
+  const comfyRequest = manual ? api.probe({ force: true }) : api.comfyui();
   healthRefreshPromise = Promise.allSettled([
     withTimeout(api.health(), 5000),
-    withTimeout(api.comfyui(), 5000),
+    withTimeout(comfyRequest, 5000),
   ]).then(([healthResult, comfyResult]) => {
     if (healthResult.status === "fulfilled") {
       store.set("health", healthResult.value);
@@ -219,9 +220,18 @@ function refreshHealth({ manual = false } = {}) {
         conn.className = "conn err";
         conn.querySelector(".conn-text").textContent = "后端离线";
       }
+      return;
     }
-    if (comfyResult.status === "fulfilled") store.set("comfyui", comfyResult.value);
-    applyHealth(store.get("health"));
+    if (comfyResult.status === "fulfilled") {
+      store.set("comfyui", comfyResult.value);
+      applyHealth(healthResult.value);
+      return;
+    }
+    const conn = $("#conn-status");
+    if (conn) {
+      conn.className = "conn err";
+      conn.querySelector(".conn-text").textContent = "ComfyUI 检测失败";
+    }
   }).catch((error) => {
     console.warn("WineFox health refresh failed", error);
   }).finally(() => {

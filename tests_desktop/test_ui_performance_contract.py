@@ -43,6 +43,16 @@ class UiPerformanceContractTests(unittest.TestCase):
         self.assertIn("customNodes.slice(0, 120)", source)
         self.assertIn("logTail.lines.slice(-80)", source)
 
+    def test_manual_connection_retry_bypasses_probe_cache(self) -> None:
+        app_source = self.source("desktop_ui/js/app.js")
+        api_source = self.source("desktop_ui/js/api.js")
+
+        self.assertIn("api.probe({ force: true })", app_source)
+        self.assertIn("if (healthResult.status", app_source)
+        self.assertIn('textContent = "后端离线"', app_source)
+        self.assertIn("return;", app_source)
+        self.assertIn("probe: (payload = {})", api_source)
+
 
 if __name__ == "__main__":
     unittest.main()
