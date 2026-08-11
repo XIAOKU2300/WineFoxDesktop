@@ -386,3 +386,49 @@ kbd {
   .wfx-loading-ink::before { animation: none !important; transform: none; opacity: .72; }
   .wfx-loading-seal { animation: none !important; transform: none; opacity: 1; }
 }
+
+/* ================= 环境中心（setup-） ================= */
+.setup-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--sp-4); flex-wrap: wrap; padding-bottom: var(--sp-3); }
+.setup-title { font-size: var(--fs-xl); font-weight: 600; }
+.setup-head .lead { color: var(--muted); font-size: var(--fs-sm); line-height: 1.6; margin-top: 2px; }
+.setup-head .hint,
+.setup-body .hint { font-size: var(--fs-xs); color: var(--muted); line-height: 1.55; }
+
+.setup-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: var(--sp-3); }
+.setup-card { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-3) var(--sp-4); background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); border-left-width: 3px; border-left-color: var(--border); }
+.setup-card.is-ok { border-left-color: var(--success); }
+.setup-card.is-warn { border-left-color: var(--warn); }
+.setup-card-label { font-size: var(--fs-xs); color: var(--muted); letter-spacing: 0.02em; }
+.setup-card-value { font-size: var(--fs-md); font-weight: 550; color: var(--text); overflow-wrap: anywhere; }
+.setup-card-value.muted { color: var(--muted); }
+.setup-card-line { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; min-width: 0; }
+.setup-card-name { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.setup-manual-row { display: flex; flex-direction: column; gap: 2px; padding: var(--sp-2) 0; border-bottom: 1px solid var(--hairline); }
+.setup-manual-row:last-child { border-bottom: 0; }
+.setup-manual-row .m-name { font-size: var(--fs-md); font-weight: 550; }
+.setup-manual-row .m-sub { font-size: var(--fs-xs); color: var(--muted); overflow-wrap: anywhere; }
+
+.setup-profile-row { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.setup-profile-chip { display: inline-flex; align-items: baseline; gap: 6px; padding: 6px 14px; border-radius: var(--r-full); border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--text-2); font: inherit; cursor: pointer; transition: all var(--dur-fast) var(--ease); }
+.setup-profile-chip:hover { border-color: var(--primary); color: var(--text); }
+.setup-profile-chip.on { background: var(--primary-soft); border-color: var(--primary); color: var(--primary); }
+.setup-profile-name { font-weight: 600; }
+.setup-profile-id { font-size: var(--fs-xs); opacity: 0.7; }
+.setup-plan-area { min-height: 40px; }
+.setup-start-row { justify-content: flex-end; }
+
+.setup-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.setup-step { display: flex; align-items: flex-start; gap: var(--sp-3); padding: var(--sp-2) var(--sp-1); border-bottom: 1px solid var(--hairline); }
+.setup-step:last-child { border-bottom: 0; }
+.setup-step-pill { flex: none; min-width: 54px; text-align: center; padding: 1px 8px; border-radius: var(--r-full); font-size: var(--fs-xs); font-weight: 550; border: 1px solid var(--border-strong); color: var(--muted); background: var(--surface-2); }
+.setup-step-pill.is-running { color: var(--primary); border-color: var(--primary); background: var(--primary-soft); animation: dotPulse 1.6s ease-in-out infinite; }
+.setup-step-pill.is-success { color: var(--success); border-color: var(--success); background: var(--success-soft); }
+.setup-step-pill.is-failed { color: var(--danger); border-color: var(--danger); background: var(--danger-soft); }
+.setup-step-label { font-size: var(--fs-md); font-weight: 550; overflow-wrap: anywhere; }
+.setup-step-sub { font-size: var(--fs-xs); color: var(--muted); overflow-wrap: anywhere; line-height: 1.5; margin-top: 2px; }
+.setup-step-err { font-size: var(--fs-xs); color: var(--danger); overflow-wrap: anywhere; margin-top: 4px; }
+
+.setup-job-status { font-size: var(--fs-md); font-weight: 550; color: var(--text-2); }
+.setup-job-actions { margin-top: var(--sp-1); }
+.setup-restart-hint { font-size: var(--fs-xs); color: var(--muted); line-height: 1.55; }

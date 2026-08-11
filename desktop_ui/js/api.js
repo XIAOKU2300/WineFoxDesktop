@@ -82,6 +82,21 @@ export const api = {
   startLoraDownload: (resultId, alias = "", options = {}) => request("/lora/downloads", { ...options, method: "POST", body: JSON.stringify({ result_id: resultId, alias }) }),
   loraDownload: (id, options = {}) => request(`/lora/downloads/${encodeURIComponent(id)}`, options),
   probeLoraBridge: (options = {}) => request("/lora/bridge/probe", { ...options, method: "POST", body: JSON.stringify({}) }),
+
+  /* ---- 环境中心（ComfyUI setup，冻结接口，见 docs/desktop_setup_migration.md） ---- */
+  setupSummary: (options = {}) => request("/setup/summary", options),
+  setupCapabilities: (options = {}) => request("/setup/capabilities", options),
+  setupScan: (payload = {}, options = {}) => request("/setup/scans", { ...options, method: "POST", body: JSON.stringify(payload) }),
+  setupPlan: (payload = {}, options = {}) => request("/setup/plans", { ...options, method: "POST", body: JSON.stringify(payload) }),
+  setupStartJob: (payload, options = {}) => request("/setup/jobs", { ...options, method: "POST", body: JSON.stringify(payload) }),
+  setupListJobs: (options = {}) => request("/setup/jobs", options),
+  setupJob: (id, options = {}) => request(`/setup/jobs/${encodeURIComponent(id)}`, options),
+  setupCancelJob: (id, options = {}) => request(`/setup/jobs/${encodeURIComponent(id)}/cancel`, { ...options, method: "POST" }),
+  setupRetryJob: (id, options = {}) => request(`/setup/jobs/${encodeURIComponent(id)}/retry`, { ...options, method: "POST" }),
+  setupRollbackJob: (id, options = {}) => request(`/setup/jobs/${encodeURIComponent(id)}/rollback`, { ...options, method: "POST" }),
+  setupReprobe: (options = {}) => request("/setup/reprobe", { ...options, method: "POST" }),
+  setupRemoteKit: (options = {}) => request("/setup/remote-kit", options),
+  setupJobEventsUrl: (id) => `/api/v1/setup/jobs/${encodeURIComponent(id)}/events`,
   uploads: async (formData) => {
     const result = await request("/uploads", { method: "POST", body: formData });
     return {
