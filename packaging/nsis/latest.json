@@ -1,0 +1,12 @@
+{
+  "version": "8.6.0",
+  "notes": "房间多人实时协作与共享生图",
+  "pub_date": "2026-08-11T13:47:45.117177+00:00",
+  "platforms": {
+    "windows-x86_64": {
+      "url": "https://github.com/XIAOKU2300/WineFoxDesktop/releases/download/v8.6.0/WineFox-Setup-8.6.0-x64.exe",
+      "signature": "TU8scQvVOiZYg1msriX1SQa9qu1CiZPJ1RJjLdEkKH7fFeqxVY78NLAm3yl9ys2VQZXvZpyDIy0TE28CQ4dsBw==",
+      "size": 19626076
+    }
+  }
+}

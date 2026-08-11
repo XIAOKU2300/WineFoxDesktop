@@ -8,6 +8,8 @@ const state = {
   settings: null,
   catalog: null,
   wizardCompleted: null,
+  historyDirty: false, // 生成任务结束（完成/失败）后置位，历史页据此忽略预取缓存并刷新
+  favoritesDirty: false, // 收藏/取消收藏后置位，收藏页据此忽略预取缓存并刷新
   theme: localStorage.getItem("wfx-theme") || "light",
   genParams: null, // 生成页草稿（内存）
   jobTally: { queued: 0, running: 0 },

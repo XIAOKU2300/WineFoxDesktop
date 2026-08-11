@@ -26,7 +26,13 @@ pub fn handle(state: &AppState, request: Request<Vec<u8>>) -> Response<Vec<u8>> 
         Some(port) => port,
         None => return error_response(StatusCode::NOT_FOUND, "sidecar is not ready"),
     };
-    let (port, sidecar_path) = match resolve_sidecar_path(&path, current_port) {
+    // 房间网关端口与房主令牌：代理 `/room/*` 时注入 `X-WineFox-Room-Host`，
+    // 使实验室页面可以访问房间网关而无需浏览器 Cookie。
+    let (room_port, room_host_token) = {
+        let inner = state.inner.lock().unwrap();
+        (inner.room.port, inner.room_host_token.clone())
+    };
+    let (port, sidecar_path) = match resolve_target(&path, current_port, room_port) {
         Some(v) => v,
         None => return error_response(StatusCode::BAD_REQUEST, "bad winefox-panel URL"),
     };
@@ -42,9 +48,18 @@ pub fn handle(state: &AppState, request: Request<Vec<u8>>) -> Response<Vec<u8>> 
             owned_headers.push((lower, text.to_string()));
         }
     }
-    let session_cookie = state.inner.lock().unwrap().session_cookie.clone();
-    if let Some(cookie) = session_cookie {
-        owned_headers.push(("Cookie".to_string(), cookie));
+    // 主面板会话 Cookie 只转发给主 sidecar；房间网关独立 Cookie/安全域，
+    // 房主身份完全由 `X-WineFox-Room-Host` 令牌确认。
+    if Some(port) != room_port {
+        let session_cookie = state.inner.lock().unwrap().session_cookie.clone();
+        if let Some(cookie) = session_cookie {
+            owned_headers.push(("Cookie".to_string(), cookie));
+        }
+    }
+    if Some(port) == room_port {
+        if let Some(token) = room_host_token {
+            owned_headers.push(("X-WineFox-Room-Host".to_string(), token));
+        }
     }
     let extra_headers: Vec<(&str, &str)> = owned_headers
         .iter()
@@ -121,14 +136,22 @@ fn should_forward_response_header(lower: &str) -> bool {
     )
 }
 
-/// Resolve the sidecar path from either a port-prefixed panel URL
+/// Resolve (target_port, sidecar_path) from either a port-prefixed panel URL
 /// (`/<port>/<path>`) or a portless absolute path used by the UI's fetch/asset
 /// URLs (`/api/v1/...`, `/css/...`).
-fn resolve_sidecar_path(path: &str, current_port: u16) -> Option<(u16, String)> {
+///
+/// 带端口前缀的 URL 按端口路由：匹配主面板端口 → 主 sidecar；匹配房间网关
+/// 端口 → 房间网关。无端口绝对路径中 `/room/*` 路由到房间网关（供实验室页面
+/// 使用），其余使用主面板端口。
+fn resolve_target(path: &str, current_port: u16, room_port: Option<u16>) -> Option<(u16, String)> {
     match parse_panel_path(path) {
         Some((port, sidecar_path)) if port == current_port => Some((port, sidecar_path)),
+        Some((port, sidecar_path)) if room_port == Some(port) => Some((port, sidecar_path)),
         Some(_) => None,
-        None => Some((current_port, path.to_string())),
+        None => match room_port {
+            Some(rp) if path.starts_with("/room/") => Some((rp, path.to_string())),
+            _ => Some((current_port, path.to_string())),
+        },
     }
 }
 
@@ -164,7 +187,7 @@ fn error_response(status: StatusCode, message: &str) -> Response<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_panel_path, resolve_sidecar_path};
+    use super::{parse_panel_path, resolve_target};
     use crate::state::{AppState, SidecarState};
     use std::io::{Read, Write};
     use std::net::TcpListener;
@@ -205,18 +228,47 @@ mod tests {
     #[test]
     fn portless_paths_use_the_current_sidecar_port() {
         assert_eq!(
-            resolve_sidecar_path("/api/v1/health", 57466),
+            resolve_target("/api/v1/health", 57466, None),
             Some((57466, "/api/v1/health".into()))
         );
         assert_eq!(
-            resolve_sidecar_path("/", 57466),
+            resolve_target("/", 57466, None),
             Some((57466, "/".into()))
         );
     }
 
     #[test]
     fn mismatched_port_prefix_is_rejected() {
-        assert_eq!(resolve_sidecar_path("/12345/api/status", 57466), None);
+        assert_eq!(resolve_target("/12345/api/status", 57466, None), None);
+    }
+
+    #[test]
+    fn room_port_prefix_routes_to_room_gateway() {
+        assert_eq!(
+            resolve_target("/51888/room/lab", 57466, Some(51888)),
+            Some((51888, "/room/lab".into()))
+        );
+        assert_eq!(
+            resolve_target("/51888/room/v1/catalog", 57466, Some(51888)),
+            Some((51888, "/room/v1/catalog".into()))
+        );
+    }
+
+    #[test]
+    fn unknown_port_still_rejected_when_room_port_set() {
+        assert_eq!(resolve_target("/12345/api/status", 57466, Some(51888)), None);
+    }
+
+    #[test]
+    fn portless_room_paths_route_to_room_gateway() {
+        assert_eq!(
+            resolve_target("/room/v1/catalog", 57466, Some(51888)),
+            Some((51888, "/room/v1/catalog".into()))
+        );
+        assert_eq!(
+            resolve_target("/room/v1/catalog", 57466, None),
+            Some((57466, "/room/v1/catalog".into()))
+        );
     }
 
     #[test]
@@ -316,5 +368,105 @@ mod tests {
         assert!(raw.contains("User-Agent: winefox-shell/1\r\n"));
         assert!(raw.contains("Cookie: winefox_session=abc123\r\n"));
         assert!(!raw.contains("HttpOnly"));
+    }
+
+    #[test]
+    fn room_proxy_injects_host_token_only_for_room_gateway() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let capture = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut bytes = Vec::new();
+            let mut block = [0_u8; 1024];
+            while !bytes.windows(4).any(|w| w == b"\r\n\r\n") {
+                let read = stream.read(&mut block).unwrap();
+                if read == 0 {
+                    break;
+                }
+                bytes.extend_from_slice(&block[..read]);
+            }
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                )
+                .unwrap();
+            String::from_utf8(bytes).unwrap()
+        });
+
+        let state = AppState::new();
+        {
+            let mut inner = state.inner.lock().unwrap();
+            inner.state = SidecarState::Ready;
+            inner.port = Some(1); // main panel port (unused here)
+            inner.room.port = Some(port);
+            inner.room_host_token = Some("host-token-123".into());
+        }
+        let request = Request::builder()
+            .method("GET")
+            .uri(format!("http://winefox-panel.localhost/{port}/room/v1/catalog"))
+            .header(header::ACCEPT, "application/json")
+            .body(Vec::new())
+            .unwrap();
+        let response = super::handle(&state, request);
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let raw = capture.join().unwrap();
+        let first_line = raw.lines().next().unwrap();
+        assert!(
+            first_line.contains(format!(" /room/v1/catalog HTTP/1.1").as_str()),
+            "request line: {first_line}"
+        );
+        assert!(raw.contains("X-WineFox-Room-Host: host-token-123\r\n"));
+        // 主面板会话 Cookie 不应泄漏给房间网关（房间网关只认房主令牌）。
+        assert!(!raw.contains("winefox_session"));
+    }
+
+    #[test]
+    fn room_proxy_omits_host_token_for_main_panel() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let capture = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut bytes = Vec::new();
+            let mut block = [0_u8; 1024];
+            while !bytes.windows(4).any(|w| w == b"\r\n\r\n") {
+                let read = stream.read(&mut block).unwrap();
+                if read == 0 {
+                    break;
+                }
+                bytes.extend_from_slice(&block[..read]);
+            }
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                )
+                .unwrap();
+            String::from_utf8(bytes).unwrap()
+        });
+
+        let state = AppState::new();
+        {
+            let mut inner = state.inner.lock().unwrap();
+            inner.state = SidecarState::Ready;
+            inner.port = Some(port);
+            inner.room.port = Some(9999);
+            inner.room_host_token = Some("host-token-123".into());
+        }
+        let request = Request::builder()
+            .method("GET")
+            .uri("http://winefox-panel.localhost/api/v1/settings")
+            .header(header::ACCEPT, "application/json")
+            .body(Vec::new())
+            .unwrap();
+        let response = super::handle(&state, request);
+        assert_eq!(response.status(), StatusCode::OK);
+        let raw = capture.join().unwrap();
+        assert!(!raw.contains("X-WineFox-Room-Host"));
     }
 }

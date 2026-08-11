@@ -1,5 +1,6 @@
 /* WineFox Desktop application composition and warm-start lifecycle. */
 import { el, $, $$, ic, esc, toast, loadingState } from "./utils.js";
+import { debugBridge } from "./utils.js";
 import { api } from "./api.js";
 import { store } from "./store.js";
 import { GenerateView } from "./views/generate.js";
@@ -8,6 +9,7 @@ import { FavoritesView } from "./views/favorites.js";
 import { ModelsView } from "./views/models.js";
 import { SettingsView } from "./views/settings.js";
 import { DiagnosticsView } from "./views/diagnostics.js";
+import { LabView } from "./views/lab.js";
 
 const ROUTES = [
   { id: "generate", label: "生成", icon: "gen", ctor: GenerateView },
@@ -17,7 +19,9 @@ const ROUTES = [
   { id: "settings", label: "设置", icon: "gear", ctor: SettingsView },
   { id: "diagnostics", label: "诊断", icon: "diag", ctor: DiagnosticsView },
 ];
+const DEBUG_ROUTE = { id: "lab", label: "实验室", icon: "flask", ctor: LabView };
 
+let debugEnabled = false;
 let currentEntry = null;
 let connTimer = null;
 let viewToken = 0;
@@ -25,9 +29,13 @@ let enterTimer = null;
 let healthRefreshPromise = null;
 const viewCache = new Map();
 
+function routes() {
+  return debugEnabled ? ROUTES.concat(DEBUG_ROUTE) : ROUTES;
+}
+
 function parseRoute() {
   const hash = location.hash.replace(/^#\/?/, "");
-  return ROUTES.some((route) => route.id === hash) ? hash : "generate";
+  return routes().some((route) => route.id === hash) ? hash : "generate";
 }
 
 function sendLaunchProgress(label) {
@@ -43,7 +51,7 @@ function signalReady() {
 function buildRail() {
   const rail = $("#rail");
   rail.innerHTML = "";
-  for (const route of ROUTES) {
+  for (const route of routes()) {
     const link = el("a", {
       class: "rail-item",
       href: `#/${route.id}`,
@@ -60,7 +68,7 @@ function buildRail() {
     el("div", { class: "rail-foot" }, [
       el("span", { class: "rail-signature" }, "狐"),
       el("span", { class: "hint" }, "WineFox Desktop"),
-      el("span", { class: "hint" }, "v8.5.11 · 本地创作空间"),
+      el("span", { class: "hint" }, "v8.6.0 · 本地创作空间"),
     ]),
   );
 }
@@ -68,7 +76,7 @@ function buildRail() {
 function getViewEntry(routeId) {
   if (viewCache.has(routeId)) return viewCache.get(routeId);
 
-  const definition = ROUTES.find((route) => route.id === routeId);
+  const definition = routes().find((route) => route.id === routeId);
   if (!definition) return null;
   const root = el("div", {
     class: routeId === "generate" ? "" : "view",
@@ -270,6 +278,44 @@ function bindTheme() {
   });
 }
 
+function applyDebugState(enabled) {
+  const changed = debugEnabled !== enabled;
+  debugEnabled = enabled;
+  store.set("debugEnabled", enabled);
+  if (changed) {
+    buildRail();
+    syncRailAria();
+    if (!enabled && parseRoute() === "lab") location.hash = "#/generate";
+  }
+}
+
+function syncRailAria() {
+  const id = parseRoute();
+  $$("#rail .rail-item").forEach((link) => {
+    if (link.getAttribute("href") === `#/${id}`) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  });
+}
+
+/* 左上角 WineFox Logo：连续点击 10 次解锁调试模式（逐次调用 Rust record_logo_click）。 */
+function bindLogoDebug() {
+  const mark = $(".brand-mark");
+  if (!mark || mark.dataset.debugBound) return;
+  mark.dataset.debugBound = "1";
+  mark.addEventListener("click", () => {
+    void debugBridge.click().then((res) => {
+      if (!res.ok || !res.result) return;
+      if (res.result.unlocked) {
+        mark.style.opacity = "";
+        applyDebugState(true);
+        toast("调试模式已开启，实验室可用", "ok");
+      } else if (res.result.count >= 2) {
+        mark.style.opacity = String(0.55 + 0.45 * (res.result.count / 10));
+      }
+    });
+  });
+}
+
 async function maybeLoadMock() {
   const query = new URLSearchParams(location.search);
   if (!query.has("mock") && !query.has("dev")) return;
@@ -344,9 +390,15 @@ async function boot() {
   await maybeLoadMock();
   bindTheme();
   bindConnectionRetry();
+  bindLogoDebug();
   buildRail();
   bindJobTally();
   await preloadWorkspace();
+
+  // 面板刷新时恢复调试模式状态（Rust 内存状态在 Shell 侧保持不变）。
+  const debugState = await debugBridge.getState();
+  if (debugState.ok && debugState.state?.enabled) applyDebugState(true);
+  debugBridge.onDebugState((enabled) => applyDebugState(enabled));
 
   // Route roots are retained after their first mount. This preserves editing
   // state and prevents rapid back-and-forth navigation from refetching data.
@@ -354,10 +406,7 @@ async function boot() {
 
   const navigate = () => {
     const id = parseRoute();
-    $$("#rail .rail-item").forEach((link) => {
-      if (link.getAttribute("href") === `#/${id}`) link.setAttribute("aria-current", "page");
-      else link.removeAttribute("aria-current");
-    });
+    syncRailAria();
     switchView(id);
   };
   window.addEventListener("hashchange", navigate);

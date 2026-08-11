@@ -48,9 +48,9 @@ Unicode true
 ; ---------------------------------------------------------------------------
 Name "${PRODUCT_NAME}"
 OutFile "WineFox-Setup-${APP_VERSION}-x64.exe"
-InstallDir "$PROGRAMFILES64\WineFox"
-InstallDirRegKey HKLM "${UNINST_KEY}" "InstallLocation"
-RequestExecutionLevel admin
+InstallDir "$LOCALAPPDATA\Programs\WineFox"
+InstallDirRegKey HKCU "${UNINST_KEY}" "InstallLocation"
+RequestExecutionLevel user
 SetCompressor /SOLID lzma
 ShowInstDetails show
 ShowUninstDetails show
@@ -110,7 +110,7 @@ VIAddVersionKey /LANG=2052 "CompanyName" "${PUBLISHER}"
 ; install
 ; ---------------------------------------------------------------------------
 Section "WineFox" SEC_MAIN
-  SetShellVarContext all
+  SetShellVarContext current
   SetOutPath "$INSTDIR"
 
   ; stop any running instance before touching files
@@ -124,6 +124,7 @@ Section "WineFox" SEC_MAIN
     FileRead $0 $1
     FileClose $0
     StrCmp $1 "${APP_VERSION}" payload
+    IfSilent payload
     MessageBox MB_YESNO|MB_ICONQUESTION "哼，发现电脑里已经住着 WineFox $1，手上的安装包是 ${APP_VERSION}。$\r$\n$\r$\n还要继续覆盖安装吗？想清楚再点“是”哦，杂鱼♡" IDYES payload
     Abort
 
@@ -136,6 +137,7 @@ Section "WineFox" SEC_MAIN
       RMDir /r "$INSTDIR.old"      ; clean stale backup from a previous run
     Rename "$INSTDIR" "$INSTDIR.old"
     IfErrors 0 fresh_install
+      IfSilent +2
       MessageBox MB_OK|MB_ICONSTOP "笨蛋，现有安装被占用，没办法安全备份：$\r$\n$INSTDIR$\r$\n$\r$\n先彻底退出 WineFox，再重新运行安装包吧。"
       Abort
 
@@ -162,24 +164,29 @@ Section "WineFox" SEC_MAIN
   CreateShortcut "$DESKTOP\WineFox.lnk" "$INSTDIR\WineFox.exe" "" "$INSTDIR\WineFox.exe" 0
 
   ; ----------------------------------------------------------------- registry
-  WriteRegStr HKLM "${UNINST_KEY}" "DisplayName" "${PRODUCT_NAME}"
-  WriteRegStr HKLM "${UNINST_KEY}" "DisplayVersion" "${APP_VERSION}"
-  WriteRegStr HKLM "${UNINST_KEY}" "Publisher" "${PUBLISHER}"
-  WriteRegStr HKLM "${UNINST_KEY}" "InstallLocation" "$INSTDIR"
-  WriteRegStr HKLM "${UNINST_KEY}" "DisplayIcon" "$INSTDIR\WineFox.exe,0"
-  WriteRegStr HKLM "${UNINST_KEY}" "UninstallString" '"$INSTDIR\Uninstall WineFox.exe"'
-  WriteRegDWORD HKLM "${UNINST_KEY}" "NoModify" 1
-  WriteRegDWORD HKLM "${UNINST_KEY}" "NoRepair" 1
+  WriteRegStr HKCU "${UNINST_KEY}" "DisplayName" "${PRODUCT_NAME}"
+  WriteRegStr HKCU "${UNINST_KEY}" "DisplayVersion" "${APP_VERSION}"
+  WriteRegStr HKCU "${UNINST_KEY}" "Publisher" "${PUBLISHER}"
+  WriteRegStr HKCU "${UNINST_KEY}" "InstallLocation" "$INSTDIR"
+  WriteRegStr HKCU "${UNINST_KEY}" "DisplayIcon" "$INSTDIR\WineFox.exe,0"
+  WriteRegStr HKCU "${UNINST_KEY}" "UninstallString" '"$INSTDIR\Uninstall WineFox.exe"'
+  WriteRegDWORD HKCU "${UNINST_KEY}" "NoModify" 1
+  WriteRegDWORD HKCU "${UNINST_KEY}" "NoRepair" 1
 
   ; ----------------------------------------------------------- user data note
+  IfSilent +2
   MessageBox MB_OK|MB_ICONINFORMATION "好啦，WineFox ${APP_VERSION} 已经装好了♡$\r$\n$\r$\n用户数据会乖乖保存在：$\r$\n${DATA_DIR}$\r$\n$\r$\n卸载时默认保留，才不会让冒失的杂鱼把历史记录一起弄丢呢。"
+  ; 自动更新（静默）场景：装好后直接拉起新版本，旧进程已由更新器退出
+  IfSilent 0 +3
+    Exec '"$INSTDIR\WineFox.exe"'
+    SetAutoClose true
 SectionEnd
 
 ; ---------------------------------------------------------------------------
 ; uninstall — %LOCALAPPDATA%\WineFox is PRESERVED unless the user opts in
 ; ---------------------------------------------------------------------------
 Section "Uninstall"
-  SetShellVarContext all
+  SetShellVarContext current
   !insertmacro StopRunningApps
   Sleep 500
 
@@ -194,16 +201,18 @@ Section "Uninstall"
 
   RMDir /r "$INSTDIR"
 
-  DeleteRegKey HKLM "${UNINST_KEY}"
-  DeleteRegKey /ifempty HKLM "Software\${PUBLISHER}"
+  DeleteRegKey HKCU "${UNINST_KEY}"
+  DeleteRegKey /ifempty HKCU "Software\${PUBLISHER}"
 
   ; user data: preserved by default; only removed when explicitly requested
+  IfSilent +4
   MessageBox MB_YESNO|MB_ICONQUESTION "最后一次机会哦：要连用户数据也一起删除吗？$\r$\n$\r$\n${DATA_DIR}$\r$\n$\r$\n选择“否”会保留配置、LoRA 缓存与历史记录。拿不准就乖乖选“否”，杂鱼♡" IDYES remove_data IDNO keep_data
   remove_data:
     RMDir /r "${DATA_DIR}"
     MessageBox MB_OK|MB_ICONINFORMATION "卸载完成，用户数据也清理掉了。哼，这次倒是选得很果断嘛。"
     Goto uninstall_done
   keep_data:
+    IfSilent +2
     MessageBox MB_OK|MB_ICONINFORMATION "WineFox 已卸载，但本狐替你保住了用户数据♡$\r$\n$\r$\n${DATA_DIR}"
   uninstall_done:
 SectionEnd

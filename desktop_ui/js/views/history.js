@@ -16,14 +16,26 @@ export class HistoryView {
     this.trash = false;
     this.total = null;
     this.loaded = false;
+    this.selectMode = false;
+    this.selected = new Set(); // 批量选择：记录 id
+    this.pageItems = [];
   }
 
   async mount(container) {
     this.root = container;
     this.render();
-    const prefetched = store.get("history");
+    const dirty = store.get("historyDirty");
+    const prefetched = dirty ? null : store.get("history");
     store.set("history", null);
+    store.set("historyDirty", false);
     await this.load(false, prefetched);
+  }
+
+  /** 视图切回时刷新当前页数据：生成页完成任务后历史立即可见，无需重启。 */
+  activate() {
+    if (!this.root) return;
+    store.set("historyDirty", false);
+    this.load(false);
   }
 
   render() {
@@ -43,22 +55,106 @@ export class HistoryView {
             el("option", { value: "failed" }, "失败"),
             el("option", { value: "favorite" }, "已收藏"),
           ]),
+          el("button", { class: "btn btn-sm" + (this.selectMode ? " btn-primary" : ""), id: "h-select", type: "button", "aria-pressed": this.selectMode ? "true" : "false" }, [
+            ic("check"), esc(this.selectMode ? "完成" : "选择"),
+          ]),
           el("button", { class: "btn btn-sm" + (this.trash ? " btn-danger" : ""), id: "h-trash", type: "button" }, [
             ic("trashOpen"), esc(this.trash ? "返回历史" : "回收站"),
           ]),
         ]),
       ]),
       el("div", { id: "h-body", class: "stack-3" }, [
-        el("div", { class: "img-grid", id: "h-grid" }, []),
+        el("div", { class: "img-grid" + (this.selectMode ? " select-mode" : ""), id: "h-grid" }, []),
         el("div", { class: "load-more" }, "加载中…"),
       ]),
+      this.selectMode ? this.batchBar() : null,
     );
     const filter = $("#h-filter");
     if (filter) {
       filter.value = this.filter;
       filter.addEventListener("change", (e) => { this.filter = e.target.value; this.cursor = null; this.prevCursors = []; this.load(); });
     }
-    $("#h-trash")?.addEventListener("click", () => { this.trash = !this.trash; this.cursor = null; this.prevCursors = []; this.render(); this.load(); });
+    $("#h-trash")?.addEventListener("click", () => { this.trash = !this.trash; this.cursor = null; this.prevCursors = []; this.selectMode = false; this.selected.clear(); this.render(); this.load(); });
+    $("#h-select")?.addEventListener("click", () => {
+      this.selectMode = !this.selectMode;
+      this.selected.clear();
+      this.cursor = null;
+      this.prevCursors = [];
+      this.render();
+      this.load();
+    });
+    if (this.selectMode) this.bindBatchBar();
+  }
+
+  /* ============ 批量选择 ============ */
+  batchBar() {
+    const n = this.selected.size;
+    const trash = this.trash;
+    return el("div", { class: "batch-bar", role: "toolbar", "aria-label": "批量操作" }, [
+      el("span", { class: "bb-count" }, `已选 ${n} 项`),
+      el("button", { class: "btn btn-sm", type: "button", id: "bb-all" }, [ic("check"), esc(n === this.pageItems.length && this.pageItems.length ? "取消全选" : "全选")]),
+      trash
+        ? el("button", { class: "btn btn-sm", type: "button", id: "bb-restore" }, [ic("restore"), esc("恢复")])
+        : el("button", { class: "btn btn-sm", type: "button", id: "bb-fav" }, [ic("favFill"), esc("收藏")]),
+      trash
+        ? el("button", { class: "btn btn-sm btn-danger", type: "button", id: "bb-purge" }, [ic("x"), esc("彻底删除")])
+        : el("button", { class: "btn btn-sm", type: "button", id: "bb-unfav" }, [ic("fav"), esc("取消收藏")]),
+      trash
+        ? null
+        : el("button", { class: "btn btn-sm btn-danger", type: "button", id: "bb-trash" }, [ic("trash"), esc("移入回收站")]),
+      el("button", { class: "btn btn-sm btn-primary", type: "button", id: "bb-done" }, "完成"),
+    ]);
+  }
+
+  bindBatchBar() {
+    $("#bb-all", this.root)?.addEventListener("click", () => {
+      const pageIds = this.pageItems.map((it) => it.id);
+      const allSelected = pageIds.length && pageIds.every((id) => this.selected.has(id));
+      if (allSelected) pageIds.forEach((id) => this.selected.delete(id));
+      else pageIds.forEach((id) => this.selected.add(id));
+      this.render();
+      this.load();
+    });
+    $("#bb-fav", this.root)?.addEventListener("click", () => this.batchAction(async (id) => api.favoriteHistory(id), "已收藏"));
+    $("#bb-unfav", this.root)?.addEventListener("click", () => this.batchAction(async (id) => api.unfavoriteHistory(id), "已取消收藏"));
+    $("#bb-trash", this.root)?.addEventListener("click", () => this.batchAction(async (id) => api.trashHistory(id), "已移入回收站"));
+    $("#bb-restore", this.root)?.addEventListener("click", () => this.batchAction(async (id) => api.restoreHistory(id), "已恢复"));
+    $("#bb-purge", this.root)?.addEventListener("click", () => this.batchAction(async (id) => api.purgeHistory(id), "已彻底删除"));
+    $("#bb-done", this.root)?.addEventListener("click", () => { this.selectMode = false; this.selected.clear(); this.render(); this.load(); });
+  }
+
+  async batchAction(fn, label) {
+    const ids = [...this.selected];
+    if (!ids.length) { toast("请先选择记录", "warn"); return; }
+    let ok = 0;
+    for (const id of ids) {
+      try { await fn(id); ok++; } catch { /* 单项失败继续 */ }
+    }
+    toast(`${label} ${ok} 项`, ok === ids.length ? "ok" : "warn");
+    store.set("favoritesDirty", true);
+    this.selectMode = false;
+    this.selected.clear();
+    this.render();
+    this.load();
+  }
+
+  toggleSelect(id) {
+    if (this.selected.has(id)) this.selected.delete(id);
+    else this.selected.add(id);
+    // 更新当前 cell 状态与计数，不整页重渲染
+    const cell = $(`.img-cell[data-id="${id}"]`, this.root);
+    if (cell) {
+      cell.classList.toggle("selected", this.selected.has(id));
+      const check = cell.querySelector(".cell-check");
+      if (check) check.classList.toggle("on", this.selected.has(id));
+    }
+    const count = $(".bb-count", this.root);
+    if (count) count.textContent = `已选 ${this.selected.size} 项`;
+    const all = $("#bb-all", this.root);
+    if (all) {
+      const pageIds = this.pageItems.map((it) => it.id);
+      all.textContent = pageIds.length && pageIds.every((id) => this.selected.has(id)) ? "取消全选" : "全选";
+    }
   }
 
   async load(append = false, prefetched = null) {
@@ -79,6 +175,8 @@ export class HistoryView {
       const res = prefetched || await api.history(q);
       this.total = res.total ?? this.total;
       const items = res.items || [];
+      if (!append) this.pageItems = items;
+      else this.pageItems = this.pageItems.concat(items);
       if (!append) this.prevCursors = [];
       else this.prevCursors.push(this.cursor);
       this.cursor = res.next_cursor || null;
@@ -104,12 +202,13 @@ export class HistoryView {
   renderItems(items, append) {
     const grid = $("#h-grid");
     if (!grid) return;
+    grid.classList.toggle("select-mode", this.selectMode);
     const cells = items.map((it) => this.cell(it));
     if (append) grid.append(...cells);
     else {
       grid.innerHTML = "";
       if (!items.length) {
-        const empty = el("div", { class: "empty", style: "grid-column:1/-1" }, [
+        const empty = el("div", { class: "empty", style: "column-span: all" }, [
           ic(this.trash ? "trashOpen" : "image"),
           el("div", { class: "empty-title" }, this.trash ? "回收站是空的" : this.q ? "没有匹配的记录" : "还没有生成记录"),
           el("div", { class: "empty-desc" }, this.trash ? "删除的历史记录会出现在这里。" : "去「生成」页创建第一张图，或调整搜索条件。"),
@@ -123,13 +222,15 @@ export class HistoryView {
 
   cell(it) {
     const fav = !!it.favorite;
+    const selected = this.selectMode && this.selected.has(it.id);
     const cell = el("figure", {
-      class: "img-cell" + (this.trash ? " trashed" : ""),
+      class: "img-cell" + (this.trash ? " trashed" : "") + (selected ? " selected" : ""),
       tabindex: "0",
       role: "button",
       "aria-label": `预览记录：${it.prompt || it.id}`,
       dataset: { id: it.id },
     }, [
+      this.selectMode ? el("span", { class: "cell-check" + (selected ? " on" : ""), "aria-hidden": "true" }, [ic("check")]) : null,
       el("img", { src: it.image?.url || "", alt: "", loading: "lazy" }),
       fav ? el("span", { class: "fav-dot" }, [ic("fav")]) : null,
       el("figcaption", { class: "cell-meta" }, [
@@ -165,6 +266,7 @@ export class HistoryView {
         try {
           if (fav) { await api.unfavoriteHistory(it.id); toast("已取消收藏", "ok"); }
           else { await api.favoriteHistory(it.id); toast("已收藏", "ok"); }
+          store.set("favoritesDirty", true);
           this.load();
         } catch (err) { toast("操作失败：" + err.message, "err"); }
       });
@@ -174,8 +276,17 @@ export class HistoryView {
         catch (err) { toast("操作失败：" + err.message, "err"); }
       });
     }
-    cell.addEventListener("click", () => this.preview(it));
-    cell.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); this.preview(it); } });
+    cell.addEventListener("click", () => {
+      if (this.selectMode) this.toggleSelect(it.id);
+      else this.preview(it);
+    });
+    cell.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        if (this.selectMode) this.toggleSelect(it.id);
+        else this.preview(it);
+      }
+    });
     return cell;
   }
 
@@ -199,8 +310,8 @@ export class HistoryView {
           el("div", { class: "pm-block" }, [el("span", { class: "pm-label" }, "模型族 / 工作流"), el("span", { class: "pm-val" }, esc(`${it.family || "—"} / ${sanitizeName(it.workflow) || "—"}`))]),
           el("div", { class: "pm-block" }, [el("span", { class: "pm-label" }, "创建时间"), el("span", { class: "pm-val" }, esc(fmtRelative(it.created_at)))]),
           el("div", { class: "row gap-2" }, [
-            el("a", { class: "btn btn-primary btn-sm", href: it.image?.url || "#", download: `winefox_${it.id}.png`, target: "_blank", rel: "noopener" }, [ic("download"), esc("保存")]),
-            el("button", { class: "btn btn-sm", type: "button", id: "pv-fav" }, [ic("fav"), esc(it.favorite ? "取消收藏" : "收藏")]),
+            el("button", { class: "btn btn-primary btn-sm", type: "button", id: "pv-save" }, [ic("download"), esc("保存")]),
+            el("button", { class: "btn btn-sm", type: "button", id: "pv-fav" }, [ic(it.favorite ? "favFill" : "fav"), esc(it.favorite ? "取消收藏" : "收藏")]),
             this.trash ? null : el("button", { class: "btn btn-sm btn-danger", type: "button", id: "pv-trash" }, [ic("trash"), esc("删除")]),
           ]),
         ]),
@@ -208,16 +319,36 @@ export class HistoryView {
     ]);
     overlay.append(modal);
     document.body.append(overlay);
-    const close = () => overlay.remove();
+    requestAnimationFrame(() => requestAnimationFrame(() => overlay.classList.add("open")));
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+    const close = () => {
+      overlay.classList.add("closing");
+      document.removeEventListener("keydown", onKey);
+      setTimeout(() => overlay.remove(), 180);
+    };
     overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
     modal.querySelector(".modal-head .icon-btn").addEventListener("click", close);
-    const onKey = (e) => { if (e.key === "Escape") { close(); document.removeEventListener("keydown", onKey); } };
     document.addEventListener("keydown", onKey);
     modal.querySelector(".modal-head .icon-btn").focus();
+    $("#pv-save", modal)?.addEventListener("click", async () => {
+      try {
+        const res = await saveImageDialog(it.image?.url || "", `winefox_${it.id}.png`);
+        if (res.ok && res.downloaded) toast("已开始保存图片", "ok");
+        else if (res.ok && res.path) toast("已保存到 " + res.path, "ok");
+        else if (!res.ok && !res.cancelled) toast("保存失败，请重试", "err");
+      } catch (e) { toast("保存失败：" + e.message, "err"); }
+    });
     $("#pv-fav", modal)?.addEventListener("click", async () => {
       try {
         if (it.favorite) { await api.unfavoriteHistory(it.id); it.favorite = false; }
         else { await api.favoriteHistory(it.id); it.favorite = true; }
+        store.set("favoritesDirty", true);
+        const b = $("#pv-fav", modal);
+        if (b) {
+          b.replaceChildren(ic(it.favorite ? "favFill" : "fav"), esc(it.favorite ? "取消收藏" : "收藏"));
+          const ico = b.querySelector("svg");
+          if (ico && it.favorite) ico.style.color = "var(--danger)";
+        }
         close(); this.load();
       } catch (e) { toast("操作失败：" + e.message, "err"); }
     });

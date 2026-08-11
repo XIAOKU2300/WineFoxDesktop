@@ -15,6 +15,7 @@ pub enum Line {
     Status { busy: bool, tasks: u32 },
     Log { level: String, message: String },
     Ack { cmd: String, ok: bool },
+    Room { payload: String },
     Exit { code: i32, reason: String },
     Other(Value),
 }
@@ -63,6 +64,12 @@ pub fn parse_line(raw: &str) -> Option<Line> {
             let cmd = obj.get("cmd").and_then(Value::as_str).unwrap_or("").to_string();
             let ok = obj.get("ok").and_then(Value::as_bool).unwrap_or(false);
             Some(Line::Ack { cmd, ok })
+        }
+        "room_status" => {
+            // 房间状态由 Python sidecar 上报，Rust 只透传给 shell 与前端。
+            Some(Line::Room {
+                payload: serde_json::to_string(&v).unwrap_or_default(),
+            })
         }
         "exit" => {
             let code = obj.get("code").and_then(Value::as_i64).unwrap_or(-1) as i32;
@@ -181,6 +188,21 @@ mod tests {
         assert_eq!(a, Line::Ack { cmd: "shutdown".into(), ok: true });
         let e = parse_line(r#"{"type":"exit","code":0,"reason":"shutdown-now"}"#).unwrap();
         assert_eq!(e, Line::Exit { code: 0, reason: "shutdown-now".into() });
+    }
+
+    #[test]
+    fn parses_room_status_line() {
+        let s = parse_line(
+            r#"{"type":"room_status","state":"online","publicId":"abc","port":41234,"members":2,"maxMembers":8}"#,
+        )
+        .unwrap();
+        match s {
+            Line::Room { payload } => {
+                assert!(payload.contains("\"state\":\"online\""));
+                assert!(payload.contains("\"publicId\":\"abc\""));
+            }
+            _ => panic!("expected room"),
+        }
     }
 
     #[test]

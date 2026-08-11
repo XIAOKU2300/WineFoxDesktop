@@ -76,6 +76,16 @@ if os.path.isdir(desktop_ui):
             datas.append((os.path.join(dirpath, fn), rel))
 datas.append((os.path.join(SIDECAR_DIR, "README.md"), "sidecar"))
 
+# room_ui: 房间网关访客界面（随 desktop_room 包一起进入 _internal）。
+room_ui = os.path.join(ROOT, "desktop_room", "room_ui")
+if os.path.isdir(room_ui):
+    for dirpath, _dirnames, filenames in os.walk(room_ui):
+        rel = os.path.join("desktop_room", "room_ui", os.path.relpath(dirpath, room_ui))
+        for fn in filenames:
+            datas.append((os.path.join(dirpath, fn), rel))
+else:
+    print("[spec] WARN: desktop_room/room_ui not found, guest UI will be unavailable", file=sys.stderr)
+
 # ---------------------------------------------------------------------------
 # exclusions: heavy / out-of-scope dependencies
 # ---------------------------------------------------------------------------
@@ -109,6 +119,9 @@ a = Analysis(
         "desktop_runtime.sidecar",
         "desktop_backend",
         "winefox_core",
+        "desktop_room",
+        "desktop_room.manager",
+        "argon2",
         "keyring.backends.Windows",
     ],
     hookspath=[],

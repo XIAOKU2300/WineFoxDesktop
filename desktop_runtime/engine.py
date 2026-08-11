@@ -28,6 +28,7 @@ from winefox_core.workflow_service import WorkflowEntry, WorkflowService
 
 from .config_adapter import DesktopConfigAdapter
 from .llm_client import OpenAICompatibleLLMClient, resolve_provider
+from .lora_download import LoraDownloadService
 from .lora_profiles import (
     cache_generated_lora_profiles,
     load_lora_profiles,
@@ -145,6 +146,12 @@ class DesktopEngine:
         self._probe_task: asyncio.Task[dict[str, Any]] | None = None
         self._lora_metadata_task: asyncio.Task[None] | None = None
         self._lora_metadata_attempted: set[str] = set()
+        self.lora_download = LoraDownloadService(
+            config=self.config,
+            data_root=self.data_root,
+            connection_factory=self._connection_config,
+            on_installed=self._after_lora_installed,
+        )
 
     def _reload_lora_profiles(self) -> None:
         loaded = load_lora_profiles(
@@ -177,6 +184,7 @@ class DesktopEngine:
 
     async def stop(self) -> None:
         self._accepting = False
+        await self.lora_download.stop()
         metadata_task = self._lora_metadata_task
         self._lora_metadata_task = None
         if metadata_task is not None:
@@ -193,10 +201,10 @@ class DesktopEngine:
         self._current_job_id = None
 
     def busy(self) -> bool:
-        return self._current_job_id is not None or self._queue.qsize() > 0
+        return self._current_job_id is not None or self._queue.qsize() > 0 or self.lora_download.active_count() > 0
 
     def task_count(self) -> int:
-        return self._queue.qsize() + (1 if self._current_job_id is not None else 0)
+        return self._queue.qsize() + (1 if self._current_job_id is not None else 0) + self.lora_download.active_count()
 
     def _connection_config(self) -> ComfyUIServerConfig:
         settings = self.config.snapshot()
@@ -360,13 +368,35 @@ class DesktopEngine:
             "loras": loras,
             "nodes": nodes,
             "missing_nodes": probe.get("missing_nodes", []),
-            "download": {"enabled": False},
+            "download": self.lora_download.capabilities(),
             "online": bool(probe.get("online")),
             "lora_profiles": {
                 "loaded": self.loaded_lora_profiles.count,
                 "sources": list(self.loaded_lora_profiles.sources),
             },
         }
+
+    async def search_loras(self, query: str, *, family: str = "illustrious", limit: int = 12) -> dict[str, Any]:
+        return await self.lora_download.search(query, family=family, limit=limit)
+
+    async def start_lora_download(self, result_id: str, *, alias: str = "") -> dict[str, Any]:
+        return self.lora_download.start_download(result_id, alias=alias)
+
+    async def get_lora_download(self, job_id: str) -> dict[str, Any]:
+        return self.lora_download.snapshot(job_id)
+
+    async def probe_lora_bridge(self) -> dict[str, Any]:
+        return await self.lora_download.bridge_status()
+
+    async def _after_lora_installed(self) -> None:
+        self._last_probe = None
+        self._last_probe_at = 0.0
+        self._lora_metadata_attempted.clear()
+        self._reload_lora_profiles()
+        try:
+            await self.probe_comfyui({"force": True})
+        except Exception as exc:
+            logger.warning("LoRA installed but catalog refresh failed: %s", _redact_diagnostic_text(exc))
 
     def _schedule_lora_metadata_refresh(self, filenames: Any) -> None:
         if not isinstance(filenames, (list, tuple)):

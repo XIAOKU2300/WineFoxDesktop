@@ -19,6 +19,9 @@ SECRET_NAMES = (
     "comfyui_custom_header",
     "ai_api_key",
     "vision_api_key",
+    "civitai_api_token",
+    "civitai_cookie",
+    "comfyui_bridge_token",
 )
 
 _PROVIDER_FIELDS = {
@@ -27,6 +30,11 @@ _PROVIDER_FIELDS = {
         {"enabled", "follow_text_provider", "base_url", "model", "timeout_seconds", "max_tokens"}
     ),
 }
+
+_LORA_DOWNLOAD_FIELDS = frozenset({
+    "mode", "local_dir", "proxy", "bridge_endpoint", "bridge_proxy",
+    "request_timeout", "download_timeout", "split",
+})
 
 
 def _merge(target: dict[str, Any], patch: dict[str, Any]) -> None:
@@ -55,6 +63,32 @@ def _provider_patch(name: str, value: dict[str, Any]) -> dict[str, Any]:
             cleaned[key] = max(5, min(number, 180)) if key == "timeout_seconds" else max(128, min(number, 4096))
         else:
             cleaned[key] = str(item or "").strip()
+    return cleaned
+
+
+def _lora_download_patch(value: dict[str, Any]) -> dict[str, Any]:
+    cleaned: dict[str, Any] = {}
+    for key, item in value.items():
+        if key not in _LORA_DOWNLOAD_FIELDS:
+            continue
+        if key == "mode":
+            mode = str(item or "auto").strip().lower()
+            if mode in {"auto", "local", "comfyui_bridge"}:
+                cleaned[key] = mode
+        elif key in {"request_timeout", "download_timeout", "split"}:
+            try:
+                number = int(item)
+            except (TypeError, ValueError):
+                continue
+            if key == "request_timeout":
+                cleaned[key] = max(10, min(number, 180))
+            elif key == "download_timeout":
+                cleaned[key] = max(60, min(number, 24 * 60 * 60))
+            else:
+                cleaned[key] = max(1, min(number, 8))
+        else:
+            limit = 1024 if key == "local_dir" else 512
+            cleaned[key] = str(item or "").strip()[:limit]
     return cleaned
 
 
@@ -89,6 +123,16 @@ class DesktopConfigAdapter:
                 "timeout_seconds": 90,
                 "max_tokens": 700,
             },
+            "lora_download": {
+                "mode": "auto",
+                "local_dir": "",
+                "proxy": "",
+                "bridge_endpoint": "/astrbot/lora",
+                "bridge_proxy": "",
+                "request_timeout": 60,
+                "download_timeout": 7200,
+                "split": 4,
+            },
             "defaults": {"family": "illustrious", "workflow": "workflow_api.json", "width": 832, "height": 1216},
             "wizard": {"completed": False},
         }
@@ -102,12 +146,19 @@ class DesktopConfigAdapter:
 
             value = json.loads(self._desktop_path.read_text(encoding="utf-8"))
             if isinstance(value, dict):
-                public_value = {key: item for key, item in value.items() if key not in _PROVIDER_FIELDS}
+                public_value = {
+                    key: item
+                    for key, item in value.items()
+                    if key not in _PROVIDER_FIELDS and key != "lora_download"
+                }
                 _merge(self._desktop, public_value)
                 for name in _PROVIDER_FIELDS:
                     provider = value.get(name)
                     if isinstance(provider, dict):
                         _merge(self._desktop[name], _provider_patch(name, provider))
+                lora_download = value.get("lora_download")
+                if isinstance(lora_download, dict):
+                    _merge(self._desktop["lora_download"], _lora_download_patch(lora_download))
 
                 # Older desktop builds placed the visual model inside ai_provider.
                 # Preserve that preference while moving it into the separate contract.
@@ -201,6 +252,9 @@ class DesktopConfigAdapter:
                 value = patch.get(key)
                 if isinstance(value, dict):
                     _merge(self._desktop[key], _provider_patch(key, value))
+            lora_download = patch.get("lora_download")
+            if isinstance(lora_download, dict):
+                _merge(self._desktop["lora_download"], _lora_download_patch(lora_download))
             tls = self._desktop.get("tls", {})
             if isinstance(tls, dict) and "verify" in tls:
                 core_patch.setdefault("comfyui", {})["ssl_verify"] = bool(tls["verify"])

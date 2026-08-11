@@ -1,7 +1,7 @@
 /* WineFox Desktop — 收藏页
  * 分类筛选 + 备注编辑 + 新增收藏（从历史记录或直接创建）。
  */
-import { el, $, $$, ic, esc, fmtRelative, debouncedSearchInput, loadingState, toast } from "../utils.js";
+import { el, $, $$, ic, esc, fmtRelative, debouncedSearchInput, loadingState, toast, downloadUrl, saveImageDialog } from "../utils.js";
 import { api } from "../api.js";
 import { store } from "../store.js";
 
@@ -16,12 +16,22 @@ export class FavoritesView {
   async mount(container) {
     this.root = container;
     this.render();
+    const dirtyFav = store.get("favoritesDirty");
     const prefetchedCategories = store.get("categories");
-    const prefetchedFavorites = store.get("favorites");
+    const prefetchedFavorites = dirtyFav ? null : store.get("favorites");
     store.set("categories", null);
     store.set("favorites", null);
+    store.set("favoritesDirty", false);
     await this.loadCats(prefetchedCategories);
     await this.load(prefetchedFavorites);
+  }
+
+  /** 视图切回时刷新：生成/收藏操作后无需重启即可看到最新收藏。 */
+  activate() {
+    if (!this.root) return;
+    store.set("favoritesDirty", false);
+    this.loadCats();
+    this.load();
   }
 
   render() {
@@ -86,7 +96,7 @@ export class FavoritesView {
       const items = res.items || [];
       const grid = el("div", { class: "img-grid", id: "f-grid" });
       if (!items.length) {
-        grid.append(el("div", { class: "empty", style: "grid-column:1/-1" }, [
+        grid.append(el("div", { class: "empty", style: "column-span: all" }, [
           ic("fav"),
           el("div", { class: "empty-title" }, this.q ? "没有匹配的收藏" : "还没有收藏"),
           el("div", { class: "empty-desc" }, this.q ? "换一个关键词试试。" : "在「历史」中点星标，或点击「新建收藏」。"),
@@ -152,18 +162,31 @@ export class FavoritesView {
           el("div", { class: "pm-block" }, [el("span", { class: "pm-label" }, "提示词"), el("span", { class: "pm-val" }, esc(it.prompt || "—"))]),
           el("div", { class: "pm-block" }, [el("span", { class: "pm-label" }, "分类"), el("span", { class: "pm-val" }, esc(it.category || "未分类"))]),
           el("div", { class: "row gap-2" }, [
-            el("a", { class: "btn btn-primary btn-sm", href: it.image?.url || "#", download: `favorite_${it.id}.png` }, [ic("download"), esc("保存")]),
+            el("button", { class: "btn btn-primary btn-sm", type: "button", id: "pv-save" }, [ic("download"), esc("保存")]),
           ]),
         ]),
       ]),
     ]));
     document.body.append(overlay);
-    const close = () => overlay.remove();
+    requestAnimationFrame(() => requestAnimationFrame(() => overlay.classList.add("open")));
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+    const close = () => {
+      overlay.classList.add("closing");
+      document.removeEventListener("keydown", onKey);
+      setTimeout(() => overlay.remove(), 180);
+    };
     overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
     overlay.querySelector(".modal-head .icon-btn").addEventListener("click", close);
-    const onKey = (e) => { if (e.key === "Escape") { close(); document.removeEventListener("keydown", onKey); } };
     document.addEventListener("keydown", onKey);
     overlay.querySelector(".modal-head .icon-btn").focus();
+    $("#pv-save", overlay)?.addEventListener("click", async () => {
+      try {
+        const res = await saveImageDialog(it.image?.url || "", `favorite_${it.id}.png`);
+        if (res.ok && res.downloaded) toast("已开始保存图片", "ok");
+        else if (res.ok && res.path) toast("已保存到 " + res.path, "ok");
+        else if (!res.ok && !res.cancelled) toast("保存失败，请重试", "err");
+      } catch (e) { toast("保存失败：" + e.message, "err"); }
+    });
   }
 
   addDialog() {

@@ -2,7 +2,7 @@
  * 布局：左（模型族/工作流/LoRA/队列）｜中（画布，拖放）｜右（参数）
  * 支持 txt2img / img2img；任务轮询 running 1s / queued 2s / 错误退避至 10s。
  */
-import { el, $, $$, ic, esc, sanitizeName, sanitizeResourceName, fmtRelative, loadingState, copyText, STATUS_META, toast } from "../utils.js";
+import { el, $, $$, ic, esc, sanitizeName, sanitizeResourceName, fmtRelative, loadingState, copyText, STATUS_META, toast, downloadUrl, saveImageDialog } from "../utils.js";
 import { api } from "../api.js";
 import { JobPoller } from "../api.js";
 import { store } from "../store.js";
@@ -58,6 +58,7 @@ export class GenerateView {
   render() {
     const root = this.root;
     this.teardownLoraPagination();
+    this._canvasZoomCleanup?.();
     root.classList.add("generate-view");
     root.innerHTML = "";
     root.append(el("div", { class: "gen" }, [this.leftPanel(), this.centerPanel(), this.rightPanel()]));
@@ -328,18 +329,25 @@ export class GenerateView {
     let content;
     if (s.job) {
       content = [
-        el("div", { class: "canvas-placeholder" }, [
-          ic("queue"),
+        el("div", { class: "gen-wait" }, [
+          el("div", { class: "gen-wait-art", "aria-hidden": "true" }, [
+            el("span", { class: "gw-halo" }),
+            el("span", { class: "gw-orbit gw-orbit-1" }),
+            el("span", { class: "gw-orbit gw-orbit-2" }),
+            el("span", { class: "gw-core" }, "狐"),
+          ]),
           el("b", {}, s.job.status === "running" ? "正在生成…" : "排队中…"),
-          el("span", {}, "生成期间可继续编辑参数"),
+          el("span", {}, s.job.status === "running" ? "墨色正在画布上汇聚" : "前方还有任务，稍候片刻"),
         ]),
         this.progressCard(),
       ];
     } else if (result) {
-      content = [
-        el("img", { class: "canvas-img", src: result.url, alt: "生成结果预览" }),
-        this.actionsBar(),
-      ];
+      const img = el("img", { class: "canvas-img", src: result.url, alt: "生成结果预览" });
+      img.addEventListener("click", () => {
+        if (this.canvasZoom?.moved) { this.canvasZoom.moved = false; return; }
+        this.previewResult();
+      });
+      content = [img];
     } else if (s.mode === "img2img" && !s.refImage) {
       content = [
         el("div", { class: "canvas-placeholder" }, [
@@ -349,10 +357,12 @@ export class GenerateView {
         ]),
       ];
     } else if (s.mode === "img2img" && s.refImage) {
-      content = [
-        el("img", { class: "canvas-img", src: s.refImage.url, alt: "参考图" }),
-        this.actionsBar(),
-      ];
+      const ref = el("img", { class: "canvas-img", src: s.refImage.url, alt: "参考图" });
+      ref.addEventListener("click", () => {
+        if (this.canvasZoom?.moved) { this.canvasZoom.moved = false; return; }
+        this.previewRefImage();
+      });
+      content = [ref];
     } else {
       content = [
         el("div", { class: "canvas-placeholder" }, [
@@ -371,7 +381,8 @@ export class GenerateView {
             esc(s.job ? "生成中…" : "开始生成"),
           ]),
           el("button", { class: "btn btn-sm", id: "g-cancel", type: "button", hidden: !s.job }, "取消"),
-          el("span", { class: "queue-info", id: "g-queue-mini" }, ""),
+          ...this.resultActions(),
+          el("span", { class: "queue-info", id: "g-queue-mini" }, this.queueInfoText()),
         ]),
       ]),
     ]);
@@ -382,29 +393,57 @@ export class GenerateView {
     const meta = STATUS_META[j.status] || STATUS_META.queued;
     return el("div", { class: "gen-progress", role: "status", "aria-live": "polite" }, [
       el("div", { class: "gp-row" }, [
-        el("span", { class: "gp-state" }, [el("span", { class: "spin" }), esc(meta.label)]),
-        el("span", {}, esc(j.progress ? `${Math.round(j.progress * 100)}%` : "")),
+        el("span", { class: "gp-state" }, [
+          el("span", { class: "gp-dots", "aria-hidden": "true" }, [el("i"), el("i"), el("i")]),
+          esc(meta.label),
+        ]),
+        el("span", { class: "gp-pct" }, esc(j.progress ? `${Math.round(j.progress * 100)}%` : "")),
       ]),
       el("div", { class: "progress" + (j.progress ? "" : " indeterminate") }, [el("i", { style: j.progress ? `width:${Math.round(j.progress * 100)}%` : "" })]),
     ]);
   }
 
-  actionsBar() {
+  /* 结果操作按钮：仅当画布里有图（生成结果或 img2img 参考图）时出现在“开始生成”旁 */
+  resultActions() {
     const s = this.state;
     const isRef = s.mode === "img2img" && s.refImage && !s.result;
-    const autoMatches = s.result?.job?.meta?.auto_lora?.matches || [];
-    const autoLabel = autoMatches.map((match) => match.character || match.key).filter(Boolean).join("、");
-    return el("div", { class: "gen-actions" }, [
+    if (!s.result && !isRef) return [];
+    return [
+      el("span", { class: "bar-sep", "aria-hidden": "true" }),
+      el("button", { class: "btn btn-sm", type: "button", id: "g-regen", disabled: isRef, title: "恢复上次提示词并重新生成", "aria-label": "重新生成" }, [ic("refresh"), esc("重生成")]),
+      el("button", { class: "btn btn-sm", type: "button", id: "g-zoom", disabled: isRef, title: "放大预览生成结果", "aria-label": "放大预览" }, [ic("eye"), esc("放大")]),
       el("button", { class: "btn btn-sm", type: "button", id: "g-save", disabled: isRef }, [ic("download"), esc("保存")]),
       el("button", { class: "btn btn-sm", type: "button", id: "g-fav", disabled: isRef }, [ic("fav"), esc("收藏")]),
       el("button", { class: "btn btn-sm", type: "button", id: "g-copy", disabled: isRef }, [ic("copy"), esc("复制")]),
-      el("button", { class: "btn btn-sm", type: "button", id: "g-regen", disabled: isRef }, [ic("refresh"), esc("重生成")]),
       isRef ? el("button", { class: "btn btn-sm btn-danger", type: "button", id: "g-clearref" }, "移除参考图") : null,
-      el("span", {
-        class: "queue-info",
-        title: autoLabel ? `自动匹配 LoRA：${autoLabel}` : "",
-      }, s.result ? `${autoLabel ? `LoRA ${autoLabel} · ` : ""}seed ${s.result.job.seed ?? "—"} · ${fmtRelative(s.result.job.created_at)}` : ""),
-    ]);
+    ];
+  }
+
+  queueInfoText() {
+    const s = this.state;
+    const autoMatches = s.result?.job?.meta?.auto_lora?.matches || [];
+    const autoLabel = autoMatches.map((match) => match.character || match.key).filter(Boolean).join("、");
+    return s.result ? `${autoLabel ? `LoRA ${autoLabel} · ` : ""}seed ${s.result.job.seed ?? "—"} · ${fmtRelative(s.result.job.created_at)}` : "";
+  }
+
+  /* 「重生成」：把上次提交的提示词回填到输入框，交由用户修改后再生成 */
+  restoreLastParams() {
+    const s = this.state;
+    const last = s.lastParams;
+    if (!last) return;
+    s.params = s.params || {};
+    s.params.prompt = last.prompt || "";
+    s.params.negative = last.negative_prompt || "";
+    s.seed = -1;
+    const prompt = $("#g-prompt", this.root);
+    if (prompt) prompt.value = s.params.prompt;
+    const neg = $("#g-neg", this.root);
+    if (neg) neg.value = s.params.negative;
+    const seed = $("#g-seed", this.root);
+    if (seed) seed.value = "-1";
+    prompt?.focus();
+    prompt?.setSelectionRange?.(s.params.prompt.length, s.params.prompt.length);
+    toast("已恢复上次提示词，修改后点击「开始生成」", "info");
   }
 
   /* ============ 右栏：参数 ============ */
@@ -590,10 +629,11 @@ export class GenerateView {
     g("g-cancel")?.addEventListener("click", () => this.cancel());
 
     // 结果操作
+    g("g-zoom")?.addEventListener("click", () => this.previewResult());
     g("g-save")?.addEventListener("click", () => this.saveResult());
     g("g-fav")?.addEventListener("click", () => this.favoriteResult());
     g("g-copy")?.addEventListener("click", () => this.copyResult());
-    g("g-regen")?.addEventListener("click", () => { s.seed = -1; this.submit(); });
+    g("g-regen")?.addEventListener("click", () => this.restoreLastParams());
     g("g-clearref")?.addEventListener("click", () => { s.refImage = null; s.result = null; this.render(); });
 
     // 拖放（img2img 参考图）
@@ -604,6 +644,7 @@ export class GenerateView {
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); this.submit(); }
     });
     if (s.loraExpanded) this.setupLoraPagination();
+    this.bindCanvasZoom();
   }
 
   setMode(mode, { restoreFocus = false } = {}) {
@@ -696,6 +737,14 @@ export class GenerateView {
         scheduler: p.scheduler || "normal",
       });
     }
+    // 记录本次提交的参数，供「重生成」回填
+    s.lastParams = {
+      prompt: payload.prompt,
+      negative_prompt: payload.negative_prompt || "",
+      seed: s.seed,
+      width: payload.width,
+      height: payload.height,
+    };
     // 保证 -1 随机时后端回传真实种子
     const btn = $("#g-submit", this.root);
     if (btn) btn.disabled = true;
@@ -733,8 +782,8 @@ export class GenerateView {
       if (holder && !existing) area.prepend(this.progressCard());
       const prog = area.querySelector(".gen-progress");
       if (prog) {
-        const pct = prog.querySelector(".gp-row span:last-child");
-        const barEl = prog.querySelector(".progress i");
+        const pct = prog.querySelector(".gp-pct");
+        const barEl = prog.querySelector(".progress > i");
         if (pct) pct.textContent = job.progress ? `${Math.round(job.progress * 100)}%` : "";
         if (barEl) {
           barEl.style.width = job.progress ? `${Math.round(job.progress * 100)}%` : "";
@@ -751,6 +800,7 @@ export class GenerateView {
     const s = this.state;
     s.job = null;
     store.setJobTally(0, 0);
+    store.set("historyDirty", true); // 历史数据已变化，历史页下次进入时重新拉取
     if (job.status === "completed" && job.image) {
       s.result = { job, url: job.image.url };
       s.seed = job.seed ?? s.seed;
@@ -770,19 +820,210 @@ export class GenerateView {
   async saveResult() {
     const r = this.state.result;
     if (!r) return;
-    try {
-      const a = el("a", { href: r.url, download: `winefox_${r.job.seed ?? "img"}.png` });
-      document.body.append(a); a.click(); a.remove();
-    } catch { toast("保存失败", "err"); }
+    const res = await saveImageDialog(r.url, `winefox_${r.job.seed ?? "img"}.png`);
+    if (res.ok && res.downloaded) toast("已开始保存图片", "ok");
+    else if (res.ok && res.path) toast("已保存到 " + res.path, "ok");
+    else if (!res.ok && !res.cancelled) toast("保存失败，请重试", "err");
   }
 
   async favoriteResult() {
     const r = this.state.result;
     if (!r?.job?.id) return;
+    const btn = $("#g-fav", this.root);
     try {
       await api.favoriteHistory(r.job.id);
+      store.set("favoritesDirty", true);
+      if (btn) {
+        btn.classList.remove("fav-pop");
+        void btn.offsetWidth;
+        btn.classList.add("fav-pop");
+        btn.replaceChildren(ic("favFill"), esc("收藏"));
+        const ico = btn.querySelector("svg");
+        if (ico) ico.style.color = "var(--danger)";
+      }
       toast("已加入收藏", "ok");
     } catch (e) { toast("收藏失败：" + e.message, "err"); }
+  }
+
+  /* ============ 画布图片滚轮缩放 + 拖拽平移（仅当画布里有图） ============ */
+  bindCanvasZoom() {
+    const area = $("#canvas-area", this.root);
+    if (!area) return;
+    const img = area.querySelector(".canvas-img");
+    if (!img) return;
+    const z = { level: 1, tx: 0, ty: 0, moved: false };
+    this.canvasZoom = z;
+    const apply = () => {
+      img.style.transformOrigin = "0 0";
+      img.style.transform = `translate(${z.tx}px, ${z.ty}px) scale(${z.level})`;
+      let badge = area.querySelector(".zoom-badge");
+      if (z.level === 1 && z.tx === 0 && z.ty === 0) {
+        badge?.remove();
+        return;
+      }
+      if (!badge) {
+        badge = el("span", { class: "zoom-badge", role: "status" });
+        area.append(badge);
+      }
+      badge.textContent = `×${z.level.toFixed(2).replace(/\.?0+$/, "")}`;
+    };
+    const onWheel = (e) => {
+      e.preventDefault();
+      const rect = img.getBoundingClientRect();
+      const mx = e.clientX - (rect.left - z.tx);
+      const my = e.clientY - (rect.top - z.ty);
+      const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+      const next = Math.min(6, Math.max(0.25, z.level * factor));
+      if (next === z.level) return;
+      const px = mx / z.level;
+      const py = my / z.level;
+      z.tx = mx - px * next;
+      z.ty = my - py * next;
+      z.level = next;
+      apply();
+    };
+    let drag = null;
+    const onDown = (e) => {
+      if (e.button !== 0) return;
+      drag = { x: e.clientX, y: e.clientY, tx: z.tx, ty: z.ty };
+      img.classList.add("dragging");
+    };
+    const onMove = (e) => {
+      if (!drag) return;
+      if (Math.abs(e.clientX - drag.x) + Math.abs(e.clientY - drag.y) > 3) z.moved = true;
+      z.tx = drag.tx + (e.clientX - drag.x);
+      z.ty = drag.ty + (e.clientY - drag.y);
+      apply();
+    };
+    const onUp = () => {
+      drag = null;
+      img.classList.remove("dragging");
+    };
+    const onDbl = (e) => {
+      e.preventDefault();
+      const rect = img.getBoundingClientRect();
+      const mx = e.clientX - (rect.left - z.tx);
+      const my = e.clientY - (rect.top - z.ty);
+      if (z.level !== 1) {
+        z.level = 1; z.tx = 0; z.ty = 0;
+      } else {
+        z.level = 2;
+        z.tx = -mx;
+        z.ty = -my;
+      }
+      apply();
+    };
+    area.addEventListener("wheel", onWheel, { passive: false });
+    img.addEventListener("pointerdown", onDown);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    img.addEventListener("dblclick", onDbl);
+    this._canvasZoomCleanup = () => {
+      area.removeEventListener("wheel", onWheel);
+      img.removeEventListener("pointerdown", onDown);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      img.removeEventListener("dblclick", onDbl);
+    };
+  }
+
+  /* ============ 参考图放大预览 ============ */
+  previewRefImage() {
+    const r = this.state.refImage;
+    if (!r) return;
+    const overlay = el("div", { class: "overlay preview-overlay", role: "dialog", "aria-modal": "true", "aria-label": "参考图预览" });
+    const modal = el("div", { class: "modal" }, [
+      el("div", { class: "modal-head" }, [
+        el("h3", {}, "参考图"),
+        el("button", { class: "icon-btn", type: "button", "aria-label": "关闭" }, [ic("x")]),
+      ]),
+      el("div", { class: "preview-body" }, [el("img", { src: r.url, alt: "参考图大图" })]),
+    ]);
+    overlay.append(modal);
+    document.body.append(overlay);
+    requestAnimationFrame(() => requestAnimationFrame(() => overlay.classList.add("open")));
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+    const close = () => {
+      overlay.classList.add("closing");
+      document.removeEventListener("keydown", onKey);
+      setTimeout(() => overlay.remove(), 180);
+    };
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+    modal.querySelector(".modal-head .icon-btn").addEventListener("click", close);
+    document.addEventListener("keydown", onKey);
+    modal.querySelector(".modal-head .icon-btn").focus();
+  }
+
+  /* ============ 结果放大预览 ============ */
+  previewResult() {
+    const r = this.state.result;
+    if (!r) return;
+    const j = r.job || {};
+    const m = j.meta || {};
+    const val = (a, b) => (a != null && a !== "" ? a : b != null && b !== "" ? b : "—");
+    const dim = val(j.width, m.width) !== "—" ? `${j.width ?? m.width}×${j.height ?? m.height}` : "—";
+    const overlay = el("div", { class: "overlay preview-overlay", role: "dialog", "aria-modal": "true", "aria-label": "生成结果预览" });
+    const modal = el("div", { class: "modal" }, [
+      el("div", { class: "modal-head" }, [
+        el("h3", {}, "生成结果"),
+        el("button", { class: "icon-btn", type: "button", "aria-label": "关闭" }, [ic("x")]),
+      ]),
+      el("div", { class: "preview-body" }, [
+        el("img", { src: r.url, alt: "生成结果大图" }),
+        el("div", { class: "preview-meta" }, [
+          el("div", { class: "pm-block" }, [el("span", { class: "pm-label" }, "提示词"), el("span", { class: "pm-val" }, esc(val(j.prompt, m.prompt)))]),
+          el("div", { class: "pm-block" }, [el("span", { class: "pm-label" }, "负面提示词"), el("span", { class: "pm-val" }, esc(val(j.negative_prompt, m.negative_prompt)))]),
+          el("div", { class: "row wrap gap-3" }, [
+            el("div", { class: "pm-block" }, [el("span", { class: "pm-label" }, "种子"), el("span", { class: "pm-val mono" }, esc(String(val(j.seed, m.seed))))]),
+            el("div", { class: "pm-block" }, [el("span", { class: "pm-label" }, "尺寸"), el("span", { class: "pm-val mono" }, esc(dim))]),
+            el("div", { class: "pm-block" }, [el("span", { class: "pm-label" }, "步数 / CFG"), el("span", { class: "pm-val mono" }, esc(`${val(j.steps, m.steps)} / ${val(j.cfg, m.cfg)}`))]),
+          ]),
+          el("div", { class: "pm-block" }, [el("span", { class: "pm-label" }, "模型族 / 工作流"), el("span", { class: "pm-val" }, esc(`${val(j.family, m.family)} / ${sanitizeName(val(j.workflow, m.workflow))}`))]),
+          el("div", { class: "pm-block" }, [el("span", { class: "pm-label" }, "创建时间"), el("span", { class: "pm-val" }, esc(fmtRelative(j.created_at)))]),
+          el("div", { class: "row gap-2" }, [
+            el("a", { class: "btn btn-primary btn-sm", href: r.url, download: `winefox_${j.seed ?? "img"}.png`, target: "_blank", rel: "noopener" }, [ic("download"), esc("保存")]),
+            el("button", { class: "btn btn-sm", type: "button", id: "pv-fav" }, [ic("fav"), esc("收藏")]),
+            el("button", { class: "btn btn-sm", type: "button", id: "pv-copy" }, [ic("copy"), esc("复制")]),
+          ]),
+        ]),
+      ]),
+    ]);
+    overlay.append(modal);
+    document.body.append(overlay);
+    requestAnimationFrame(() => requestAnimationFrame(() => overlay.classList.add("open")));
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+    const close = () => {
+      overlay.classList.add("closing");
+      document.removeEventListener("keydown", onKey);
+      setTimeout(() => overlay.remove(), 180);
+    };
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+    modal.querySelector(".modal-head .icon-btn").addEventListener("click", close);
+    document.addEventListener("keydown", onKey);
+    modal.querySelector(".modal-head .icon-btn").focus();
+    const favBtn = $("#pv-fav", modal);
+    favBtn?.addEventListener("click", async () => {
+      try {
+        await api.favoriteHistory(j.id);
+        store.set("favoritesDirty", true);
+        if (favBtn) {
+          favBtn.classList.remove("fav-pop");
+          void favBtn.offsetWidth;
+          favBtn.classList.add("fav-pop");
+          favBtn.replaceChildren(ic("favFill"), esc("收藏"));
+          const ico = favBtn.querySelector("svg");
+          if (ico) ico.style.color = "var(--danger)";
+        }
+        toast("已加入收藏", "ok");
+      } catch (e) { toast("收藏失败：" + e.message, "err"); }
+    });
+    $("#pv-copy", modal)?.addEventListener("click", async () => {
+      try {
+        const blob = await (await fetch(r.url)).blob();
+        await navigator.clipboard.write([new ClipboardItem({ [blob.type || "image/png"]: blob })]);
+        toast("已复制到剪贴板", "ok");
+      } catch { toast("复制失败（浏览器不支持）", "warn"); }
+    });
   }
 
   async copyResult() {

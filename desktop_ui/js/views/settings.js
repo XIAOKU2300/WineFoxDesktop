@@ -2,7 +2,7 @@
  * 分组：ComfyUI / TLS / 认证 / AI 提供商 / 默认参数 / 界面。
  * 密钥只显示配置状态（GET /secrets），值仅写入不回读；token 不落 localStorage。
  */
-import { el, $, $$, ic, esc, toast, loadingState } from "../utils.js";
+import { el, $, $$, ic, esc, toast, loadingState, updateBridge, fmtBytesSize, fmtSpeed } from "../utils.js";
 import { api } from "../api.js";
 import { store } from "../store.js";
 
@@ -50,7 +50,7 @@ export class SettingsView {
       ]),
       el("div", { class: "settings-layout" }, [
         el("nav", { class: "settings-nav", "aria-label": "设置分类" }, [
-          ["comfyui", "ComfyUI 连接"], ["tls", "TLS"], ["auth", "认证与密钥"], ["ai_provider", "AI 提供商"], ["defaults", "默认参数"], ["ui", "界面"],
+          ["comfyui", "ComfyUI 连接"], ["tls", "TLS"], ["auth", "认证与密钥"], ["ai_provider", "AI 提供商"], ["defaults", "默认参数"], ["ui", "界面"], ["about", "关于与更新"],
         ].map(([id, label]) => {
           const b = el("button", { type: "button", "aria-current": this.section === id ? "true" : "false", dataset: { sec: id } }, esc(label));
           b.addEventListener("click", () => this.activateSection(id));
@@ -667,6 +667,113 @@ export class SettingsView {
       if (button) disabledButton(button, false, "保存");
     }
   }
+  /* ---------- 关于与更新 ---------- */
+  sec_about() {
+    const nodes = [
+      el("div", { class: "section-card" }, [
+        el("div", { class: "sec-head" }, [el("h3", {}, "关于与更新"), el("span", { class: "badge neutral" }, "稳定版")]),
+        el("div", { class: "sec-body stack-3" }, [
+          el("div", { class: "row wrap gap-3" }, [
+            el("div", { class: "pm-block" }, [el("span", { class: "pm-label" }, "当前版本"), el("span", { class: "pm-val mono", id: "up-version" }, "—")]),
+            el("div", { class: "pm-block" }, [el("span", { class: "pm-label" }, "更新渠道"), el("span", { class: "pm-val" }, "稳定版")]),
+            el("div", { class: "pm-block" }, [el("span", { class: "pm-label" }, "上次检查"), el("span", { class: "pm-val", id: "up-last-check" }, "—")]),
+          ]),
+          el("div", { class: "row gap-2" }, [
+            el("button", { class: "btn btn-sm", type: "button", id: "up-check" }, [ic("refresh"), esc("检查更新")]),
+          ]),
+          el("div", { id: "up-status", class: "up-status" }, [loadingState("正在获取更新状态", { compact: true })]),
+        ]),
+      ]),
+    ];
+    this.bindAboutEvents();
+    this._aboutUnsub = updateBridge.onState((state) => this.renderUpdateState(state));
+    updateBridge.getState().then((res) => {
+      if (res.ok) this.renderUpdateState(res.state);
+      else this.renderUpdateState({ phase: "failed", error: res.error || "无法连接更新服务" });
+    });
+    return nodes;
+  }
+
+  bindAboutEvents() {
+    $("#up-check", this.root)?.addEventListener("click", () => {
+      updateBridge.check().then((res) => {
+        if (!res.ok) this.renderUpdateState({ phase: "failed", error: res.error || "检查失败" });
+      });
+    });
+  }
+
+  renderUpdateState(state) {
+    const box = $("#up-status", this.root);
+    if (!box) return;
+    const lc = $("#up-last-check", this.root);
+    if (lc && state.lastChecked) lc.textContent = new Date(state.lastChecked).toLocaleString("zh-CN");
+    const ver = $("#up-version", this.root);
+    if (ver && state.currentVersion) ver.textContent = state.currentVersion;
+    const busy = state.busyTasks > 0;
+    let node;
+    switch (state.phase) {
+      case "idle":
+        node = el("p", { class: "text-sm text-muted" }, "尚未检查更新。");
+        break;
+      case "checking":
+        node = loadingState("正在检查更新…", { compact: true });
+        break;
+      case "upToDate":
+        node = el("p", { class: "up-ok" }, [ic("check"), el("span", {}, `已是最新版本 ${state.currentVersion || ""}`)]);
+        break;
+      case "available":
+        node = el("div", { class: "up-available stack-2" }, [
+          el("div", { class: "stack-1" }, [
+            el("b", { class: "up-new" }, `发现新版本 ${state.newVersion || ""}`),
+            el("span", { class: "text-xs text-muted" }, [
+              esc(`当前 ${state.currentVersion || "—"} · ${state.pubDate ? "发布时间 " + new Date(state.pubDate).toLocaleString("zh-CN") : ""} · 安装包 ${fmtBytesSize(state.sizeBytes)}`),
+            ]),
+          ]),
+          state.notes ? el("p", { class: "up-notes text-sm" }, esc(state.notes)) : null,
+          el("div", { class: "row gap-2" }, [
+            el("button", { class: "btn btn-primary btn-sm", type: "button", id: "up-install", disabled: busy }, [ic("download"), esc(busy ? "等待任务完成后更新" : "下载并安装")]),
+            el("button", { class: "btn btn-sm", type: "button", id: "up-later" }, "稍后提醒"),
+          ]),
+          busy ? el("span", { class: "text-xs", style: "color:var(--warn)" }, "当前有生成任务，安装需等任务完成后再执行。") : null,
+        ]);
+        break;
+      case "downloading": {
+        const pct = state.totalBytes ? Math.min(100, Math.round((state.downloadedBytes / state.totalBytes) * 100)) : null;
+        node = el("div", { class: "stack-2" }, [
+          el("div", { class: "row-between gap-3" }, [
+            el("span", { class: "text-sm" }, "正在下载更新…"),
+            el("span", { class: "text-xs mono text-muted" }, esc(`${fmtBytesSize(state.downloadedBytes)} / ${fmtBytesSize(state.totalBytes)}${state.speedBps ? " · " + fmtSpeed(state.speedBps) : ""}`)),
+          ]),
+          el("div", { class: "progress" + (pct ? "" : " indeterminate") }, [el("i", { style: pct ? `width:${pct}%` : "" })]),
+        ]);
+        break;
+      }
+      case "verifying":
+        node = loadingState("正在验证更新签名…", { compact: true });
+        break;
+      case "installing":
+        node = loadingState("正在安装更新，请稍候…", { compact: true });
+        break;
+      case "restarting":
+        node = loadingState("更新完成，正在重启…", { compact: true });
+        break;
+      case "failed":
+        node = el("p", { class: "text-sm", style: "color:var(--danger)" }, [ic("warn"), esc(` ${state.error || "检查失败，请检查网络"}`)]);
+        break;
+      default:
+        node = el("p", { class: "text-sm text-muted" }, "—");
+    }
+    box.replaceChildren(node);
+    $("#up-install", box)?.addEventListener("click", () => {
+      updateBridge.download().then((res) => {
+        if (!res.ok) toast(res.error || "下载失败", "err");
+      });
+    });
+    $("#up-later", box)?.addEventListener("click", () => {
+      this.renderUpdateState({ phase: "idle" });
+    });
+  }
+
 }
 
 function withDeadline(run, ms, message) {

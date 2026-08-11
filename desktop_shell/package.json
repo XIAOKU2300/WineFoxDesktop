@@ -1,6 +1,6 @@
 {
   "name": "winefox-desktop",
-  "version": "8.5.11",
+  "version": "8.6.0",
   "private": true,
   "description": "WineFox Desktop shell frontend (static, no bundler)",
   "scripts": {

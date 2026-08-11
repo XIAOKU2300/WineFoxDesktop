@@ -1,6 +1,6 @@
 [package]
 name = "winefox-desktop"
-version = "8.5.11"
+version = "8.6.0"
 description = "WineFox Desktop shell (Tauri 2, Windows x64)"
 authors = ["WineFox Agent 09 <agent09@local.invalid>"]
 edition = "2021"
@@ -16,13 +16,18 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-single-instance = "2"
+tauri-plugin-dialog = "2"
+base64 = "0.22"
+ed25519-dalek = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+url = "2"
 regex-lite = "0.1"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_System_JobObjects",
     "Win32_System_Threading",
+    "Win32_Networking_WinHttp",
 ] }
 
 [profile.release]

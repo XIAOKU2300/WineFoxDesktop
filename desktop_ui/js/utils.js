@@ -168,12 +168,79 @@ export function toast(msg, kind = "ok", ms = 3200) {
     el("span", { class: "t-ico" }, [ic(icons[kind] || "info")]),
     el("span", { class: "t-msg" }, msg),
   ]);
+  node.style.setProperty("--toast-ms", ms + "ms");
   toastRegion.append(node);
   const t = setTimeout(() => {
     node.classList.add("leave");
-    setTimeout(() => node.remove(), 200);
+    setTimeout(() => node.remove(), 220);
   }, ms);
   node.addEventListener("click", () => { clearTimeout(t); node.remove(); });
+}
+
+/** 通过 fetch → blob → objectURL 触发下载：WebView2 下 <a download> 对 http URL 无效 */
+export async function downloadUrl(url, filename) {
+  const blob = await (await fetch(url)).blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = objectUrl;
+  a.download = filename || "winefox.png";
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 5000);
+}
+
+/* 保存到用户选择的位置：通过 postMessage 桥调用 Shell 的系统“另存为”对话框。
+ * 返回 { ok, path?, cancelled?, downloaded? }；桥不可用时降级为直接下载。 */
+let saveSeq = 0;
+const saveWaiters = new Map();
+window.addEventListener("message", (event) => {
+  if (event.data?.type !== "winefox-ui-save-result") return;
+  const waiter = saveWaiters.get(event.data.id);
+  if (!waiter) return;
+  saveWaiters.delete(event.data.id);
+  clearTimeout(waiter.timer);
+  waiter.resolve(event.data);
+});
+
+export function saveImageDialog(url, filename) {
+  return new Promise((resolve) => {
+    (async () => {
+      try {
+        const blob = await (await fetch(url)).blob();
+        const dataUrl = await new Promise((res, rej) => {
+          const reader = new FileReader();
+          reader.onload = () => res(reader.result);
+          reader.onerror = () => rej(new Error("读取图片失败"));
+          reader.readAsDataURL(blob);
+        });
+        // 不在 Shell iframe 内（浏览器直接打开）→ 降级为直接下载
+        if (window.parent === window) {
+          await downloadUrl(url, filename);
+          resolve({ ok: true, downloaded: true });
+          return;
+        }
+        const id = "save-" + (++saveSeq) + "-" + Date.now();
+        const result = await new Promise((res) => {
+          const timer = setTimeout(() => {
+            saveWaiters.delete(id);
+            res({ ok: false, timeout: true });
+          }, 60000);
+          saveWaiters.set(id, { timer, resolve: res });
+          window.parent.postMessage({ type: "winefox-ui-save-image", id, dataUrl, filename }, "*");
+        });
+        if (!result.ok && !result.cancelled) {
+          // 桥失败（旧 Shell）→ 降级为直接下载
+          await downloadUrl(url, filename);
+          resolve({ ok: true, downloaded: true });
+        } else {
+          resolve(result);
+        }
+      } catch {
+        resolve({ ok: false, error: "保存失败" });
+      }
+    })();
+  });
 }
 
 /* ================= 内联线描图标 ================= */
@@ -183,6 +250,7 @@ const ICONS = {
   gen: '<path d="M3 4.5h10M3 8h6.5M3 11.5h10M17.5 3v10M12 16l5.5 2.8L23 16" stroke-width="1.5"/>',
   history: '<path d="M3.5 8A5.5 5.5 0 1 1 8 13.5" stroke-width="1.4"/><path d="M3.5 8V4M3.5 8h4M8 5.5V8l2 1.5" stroke-width="1.4"/>',
   fav: '<path d="M8 3.2c-1.9-2.3-5.6-1.4-5.9 1.5-.2 2 1.3 3.7 5.9 7 4.6-3.3 6.1-5 5.9-7C13.6 1.8 9.9.9 8 3.2Z" stroke-width="1.5"/>',
+  favFill: '<path d="M8 3.2c-1.9-2.3-5.6-1.4-5.9 1.5-.2 2 1.3 3.7 5.9 7 4.6-3.3 6.1-5 5.9-7C13.6 1.8 9.9.9 8 3.2Z" fill="currentColor"/>',
   model: '<path d="M8 2.8 2.8 5.5v5L8 13.2l5.2-2.7v-5L8 2.8Z" stroke-width="1.4"/><path d="M2.8 5.5 8 8.2l5.2-2.7M8 8.2v5" stroke-width="1.4"/>',
   gear: '<path d="M8 10.2a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4Z" stroke-width="1.5"/><path d="M8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6M3.6 3.6l1.1 1.1M11.3 11.3l1.1 1.1M12.4 3.6l-1.1 1.1M4.7 11.3l-1.1 1.1" stroke-width="1.4"/>',
   diag: '<path d="M3 12.5h2v-3H3v3ZM7 12.5h2V5.5H7v7ZM11 12.5h2V8.5h-2v4ZM15 12.5h2V3h-2v9.5ZM2 15.5h14" stroke-width="1.4"/>',
@@ -201,6 +269,8 @@ const ICONS = {
   warn: '<path d="M8 2.5 14.8 13.5H1.2L8 2.5Z" stroke-width="1.4"/><path d="M8 6.5v3M8 11.4v.1" stroke-width="1.5"/>',
   info: '<path d="M8 14.5a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13Z" stroke-width="1.3"/><path d="M8 7.5V11M8 4.8v.1" stroke-width="1.5"/>',
   queue: '<path d="M3 4h10M3 8h10M3 12h6" stroke-width="1.5"/><path d="M14 12.5h2.5V15H14z" stroke-width="1.2"/>',
+  flask: '<path d="M6.2 2.8h3.6M7 2.8v4.2L3.4 12a2 2 0 0 0 1.7 3h5.8a2 2 0 0 0 1.7-3L9 7V2.8" stroke-width="1.4"/><path d="M5.6 10h4.8" stroke-width="1.3"/>',
+  link: '<path d="M7 9.2 9.2 11a3.4 3.4 0 0 0 4.8 0l1.5-1.5a3.4 3.4 0 0 0-4.8-4.8L9.8 5.6" stroke-width="1.3"/><path d="M9 6.8 6.8 5A3.4 3.4 0 0 0 2 9.8l1.5 1.5a3.4 3.4 0 0 0 4.8 0L9.2 10" stroke-width="1.3"/>',
   wand: '<path d="m4 12 6-6 2 2-6 6-2.5.5L4 12Z" stroke-width="1.3"/><path d="m8.5 7.5 2 2M11.5 3l.5 1.5L13.5 5 12 5.5 11.5 7 11 5.5 9.5 5 11 4.5 11.5 3Z" stroke-width="1.2"/>',
   trashOpen: '<path d="M3 4.5h10M6 6.2 5.8 12a1 1 0 0 0 1 1h4.4a1 1 0 0 0 1-1l-.2-5.8M7.3 7.5v3.8M9.7 7.5v3.8" stroke-width="1.3"/>',
   alert: '<path d="M8 2.5 14.8 13.5H1.2L8 2.5Z" stroke-width="1.4"/><path d="M8 6.5v3M8 11.4v.1" stroke-width="1.5"/>',
@@ -230,3 +300,121 @@ export const STATUS_META = {
   failed: { label: "失败", cls: "danger" },
   cancelled: { label: "已取消", cls: "neutral" },
 };
+
+/* ================= 自动更新桥（iframe → Shell → Rust） ================= */
+let updateSeq = 0;
+const updateWaiters = new Map();
+const updateStateListeners = new Set();
+
+window.addEventListener("message", (event) => {
+  if (event.data?.type === "winefox-ui-update-reply") {
+    const waiter = updateWaiters.get(event.data.id);
+    if (!waiter) return;
+    updateWaiters.delete(event.data.id);
+    clearTimeout(waiter.timer);
+    waiter.resolve(event.data);
+  } else if (event.data?.type === "winefox-ui-update-state") {
+    updateStateListeners.forEach((fn) => { try { fn(event.data.state); } catch { /* 忽略 */ } });
+  }
+});
+
+function updateRequest(action) {
+  return new Promise((resolve) => {
+    if (window.parent === window) {
+      resolve({ ok: false, error: "未运行在桌面壳中" });
+      return;
+    }
+    const id = "up-" + (++updateSeq) + "-" + Date.now();
+    const timer = setTimeout(() => {
+      updateWaiters.delete(id);
+      resolve({ ok: false, error: "更新服务无响应" });
+    }, 20000);
+    const p = new Promise((res) => updateWaiters.set(id, { timer, resolve: res }));
+    window.parent.postMessage({ type: "winefox-ui-update", action, id }, "*");
+    p.then(resolve);
+  });
+}
+
+export const updateBridge = {
+  getState: () => updateRequest("getState"),
+  check: () => updateRequest("check"),
+  download: () => updateRequest("download"),
+  onState: (fn) => {
+    updateStateListeners.add(fn);
+    return () => updateStateListeners.delete(fn);
+  },
+};
+
+/* ================= 调试模式与房间桥（iframe → Shell → Rust） ================= */
+let bridgeSeq = 0;
+const debugWaiters = new Map();
+const debugStateListeners = new Set();
+const roomWaiters = new Map();
+const roomStateListeners = new Set();
+
+window.addEventListener("message", (event) => {
+  if (event.data?.type === "winefox-ui-debug-reply") {
+    const waiter = debugWaiters.get(event.data.id);
+    if (!waiter) return;
+    debugWaiters.delete(event.data.id);
+    clearTimeout(waiter.timer);
+    waiter.resolve(event.data);
+  } else if (event.data?.type === "winefox-ui-debug-state") {
+    debugStateListeners.forEach((fn) => { try { fn(!!event.data.enabled); } catch { /* 忽略 */ } });
+  } else if (event.data?.type === "winefox-ui-room-state") {
+    roomStateListeners.forEach((fn) => { try { fn(event.data.state); } catch { /* 忽略 */ } });
+  }
+});
+
+function bridgeRequest(prefix, messageType, action, payload = {}) {
+  return new Promise((resolve) => {
+    if (window.parent === window) {
+      resolve({ ok: false, error: "未运行在桌面壳中" });
+      return;
+    }
+    const id = prefix + "-" + (++bridgeSeq) + "-" + Date.now();
+    const timer = setTimeout(() => {
+      debugWaiters.delete(id);
+      resolve({ ok: false, error: "本地服务无响应" });
+    }, 20000);
+    const p = new Promise((res) => debugWaiters.set(id, { timer, resolve: res }));
+    window.parent.postMessage({ type: messageType, action, ...payload, id }, "*");
+    p.then(resolve);
+  });
+}
+
+export const debugBridge = {
+  click: () => bridgeRequest("dbg", "winefox-ui-debug", "click"),
+  getState: () => bridgeRequest("dbg", "winefox-ui-debug", "getState"),
+  onDebugState: (fn) => {
+    debugStateListeners.add(fn);
+    return () => debugStateListeners.delete(fn);
+  },
+};
+
+export const roomBridge = {
+  getState: () => bridgeRequest("rm", "winefox-ui-room", "getState"),
+  start: (settings) => bridgeRequest("rm", "winefox-ui-room", "start", { settings }),
+  stop: () => bridgeRequest("rm", "winefox-ui-room", "stop"),
+  setTunnel: (url) => bridgeRequest("rm", "winefox-ui-room", "setTunnel", { url }),
+  clearTunnel: () => bridgeRequest("rm", "winefox-ui-room", "clearTunnel"),
+  provisionTunnel: () => bridgeRequest("rm", "winefox-ui-room", "provisionTunnel"),
+  stopTunnel: () => bridgeRequest("rm", "winefox-ui-room", "stopTunnel"),
+  cloudflaredAvailable: () => bridgeRequest("rm", "winefox-ui-room", "cloudflaredAvailable"),
+  onState: (fn) => {
+    roomStateListeners.add(fn);
+    return () => roomStateListeners.delete(fn);
+  },
+};
+
+export function fmtBytesSize(bytes) {
+  if (!bytes || bytes <= 0) return "—";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+export function fmtSpeed(bps) {
+  if (!bps) return "";
+  return bps >= 1024 * 1024 ? `${(bps / 1024 / 1024).toFixed(1)} MB/s` : `${Math.round(bps / 1024)} KB/s`;
+}

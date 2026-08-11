@@ -2,4 +2,5 @@
 pyinstaller>=6.16,<7
 aiohttp>=3.10,<4
 Pillow>=10,<13
+argon2-cffi>=25,<26
 keyring>=25,<26

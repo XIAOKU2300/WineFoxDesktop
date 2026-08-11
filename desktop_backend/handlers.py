@@ -175,6 +175,56 @@ async def handle_catalog(request: web.Request) -> web.Response:
     return _json(await engine.get_catalog())
 
 
+async def handle_lora_search(request: web.Request) -> web.Response:
+    engine = _ctx(request).get("engine")
+    if engine is None or not hasattr(engine, "search_loras"):
+        raise AppError(503, "lora_download_not_configured", "LoRA 下载服务未配置")
+    query = str(request.query.get("q") or "").strip()
+    family = str(request.query.get("family") or "illustrious").strip().lower()
+    try:
+        limit = int(request.query.get("limit") or 12)
+    except ValueError as exc:
+        raise ValidationError("limit 必须是整数") from exc
+    if not query or len(query) > 120:
+        raise ValidationError("LoRA 搜索词长度必须为 1-120 个字符")
+    if family not in {"anima", "illustrious"}:
+        raise ValidationError("模型族必须是 anima 或 illustrious")
+    return _json(await engine.search_loras(query, family=family, limit=max(1, min(limit, 20))))
+
+
+async def handle_start_lora_download(request: web.Request) -> web.Response:
+    engine = _ctx(request).get("engine")
+    if engine is None or not hasattr(engine, "start_lora_download"):
+        raise AppError(503, "lora_download_not_configured", "LoRA 下载服务未配置")
+    body = await _json_body(request)
+    if not isinstance(body, dict):
+        raise ValidationError("LoRA 下载请求体必须是 JSON 对象")
+    result_id = str(body.get("result_id") or "").strip()
+    alias = str(body.get("alias") or "").strip()
+    if not re.fullmatch(r"[0-9a-f]{32}", result_id):
+        raise ValidationError("搜索结果 ID 无效，请重新搜索")
+    if len(alias) > 80:
+        raise ValidationError("中文别称不能超过 80 个字符")
+    return _json(await engine.start_lora_download(result_id, alias=alias), status=202)
+
+
+async def handle_get_lora_download(request: web.Request) -> web.Response:
+    engine = _ctx(request).get("engine")
+    if engine is None or not hasattr(engine, "get_lora_download"):
+        raise AppError(503, "lora_download_not_configured", "LoRA 下载服务未配置")
+    job_id = str(request.match_info.get("id") or "").strip()
+    if not re.fullmatch(r"[0-9a-f]{32}", job_id):
+        raise ValidationError("LoRA 下载任务 ID 无效")
+    return _json(await engine.get_lora_download(job_id))
+
+
+async def handle_probe_lora_bridge(request: web.Request) -> web.Response:
+    engine = _ctx(request).get("engine")
+    if engine is None or not hasattr(engine, "probe_lora_bridge"):
+        raise AppError(503, "lora_download_not_configured", "LoRA 下载服务未配置")
+    return _json(await engine.probe_lora_bridge())
+
+
 # ---------------- uploads ----------------
 
 async def handle_upload(request: web.Request) -> web.Response:
@@ -533,6 +583,10 @@ def register_routes(app: web.Application) -> None:
     app.router.add_post("/api/v1/probe", handle_probe)
     app.router.add_get("/api/v1/catalog", handle_catalog)
     app.router.add_get("/api/v1/models", handle_catalog)
+    app.router.add_get("/api/v1/lora/search", handle_lora_search)
+    app.router.add_post("/api/v1/lora/downloads", handle_start_lora_download)
+    app.router.add_get("/api/v1/lora/downloads/{id}", handle_get_lora_download)
+    app.router.add_post("/api/v1/lora/bridge/probe", handle_probe_lora_bridge)
     app.router.add_post("/api/v1/uploads", handle_upload)
     app.router.add_get("/api/v1/uploads/{id}", handle_get_upload)
     app.router.add_post("/api/v1/jobs", handle_submit_job)

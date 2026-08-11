@@ -148,14 +148,15 @@ body::before {
 .gen-progress { animation: materialize 360ms var(--ease-out); }
 .progress.indeterminate > i { animation-timing-function: var(--ease-out); }
 
-.img-grid > :nth-child(-n+8), .model-list > :nth-child(-n+8), .diag-grid > :nth-child(-n+8) { animation: itemArrive 300ms var(--ease-out) both; }
+.img-grid > * { animation: itemArrive 460ms cubic-bezier(.22, 1, .36, 1) both; }
+.model-list > *, .diag-grid > * { animation: itemArrive 420ms cubic-bezier(.22, 1, .36, 1) both; }
 .img-cell, .fav-cell { content-visibility: auto; contain: layout paint style; contain-intrinsic-size: 180px; }
 .model-row { content-visibility: auto; contain: layout paint style; contain-intrinsic-size: 56px; }
-.img-grid > :nth-child(2), .model-list > :nth-child(2), .diag-grid > :nth-child(2) { animation-delay: 35ms; }
-.img-grid > :nth-child(3), .model-list > :nth-child(3), .diag-grid > :nth-child(3) { animation-delay: 70ms; }
-.img-grid > :nth-child(4), .model-list > :nth-child(4), .diag-grid > :nth-child(4) { animation-delay: 105ms; }
-.img-grid > :nth-child(n+5):nth-child(-n+8), .model-list > :nth-child(n+5):nth-child(-n+8), .diag-grid > :nth-child(n+5):nth-child(-n+8) { animation-delay: 110ms; }
-.toast { animation: toastMaterialize 380ms var(--ease-out); }
+.img-grid > :nth-child(2) { animation-delay: 60ms; }
+.img-grid > :nth-child(3) { animation-delay: 120ms; }
+.img-grid > :nth-child(4) { animation-delay: 180ms; }
+.img-grid > :nth-child(n+5) { animation-delay: 220ms; }
+.toast { animation: toastIn 460ms cubic-bezier(.22, 1, .36, 1); }
 .modal { transform-origin: 50% 42%; animation: modalMaterialize 360ms var(--ease-out); }
 
 ::view-transition-old(root) { animation: themeOld 180ms ease-in both; }
@@ -177,11 +178,19 @@ body::before {
 @keyframes dropInvite { to { border-color: var(--primary); box-shadow: inset 0 0 0 2px var(--primary-soft-2); } }
 @keyframes imageDevelop { from { opacity: 0; transform: scale(.985); filter: saturate(.5); } }
 @keyframes materialize { from { opacity: 0; transform: translateY(12px) scale(.99); backdrop-filter: blur(0); } }
-@keyframes itemArrive { from { opacity: 0; transform: translateY(8px); } }
+@keyframes itemArrive { from { opacity: 0; transform: translateY(18px) scale(.98); filter: blur(4px); } }
 @keyframes toastMaterialize { from { opacity: 0; transform: translateX(14px) scale(.985); backdrop-filter: blur(0); } }
 @keyframes modalMaterialize { from { opacity: 0; transform: translateY(12px) scale(.98); backdrop-filter: blur(0); } }
 @keyframes themeOld { to { opacity: 0; } }
 @keyframes themeNew { from { opacity: 0; } }
+
+/* 生成等待艺术装置 / 进度卡 / 收藏反馈 */
+@keyframes gwSpin { to { transform: rotate(360deg); } }
+@keyframes gwHalo { 50% { opacity: .5; transform: scale(1.16); } }
+@keyframes gwFloat { 50% { transform: translateY(-3px); } }
+@keyframes gpDot { 0%, 100% { transform: translateY(0); opacity: .35; } 35% { transform: translateY(-3px); opacity: 1; } }
+@keyframes gpShimmer { to { transform: translateX(120%); } }
+@keyframes favPop { 0% { transform: scale(1); } 38% { transform: scale(1.32); } 70% { transform: scale(.94); } 100% { transform: scale(1); } }
 
 @media (prefers-reduced-transparency: reduce) {
   .topbar, .rail, .gen-progress, .modal, .toast { background: var(--surface); backdrop-filter: none; }
@@ -195,4 +204,6 @@ body::before {
   .app { opacity: 1; transform: none; }
   .view-motion-enter, .view-motion-enter *, .img-grid > *, .model-list > *, .diag-grid > * { animation: none !important; }
   .mode-switch-thumb { transition-duration: 0ms; }
+  .gen-wait-art .gw-halo, .gen-wait-art .gw-orbit, .gen-wait-art .gw-core, .gp-dots i, .progress > i::after { animation: none !important; }
+  .preview-overlay, .preview-overlay .modal { transition-duration: 0ms; }
 }

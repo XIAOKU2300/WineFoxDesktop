@@ -188,6 +188,26 @@ rtk powershell -NoProfile -ExecutionPolicy Bypass -File packaging\nsis\build-nsi
 packaging\nsis\WineFox-Setup-<版本>-x64.exe
 ```
 
+### 7.5 生成签名更新清单（仅发布机）
+
+发布机需要有 `~/.winefox/update.key`（Ed25519 私钥，见 `packaging/updater/README.md`）。
+对刚构建的安装包签名并生成 `latest.json`：
+
+```powershell
+rtk powershell -NoProfile -ExecutionPolicy Bypass -File packaging\updater\build-feed.ps1 -Notes "本次更新说明"
+```
+
+成功输出：
+
+```text
+packaging\nsis\latest.json
+```
+
+该文件包含版本、下载 URL、Ed25519 签名与字节数，随安装包一起上传到 GitHub
+Release（Tag 例如 `v8.6.0`），更新器从
+`releases/latest/download/latest.json` 拉取。签名失败（私钥缺失/口令错误）必须
+中止，不得发布未签名清单。
+
 ## 8. 产物验证
 
 将 `<版本>` 替换为本次版本：

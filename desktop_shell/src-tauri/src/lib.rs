@@ -8,14 +8,19 @@
 //!   * graceful sidecar cleanup with a force-kill timeout fallback
 
 mod commands;
+mod debug_mode;
 mod handshake;
 mod http_client;
 mod job_object;
 mod panel_protocol;
+mod room_control;
 mod sanitize;
 mod sidecar;
 mod state;
 mod tray;
+mod tunnel;
+mod updater;
+mod winhttp;
 
 use sidecar::SidecarManager;
 use state::AppState;
@@ -37,7 +42,9 @@ pub fn run() {
             }
             let _ = app.emit("focus-requested", ());
         }))
+        .plugin(tauri_plugin_dialog::init())
         .manage(state.clone())
+        .manage(debug_mode::DebugMode::new())
         .register_asynchronous_uri_scheme_protocol(
             panel_protocol::PANEL_SCHEME,
             move |_ctx, request, responder| {
@@ -54,10 +61,27 @@ pub fn run() {
             commands::begin_exit,
             commands::confirm_exit,
             commands::cancel_exit,
+            commands::save_base64_image,
+            commands::check_update,
+            commands::get_update_state,
+            commands::download_update,
+            debug_mode::record_logo_click,
+            debug_mode::get_debug_mode,
+            room_control::start_room,
+            room_control::stop_room,
+            room_control::get_room_status,
+            room_control::set_room_tunnel,
+            room_control::clear_room_tunnel,
+            room_control::provision_room_tunnel,
+            room_control::stop_room_tunnel,
+            room_control::cloudflared_available,
         ])
         .setup(move |app| {
             let manager = SidecarManager::new(app.handle().clone(), state.clone());
             app.manage(Arc::clone(&manager));
+            let updater = updater::UpdateManager::new(sidecar::APP_VERSION);
+            app.manage(Arc::clone(&updater));
+            updater.start_auto_check(app.handle().clone());
             tray::build_tray(app.handle(), &manager)?;
             manager.start();
             Ok(())

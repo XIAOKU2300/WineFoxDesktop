@@ -63,6 +63,40 @@ async def _health_selftest(port: int) -> None:
                 raise RuntimeError("sidecar health selftest failed")
 
 
+async def _room_start(runtime: DesktopRuntime, command: dict[str, Any]) -> None:
+    """处理 room_start：启动房间网关；失败返回带稳定错误码的 ack。"""
+    manager = runtime.room_manager
+    if manager is None:
+        emit({"type": "ack", "cmd": "room_start", "ok": False, "error": "房间管理器未就绪",
+              "errorCode": "ROOM_MANAGER_UNAVAILABLE"})
+        return
+    settings = command.get("settings") if isinstance(command.get("settings"), dict) else {}
+    try:
+        status = await manager.start(settings)
+    except Exception as exc:
+        error_code = getattr(exc, "error_code", "ROOM_START_FAILED")
+        message = getattr(exc, "message", None) or str(exc) or "房间启动失败"
+        manager.fail(message, error_code)
+        emit({"type": "ack", "cmd": "room_start", "ok": False, "error": message, "errorCode": error_code})
+        return
+    emit({"type": "ack", "cmd": "room_start", "ok": True, "room": status})
+
+
+async def _room_tunnel(runtime: DesktopRuntime, command: dict[str, Any]) -> None:
+    manager = runtime.room_manager
+    if manager is None:
+        emit({"type": "ack", "cmd": "room_tunnel", "ok": False, "error": "房间管理器未就绪"})
+        return
+    url = str(command.get("url") or "")
+    try:
+        status = await manager.set_tunnel(url)
+    except Exception as exc:
+        message = getattr(exc, "message", None) or str(exc) or "Tunnel 配置失败"
+        emit({"type": "ack", "cmd": "room_tunnel", "ok": False, "error": message})
+        return
+    emit({"type": "ack", "cmd": "room_tunnel", "ok": True, "room": status})
+
+
 async def run(args: argparse.Namespace) -> int:
     logging.basicConfig(
         stream=sys.stderr,
@@ -72,6 +106,15 @@ async def run(args: argparse.Namespace) -> int:
     runtime = DesktopRuntime()
     payload = await runtime.start(ready_stream=None)
     emit({**payload, "impl": "winefox-desktop-runtime", "implVersion": VERSION, "pid": os.getpid()})
+
+    from desktop_room.manager import RoomManager
+    from desktop_room.generation_bridge import DesktopRoomBackend
+
+    runtime.room_manager = RoomManager(
+        emit=emit,
+        rooms_root=runtime.paths.subdir("data") / "rooms",
+        generation_backend=DesktopRoomBackend(runtime.engine),
+    )
 
     if args.selftest:
         try:
@@ -106,6 +149,18 @@ async def run(args: argparse.Namespace) -> int:
                 emit({"type": "ack", "cmd": "ping", "ok": True, "pong": True})
             elif cmd == "status":
                 emit({"type": "status", "busy": runtime.engine.busy(), "tasks": runtime.engine.task_count()})
+            elif cmd == "room_start":
+                await _room_start(runtime, command)
+            elif cmd == "room_stop":
+                if runtime.room_manager is not None:
+                    await runtime.room_manager.stop()
+                emit({"type": "ack", "cmd": "room_stop", "ok": True})
+            elif cmd == "room_tunnel":
+                await _room_tunnel(runtime, command)
+            elif cmd == "room_clear_tunnel":
+                if runtime.room_manager is not None:
+                    runtime.room_manager.clear_tunnel()
+                emit({"type": "ack", "cmd": "room_clear_tunnel", "ok": True})
             elif cmd == "shutdown-cancel":
                 emit({"type": "ack", "cmd": cmd, "ok": True, "pending": False})
             elif cmd == "shutdown":
@@ -119,6 +174,8 @@ async def run(args: argparse.Namespace) -> int:
             else:
                 emit({"type": "ack", "cmd": cmd, "ok": False, "error": "unknown command"})
     finally:
+        if runtime.room_manager is not None:
+            await runtime.room_manager.shutdown()
         await runtime.stop()
     emit({"type": "exit", "code": 0, "reason": exit_reason})
     return 0

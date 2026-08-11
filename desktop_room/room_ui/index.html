@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="light dark" />
+  <title>WineFox 房间</title>
+  <link rel="stylesheet" href="/assets/styles.css" />
+</head>
+<body>
+  <div id="app" class="app">
+    <!-- 启动检查 -->
+    <section id="screen-boot" class="screen screen-boot" hidden>
+      <div class="boot-card">
+        <div class="boot-logo" aria-hidden="true">狐</div>
+        <p>正在连接房间…</p>
+      </div>
+    </section>
+
+    <!-- 加入表单 -->
+    <section id="screen-join" class="screen screen-join" hidden>
+      <div class="join-card">
+        <div class="join-logo" aria-hidden="true">狐</div>
+        <h1 id="join-room-name" class="join-title">WineFox 房间</h1>
+        <p id="join-room-owner" class="join-sub">由房主创建</p>
+        <form id="join-form" novalidate>
+          <label class="field">
+            <span class="field-label">你的昵称</span>
+            <input id="join-name" class="input" type="text" maxlength="24" autocomplete="nickname"
+                   placeholder="输入昵称（1-24 个字符）" required />
+          </label>
+          <label class="field">
+            <span class="field-label">房间密码</span>
+            <input id="join-password" class="input" type="password" maxlength="64" autocomplete="current-password"
+                   placeholder="输入房主提供的密码" required />
+          </label>
+          <div id="join-error" class="form-error" role="alert" hidden></div>
+          <button id="join-submit" class="btn btn-primary btn-block" type="submit">加入房间</button>
+        </form>
+        <p class="join-foot">密码仅用于本次加入，不会保存。</p>
+      </div>
+    </section>
+
+    <!-- 房间工作台 -->
+    <section id="screen-workspace" class="screen screen-workspace" hidden>
+      <header class="topbar">
+        <div class="topbar-brand" aria-hidden="true">狐</div>
+        <div class="topbar-title">
+          <h1 id="ws-room-name" class="ws-room-name">房间</h1>
+          <span id="ws-room-meta" class="ws-room-meta">连接中…</span>
+        </div>
+        <div class="topbar-actions">
+          <button id="ws-leave" class="btn btn-sm" type="button">离开</button>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <!-- 左：聊天 -->
+        <aside class="pane pane-chat" aria-label="聊天">
+          <div class="pane-head">
+            <span class="pane-title">聊天</span>
+            <span id="ws-member-count" class="chip">0 人</span>
+          </div>
+          <div id="ws-members" class="members" aria-label="在线成员"></div>
+          <div id="ws-messages" class="messages" role="log" aria-live="polite"></div>
+          <div class="composer">
+            <textarea id="chat-input" class="input chat-input" rows="2" maxlength="2000"
+                      placeholder="说点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
+            <button id="chat-send" class="btn btn-primary" type="button">发送</button>
+          </div>
+          <div class="composer-extra">
+            <button id="chat-image" class="btn btn-sm btn-ghost" type="button" title="分享图片">图片</button>
+            <span id="chat-hint" class="hint"></span>
+          </div>
+        </aside>
+
+        <!-- 中：画布 -->
+        <section class="pane pane-canvas" aria-label="画布">
+          <div id="canvas-area" class="canvas-area" tabindex="0" role="img" aria-label="生成画布">
+            <div class="canvas-placeholder">
+              <div class="ph-ico" aria-hidden="true">🖼</div>
+              <b>画布</b>
+              <span>生成结果会显示在这里，并出现在聊天里</span>
+            </div>
+          </div>
+          <div class="gen-actions">
+            <button id="g-submit" class="btn btn-primary" type="button">开始生成</button>
+            <button id="g-cancel" class="btn" type="button" hidden>取消</button>
+            <button id="g-save" class="btn btn-sm" type="button" hidden>保存</button>
+            <span id="g-queue-info" class="hint"></span>
+          </div>
+          <div id="g-progress" class="gen-progress" hidden>
+            <div class="gp-row"><span class="gp-state" id="g-progress-label">排队中…</span><span class="gp-pct" id="g-progress-pct"></span></div>
+            <div class="progress" id="g-progress-bar"><i></i></div>
+          </div>
+        </section>
+
+        <!-- 右：参数 -->
+        <aside class="pane pane-params" aria-label="生成参数">
+          <div class="pane-head"><span class="pane-title">生成</span><span id="g-caps" class="hint"></span></div>
+          <div class="params-body">
+            <div class="mode-switch" id="g-mode" role="radiogroup" aria-label="生成模式">
+              <button type="button" role="radio" data-mode="txt2img" aria-checked="true" class="mode-btn mode-active">文生图</button>
+              <button type="button" role="radio" data-mode="img2img" aria-checked="false" class="mode-btn">图生图</button>
+            </div>
+            <label class="field">
+              <span class="field-label">提示词 <button id="g-enhance" class="btn btn-sm btn-ghost" type="button" title="房主 WineFox 增强提示词">✨ 增强</button></span>
+              <textarea id="g-prompt" class="input textarea" rows="4" maxlength="2000"
+                        placeholder="描述你想生成的画面…"></textarea>
+            </label>
+            <label class="field">
+              <span class="field-label">负面提示词</span>
+              <textarea id="g-neg" class="input textarea" rows="2" maxlength="2000"
+                        placeholder="不想出现的内容…"></textarea>
+            </label>
+            <div class="form-row">
+              <label class="field">
+                <span class="field-label">宽度</span>
+                <select id="g-w" class="input select"></select>
+              </label>
+              <label class="field">
+                <span class="field-label">高度</span>
+                <select id="g-h" class="input select"></select>
+              </label>
+            </div>
+            <div class="form-row">
+              <label class="field">
+                <span class="field-label">步数</span>
+                <select id="g-steps" class="input select"></select>
+              </label>
+              <label class="field">
+                <span class="field-label">CFG</span>
+                <select id="g-cfg" class="input select"></select>
+              </label>
+            </div>
+            <div class="form-row">
+              <label class="field">
+                <span class="field-label">采样器</span>
+                <select id="g-sampler" class="input select"></select>
+              </label>
+              <label class="field">
+                <span class="field-label">调度器</span>
+                <select id="g-sched" class="input select"></select>
+              </label>
+            </div>
+            <label class="field">
+              <span class="field-label">种子（-1 = 随机）</span>
+              <div class="num-group">
+                <button type="button" class="num-btn" id="g-seed-dec" aria-label="种子减一">−</button>
+                <input id="g-seed" class="input" type="number" min="-1" step="1" value="-1" />
+                <button type="button" class="num-btn" id="g-seed-inc" aria-label="种子加一">+</button>
+              </div>
+            </label>
+            <label class="field">
+              <span class="field-label">模型族</span>
+              <select id="g-family" class="input select"></select>
+            </label>
+            <label class="field">
+              <span class="field-label">工作流</span>
+              <select id="g-workflow" class="input select"></select>
+            </label>
+            <label class="field" id="g-lora-field">
+              <span class="field-label">LoRA</span>
+              <select id="g-lora" class="input select"></select>
+            </label>
+            <p id="g-mode-hint" class="hint"></p>
+          </div>
+        </aside>
+      </main>
+
+      <!-- 图片大图预览 -->
+      <div id="lightbox" class="lightbox" hidden>
+        <img id="lightbox-img" alt="图片预览" />
+        <button id="lightbox-close" class="icon-btn" type="button" aria-label="关闭">×</button>
+      </div>
+    </section>
+
+    <!-- 房间关闭遮罩 -->
+    <div id="screen-closed" class="screen-closed" hidden>
+      <div class="closed-card">
+        <div class="boot-logo" aria-hidden="true">狐</div>
+        <h1>房间已关闭</h1>
+        <p id="closed-reason">房主已关闭房间。</p>
+        <button id="closed-reload" class="btn" type="button">刷新</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>

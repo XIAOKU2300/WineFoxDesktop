@@ -1,6 +1,8 @@
 import asyncio
 import html
 import json
+import logging
+import os
 import random
 import re
 import shutil
@@ -10,7 +12,10 @@ from urllib.parse import parse_qs, quote, urlencode, urljoin, urlparse
 
 import aiohttp
 from aiohttp import ClientConnectorError, ClientProxyConnectionError
-from astrbot.api import logger
+try:
+    from astrbot.api import logger
+except ImportError:  # Desktop sidecar deliberately does not bundle AstrBot.
+    logger = logging.getLogger("winefox.civitai")
 
 
 CIVITAI_API_BASE = "https://civitai.com/api/v1"
@@ -2304,7 +2309,20 @@ class LoraProfileStore:
 
     def save(self, data: dict):
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(data or {}, ensure_ascii=False, indent=2), encoding="utf-8")
+        payload = json.dumps(data or {}, ensure_ascii=False, indent=2)
+        temp = self.path.with_name(f".{self.path.name}.{os.getpid()}.tmp")
+        try:
+            with temp.open("w", encoding="utf-8", newline="\n") as handle:
+                handle.write(payload)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp, self.path)
+        finally:
+            try:
+                temp.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def _expand_aliases(self, aliases: list) -> list:
         result = []

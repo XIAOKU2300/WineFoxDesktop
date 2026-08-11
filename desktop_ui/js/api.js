@@ -78,6 +78,10 @@ export const api = {
   probe: (payload = {}, options = {}) => request("/comfyui/probe", { ...options, method: "POST", body: JSON.stringify(payload) }),
   catalog: (options = {}) => request("/catalog", options),
   models: (options = {}) => request("/models", options),
+  searchLoras: (query, family = "illustrious", options = {}) => request("/lora/search", { ...options, query: { q: query, family, limit: 12 } }),
+  startLoraDownload: (resultId, alias = "", options = {}) => request("/lora/downloads", { ...options, method: "POST", body: JSON.stringify({ result_id: resultId, alias }) }),
+  loraDownload: (id, options = {}) => request(`/lora/downloads/${encodeURIComponent(id)}`, options),
+  probeLoraBridge: (options = {}) => request("/lora/bridge/probe", { ...options, method: "POST", body: JSON.stringify({}) }),
   uploads: async (formData) => {
     const result = await request("/uploads", { method: "POST", body: formData });
     return {

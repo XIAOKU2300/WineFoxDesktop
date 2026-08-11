@@ -488,6 +488,11 @@ fn session_main(me: &Arc<SidecarManager>) {
                             me.emit_status();
                         }
                     }
+                    Some(Line::Room { payload }) => {
+                        let value: serde_json::Value =
+                            serde_json::from_str(&payload).unwrap_or(serde_json::Value::Null);
+                        crate::room_control::handle_room_status(&me.app, &value);
+                    }
                     Some(Line::Exit { code, reason }) => {
                         me.log("info", &format!("sidecar exit event: code={code} reason={reason}"));
                         me.on_sidecar_exit(code, &reason);

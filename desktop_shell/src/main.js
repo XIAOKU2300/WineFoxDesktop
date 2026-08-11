@@ -5,6 +5,7 @@ const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
 const $ = (id) => document.getElementById(id);
+const PANEL_ORIGIN = "http://winefox-panel.localhost";
 let current = null;
 let panelReady = false;
 let exitModalShown = false;
@@ -135,10 +136,90 @@ async function boot() {
   window.addEventListener("message", (event) => {
     const panel = $("panel");
     if (event.source !== panel.contentWindow || !event.data) return;
+    if (event.origin !== PANEL_ORIGIN) return;
     if (event.data.type === "winefox-ui-progress" && typeof event.data.label === "string") {
       setLaunchText(event.data.label);
     }
     if (event.data.type === "winefox-ui-ready") revealPanel();
+    if (event.data.type === "winefox-ui-save-image") {
+      const reply = (payload) => {
+        panel.contentWindow.postMessage({ type: "winefox-ui-save-result", id: event.data.id, ...payload }, "*");
+      };
+      invoke("save_base64_image", {
+        dataUrl: event.data.dataUrl,
+        filename: event.data.filename || "winefox.png",
+      })
+        .then((path) => reply({ ok: true, path }))
+        .catch((error) => reply({ ok: false, error: String(error) }));
+    }
+    if (event.data.type === "winefox-ui-update") {
+      const reply = (payload) => {
+        panel.contentWindow.postMessage({ type: "winefox-ui-update-reply", id: event.data.id, ...payload }, "*");
+      };
+      const action = event.data.action;
+      if (action === "getState") {
+        invoke("get_update_state").then((state) => reply({ ok: true, state })).catch((e) => reply({ ok: false, error: String(e) }));
+      } else if (action === "check") {
+        invoke("check_update").then((state) => reply({ ok: true, state })).catch((e) => reply({ ok: false, error: String(e) }));
+      } else if (action === "download") {
+        invoke("download_update").then(() => reply({ ok: true })).catch((e) => reply({ ok: false, error: String(e) }));
+      }
+    }
+    if (event.data.type === "winefox-ui-debug") {
+      const reply = (payload) => {
+        panel.contentWindow.postMessage({ type: "winefox-ui-debug-reply", id: event.data.id, ...payload }, "*");
+      };
+      const action = event.data.action;
+      if (action === "getState") {
+        invoke("get_debug_mode").then((state) => reply({ ok: true, state })).catch((e) => reply({ ok: false, error: String(e) }));
+      } else if (action === "click") {
+        invoke("record_logo_click").then((result) => reply({ ok: true, result })).catch((e) => reply({ ok: false, error: String(e) }));
+      }
+    }
+    if (event.data.type === "winefox-ui-room") {
+      const reply = (payload) => {
+        panel.contentWindow.postMessage({ type: "winefox-ui-room-reply", id: event.data.id, ...payload }, "*");
+      };
+      const action = event.data.action;
+      if (action === "getState") {
+        invoke("get_room_status").then((state) => reply({ ok: true, state })).catch((e) => reply({ ok: false, error: String(e) }));
+      } else if (action === "start") {
+        invoke("start_room", { settings: event.data.settings || {} }).then(() => reply({ ok: true })).catch((e) => reply({ ok: false, error: String(e) }));
+      } else if (action === "stop") {
+        invoke("stop_room").then(() => reply({ ok: true })).catch((e) => reply({ ok: false, error: String(e) }));
+      } else if (action === "setTunnel") {
+        invoke("set_room_tunnel", { url: event.data.url || "" }).then(() => reply({ ok: true })).catch((e) => reply({ ok: false, error: String(e) }));
+      } else if (action === "clearTunnel") {
+        invoke("clear_room_tunnel").then(() => reply({ ok: true })).catch((e) => reply({ ok: false, error: String(e) }));
+      } else if (action === "provisionTunnel") {
+        invoke("provision_room_tunnel").then(() => reply({ ok: true })).catch((e) => reply({ ok: false, error: String(e) }));
+      } else if (action === "stopTunnel") {
+        invoke("stop_room_tunnel").then(() => reply({ ok: true })).catch((e) => reply({ ok: false, error: String(e) }));
+      } else if (action === "cloudflaredAvailable") {
+        invoke("cloudflared_available").then((available) => reply({ ok: true, available })).catch((e) => reply({ ok: false, error: String(e) }));
+      }
+    }
+  });
+
+  await listen("update-status", (event) => {
+    const panel = $("panel");
+    if (panel && panel.contentWindow) {
+      panel.contentWindow.postMessage({ type: "winefox-ui-update-state", state: event.payload }, "*");
+    }
+  });
+
+  await listen("debug-mode-changed", (event) => {
+    const panel = $("panel");
+    if (panel && panel.contentWindow) {
+      panel.contentWindow.postMessage({ type: "winefox-ui-debug-state", enabled: !!event.payload?.enabled }, "*");
+    }
+  });
+
+  await listen("room-status", (event) => {
+    const panel = $("panel");
+    if (panel && panel.contentWindow) {
+      panel.contentWindow.postMessage({ type: "winefox-ui-room-state", state: event.payload }, "*");
+    }
   });
 
   await listen("sidecar-status", (event) => {

@@ -33,7 +33,37 @@ pub struct AppStatus {
     pub pid: Option<u32>,
 }
 
-#[derive(Debug, Default)]
+/// 房间运行状态（sidecar 上报，透传给前端）。
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RoomStatus {
+    pub state: String,
+    pub public_id: Option<String>,
+    pub name: Option<String>,
+    pub owner_name: Option<String>,
+    pub port: Option<u16>,
+    pub local_url: Option<String>,
+    pub tunnel_url: Option<String>,
+    pub tunnel_connected: bool,
+    pub members: u32,
+    pub max_members: u32,
+    pub error: Option<String>,
+    pub member_limit_reached: bool,
+    pub generation_paused: bool,
+    pub members_join_paused: bool,
+    pub failed_login_attempts: u32,
+}
+
+impl RoomStatus {
+    pub fn room_open(&self) -> bool {
+        !matches!(
+            self.state.as_str(),
+            "" | "stopped" | "closing" | "failed"
+        )
+    }
+}
+
+#[derive(Default)]
 pub struct Inner {
     pub state: SidecarState,
     pub last_error: Option<String>,
@@ -54,6 +84,12 @@ pub struct Inner {
     pub shutdown_mode: Option<String>,
     /// Ring buffer of the last sanitized sidecar stderr lines.
     pub log_tail: Vec<String>,
+    /// 房间运行时状态（供 Rust 门禁与前端展示）。
+    pub room: RoomStatus,
+    /// 房主管理令牌（仅 Rust 内部 + 面板代理注入，不暴露给访客）。
+    pub room_host_token: Option<String>,
+    /// 自动内网穿透提供方（cloudflared）实例；进程退出时由 Job Object 回收。
+    pub room_tunnel_provider: Option<Box<dyn crate::tunnel::TunnelProvider>>,
 }
 
 impl Inner {

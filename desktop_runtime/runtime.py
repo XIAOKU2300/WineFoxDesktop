@@ -54,6 +54,8 @@ class DesktopRuntime:
             uploads=self.uploads,
             static_dir=str(resource_path("desktop_ui")),
         )
+        # 房间网关管理器：由 sidecar 注入 emit 回调并启动。
+        self.room_manager = None  # type: ignore[assignment]
 
     async def start(self, *, ready_stream: TextIO | None = None) -> dict:
         await self.engine.start()

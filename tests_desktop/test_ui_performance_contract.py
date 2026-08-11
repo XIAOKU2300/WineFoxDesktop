@@ -72,6 +72,79 @@ class UiPerformanceContractTests(unittest.TestCase):
 
         self.assertIn('value.startsWith("/")', source)
 
+    # ------------------------------------------------------------------
+    # 房间访客界面（desktop_room/room_ui/app.js）性能与安全契约
+    # ------------------------------------------------------------------
+    def test_room_ui_new_messages_append_single_node(self) -> None:
+        source = self.source("desktop_room/room_ui/app.js")
+
+        self.assertIn("appendMessage(message)", source)
+        self.assertIn("box.append(renderMessage(message))", source)
+        self.assertIn("document.createDocumentFragment()", source)
+        self.assertIn("box.replaceChildren(frag)", source)
+        # 消息列表整体重建不得再走 innerHTML（否则已加载图片会重新请求）。
+        self.assertNotIn('"ws-messages").innerHTML', source)
+
+    def test_room_ui_images_use_attachment_urls_not_base64(self) -> None:
+        source = self.source("desktop_room/room_ui/app.js")
+
+        self.assertIn("/room/v1/attachments/", source)
+        self.assertIn("thumbUrl", source)
+        self.assertNotIn("data:image", source)
+        self.assertNotIn("btoa(", source)
+        self.assertNotIn("atob(", source)
+
+    def test_room_ui_session_token_never_in_local_storage(self) -> None:
+        source = self.source("desktop_room/room_ui/app.js")
+
+        # 令牌只经 Cookie 传输（本地 http 也走 document.cookie），
+        # 绝不落入 localStorage/sessionStorage。
+        self.assertIn("document.cookie", source)
+        self.assertNotIn("localStorage.setItem", source)
+        self.assertNotIn("localStorage.", source)
+        self.assertNotIn("sessionStorage.setItem", source)
+        self.assertNotIn("sessionStorage.", source)
+
+    def test_room_ui_password_never_in_url(self) -> None:
+        source = self.source("desktop_room/room_ui/app.js")
+
+        # 密码只随 join 请求体提交一次，绝不拼进 query 或 URL。
+        self.assertIn("{ name, password }", source)
+        self.assertNotIn("location.search", source)
+        self.assertNotIn("encodeURIComponent(password", source)
+
+    def test_room_ui_ws_heartbeat_and_bounded_reconnect(self) -> None:
+        source = self.source("desktop_room/room_ui/app.js")
+
+        self.assertIn('{ action: "ping" }', source)
+        self.assertIn("25000", source)
+        self.assertIn("scheduleReconnect", source)
+        self.assertIn("3000", source)
+
+    def test_room_ui_client_request_id_matches_protocol(self) -> None:
+        source = self.source("desktop_room/room_ui/app.js")
+
+        self.assertIn("room:${state.room.id}:member:${state.member.id}:${uuid()}", source)
+
+    def test_room_ui_api_uses_same_origin_credentials(self) -> None:
+        source = self.source("desktop_room/room_ui/app.js")
+
+        self.assertIn('credentials: "same-origin"', source)
+
+    def test_room_ui_catalog_from_guest_safe_fields(self) -> None:
+        source = self.source("desktop_room/room_ui/app.js")
+
+        self.assertIn("cat.families", source)
+        self.assertIn("cat.workflows", source)
+        self.assertIn("cat.loras", source)
+
+    def test_lab_catalog_reads_guest_families_field(self) -> None:
+        # 网关目录下发 families（白名单 id/label），面板实验室须读该字段。
+        source = self.source("desktop_ui/js/views/lab.js")
+
+        self.assertIn("data.families", source)
+        self.assertNotIn("data.modelFamilies", source)
+
 
 if __name__ == "__main__":
     unittest.main()

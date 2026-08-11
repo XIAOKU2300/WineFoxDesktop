@@ -30,6 +30,10 @@ ROOT_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file_
 with open(os.path.join(ROOT_DIR, "packaging", "version.json"), encoding="utf-8") as version_file:
     APP_VERSION = json.load(version_file)["app"]
 
+# 哨兵：区分「stdout 已关闭（EOF）」与「静默期（read 超时）」。
+# 两者此前都返回 None，导致启动稍慢（>0.5s）的 sidecar 被误判为已退出。
+_EOF = object()
+
 
 class SidecarProc:
     """Spawn the sidecar and speak its wire protocol.
@@ -66,21 +70,22 @@ class SidecarProc:
         assert self.proc.stdout is not None
         for raw in self.proc.stdout:
             self._q.put(raw[:-1] if raw.endswith("\n") else raw)
-        self._q.put(None)  # EOF
+        self._q.put(_EOF)  # EOF 哨兵
 
-    def read_raw(self, timeout: float = 8.0) -> str | None:
-        """Read one raw stdout line (None on EOF/timeout)."""
+    def read_raw(self, timeout: float = 8.0):
+        """Read one raw stdout line; None on quiet timeout, _EOF on closed stdout."""
         try:
-            return self._q.get(timeout=timeout)
+            item = self._q.get(timeout=timeout)
         except Exception:
-            return None
+            return None  # 静默期：不代表进程退出，调用方应继续轮询
+        return item
 
-    def read_line(self, timeout: float = 8.0) -> dict | None:
+    def read_line(self, timeout: float = 8.0):
         """Read one JSON stdout line; non-JSON lines are skipped (mirrors the
         Rust shell parser) and recorded in self.skipped."""
         raw = self.read_raw(timeout)
-        if raw is None:
-            return None
+        if raw is None or raw is _EOF:
+            return raw
         try:
             return json.loads(raw)
         except json.JSONDecodeError:
@@ -91,8 +96,10 @@ class SidecarProc:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             line = self.read_line(timeout=0.5)
-            if line is None:
+            if line is _EOF:
                 raise AssertionError("stdout closed before ready")
+            if line is None:
+                continue  # 静默期：继续轮询直到截止时间
             if line.get("type") == "ready":
                 self.ready = line
                 return line

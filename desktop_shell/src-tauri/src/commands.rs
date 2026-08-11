@@ -3,10 +3,11 @@
 
 use crate::sidecar::{SidecarManager, APP_VERSION};
 use crate::state::AppState;
+use crate::updater::{UpdateManager, UpdatePhase};
 use serde::Serialize;
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::{AppHandle, Runtime, State};
+use tauri::{AppHandle, Emitter, Runtime, State};
 
 /// Result of evaluating an exit request.
 #[derive(Debug, Clone, Serialize)]
@@ -157,6 +158,46 @@ pub fn cancel_exit<R: Runtime>(
     cancel_exit_impl(&app, &manager);
 }
 
+// ---------------------------------------------------------------------
+// 图片保存：弹出系统“另存为”对话框，由用户选择保存位置
+// ---------------------------------------------------------------------
+
+/// 解析 "data:image/png;base64,..." 或纯 base64 为字节。
+fn decode_data_url(data_url: &str) -> Result<Vec<u8>, String> {
+    let b64 = match data_url.split_once(",") {
+        Some((meta, rest)) if meta.contains("base64") => rest,
+        _ => data_url,
+    };
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD
+        .decode(b64.trim())
+        .map_err(|e| format!("图片数据解码失败：{e}"))
+}
+
+/// 弹出系统保存对话框并写入图片字节。
+/// 返回保存路径；用户取消时返回 "cancelled"。
+#[tauri::command]
+pub fn save_base64_image(app: AppHandle, data_url: String, filename: String) -> Result<String, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let bytes = decode_data_url(&data_url)?;
+    let file_path = app
+        .dialog()
+        .file()
+        .set_file_name(&filename)
+        .add_filter("PNG 图片", &["png"])
+        .blocking_save_file();
+    let path = match file_path {
+        Some(p) => p,
+        None => return Ok("cancelled".into()),
+    };
+    let path = match path.into_path() {
+        Ok(p) => p,
+        Err(_) => return Err("无法解析保存路径".into()),
+    };
+    std::fs::write(&path, &bytes).map_err(|e| format!("写入文件失败：{e}"))?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::ExitDecision;
@@ -169,4 +210,39 @@ mod tests {
         assert_eq!(value["tasks"], 2);
         assert!(value.get("needs_choice").is_none());
     }
+}
+
+// ---------------------------------------------------------------------
+// 自动更新（Rust 侧下载/验证/安装，UI 只展示）
+// ---------------------------------------------------------------------
+
+#[tauri::command]
+pub fn check_update(app: AppHandle, manager: tauri::State<'_, Arc<UpdateManager>>) -> crate::updater::UpdateState {
+    let app2 = app.clone();
+    let mgr = Arc::clone(manager.inner());
+    std::thread::spawn(move || {
+        mgr.check(&app2, true);
+    });
+    manager.snapshot()
+}
+
+#[tauri::command]
+pub fn get_update_state(manager: tauri::State<'_, Arc<UpdateManager>>) -> crate::updater::UpdateState {
+    manager.snapshot()
+}
+
+#[tauri::command]
+pub fn download_update(app: AppHandle, manager: tauri::State<'_, Arc<UpdateManager>>) -> Result<(), String> {
+    let app2 = app.clone();
+    let mgr = Arc::clone(manager.inner());
+    std::thread::spawn(move || {
+        if let Err(e) = mgr.download_and_install(&app2) {
+            let mut st = mgr.state.lock().unwrap();
+            st.phase = UpdatePhase::Failed;
+            st.error = Some(e.clone());
+            drop(st);
+            let _ = app2.emit("update-status", mgr.snapshot());
+        }
+    });
+    Ok(())
 }

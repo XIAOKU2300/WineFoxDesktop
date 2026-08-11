@@ -59,6 +59,7 @@ class DiagnosticsContractTests(unittest.IsolatedAsyncioTestCase):
         engine.data_root = root
         engine._current_job_id = None
         engine._queue = _Queue()
+        engine.lora_download = SimpleNamespace(active_count=lambda: 0)
         engine.probe_comfyui = AsyncMock(return_value={
             "online": True,
             "server": "http://127.0.0.1:8188",
