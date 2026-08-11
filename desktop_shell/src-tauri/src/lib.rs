@@ -75,6 +75,7 @@ pub fn run() {
             room_control::provision_room_tunnel,
             room_control::stop_room_tunnel,
             room_control::cloudflared_available,
+            room_control::open_room_chatroom,
         ])
         .setup(move |app| {
             let manager = SidecarManager::new(app.handle().clone(), state.clone());
@@ -87,6 +88,10 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            // 聊天室等辅助窗口可独立关闭，不触发退出。
+            if window.label() != "main" {
+                return;
+            }
             // Closing the main window always exits the application. Keep the
             // event loop alive until the sidecar has shut down (or is force
             // killed by the existing timeout fallback).

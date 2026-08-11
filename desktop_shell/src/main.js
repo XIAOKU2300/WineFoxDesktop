@@ -197,6 +197,11 @@ async function boot() {
         invoke("stop_room_tunnel").then(() => reply({ ok: true })).catch((e) => reply({ ok: false, error: String(e) }));
       } else if (action === "cloudflaredAvailable") {
         invoke("cloudflared_available").then((available) => reply({ ok: true, available })).catch((e) => reply({ ok: false, error: String(e) }));
+      } else if (action === "openChatroom") {
+        invoke("open_room_chatroom", {
+          nickname: event.data.nickname ?? null,
+          password: event.data.password ?? null,
+        }).then(() => reply({ ok: true })).catch((e) => reply({ ok: false, error: String(e) }));
       }
     }
   });

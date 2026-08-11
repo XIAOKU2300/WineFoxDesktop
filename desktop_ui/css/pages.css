@@ -812,3 +812,32 @@
 .up-notes { padding: var(--sp-3); border: 1px dashed var(--border-strong); border-radius: var(--r-sm); background: var(--surface-2); color: var(--text-2); line-height: 1.6; }
 .up-available { padding: var(--sp-3); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-2); }
 .up-status .progress { height: 6px; }
+
+/* ================= 实验室 ================= */
+/* 统计徽章：组件库未定义 .chip，lab 专属 */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 12px; border-radius: var(--r-full);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2); color: var(--text-2);
+  font-size: var(--fs-sm); font-weight: 550; white-space: nowrap;
+}
+.chip svg { width: 13px; height: 13px; flex: none; color: var(--primary); }
+.chip.lab-debug-chip { border-color: var(--primary); color: var(--primary); background: var(--primary-soft); }
+
+/* 房间状态摘要（div 行式，非 table 的 .summary-table th/td 变体） */
+.summary-row {
+  display: grid; grid-template-columns: 130px minmax(0, 1fr);
+  gap: var(--sp-3); padding: 7px 0;
+  border-bottom: 1px solid var(--hairline); align-items: baseline;
+}
+.summary-row:last-child { border-bottom: 0; }
+.summary-key { color: var(--muted); font-weight: 550; font-size: var(--fs-sm); }
+.summary-value { min-width: 0; overflow-wrap: anywhere; word-break: break-word; user-select: text; }
+
+/* .lead 仅在 .view-head 内有样式，lab 卡片体内的说明单独修饰 */
+.section-card .lead { color: var(--muted); font-size: var(--fs-sm); line-height: 1.6; }
+
+@media (max-width: 720px) {
+  .summary-row { grid-template-columns: 92px minmax(0, 1fr); gap: var(--sp-2); }
+}

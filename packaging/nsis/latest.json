@@ -1,12 +1,12 @@
 {
-  "version": "8.6.0",
-  "notes": "安全加固：修复 review 发现的 WS 连接上限、Argon2 线程池、白名单语义等",
-  "pub_date": "2026-08-11T14:39:51.843769+00:00",
+  "version": "8.6.1",
+  "notes": "8.6.1: 自定义端口/绑定地址、http 公网入口、聊天室独立窗口与入室向导、网页端手机适配",
+  "pub_date": "2026-08-11T15:57:57.616863+00:00",
   "platforms": {
     "windows-x86_64": {
-      "url": "https://github.com/XIAOKU2300/WineFoxDesktop/releases/download/v8.6.0/WineFox-Setup-8.6.0-x64.exe",
-      "signature": "A7QByvBRYZvMuB3xNEvIaOGnEokBTSjUYOMyFu+Yf163ZSs+htKdfnLavH0JJH20n0vLZaRIif44xIxqrLYYDw==",
-      "size": 19642054
+      "url": "https://github.com/XIAOKU2300/WineFoxDesktop/releases/download/v8.6.1/WineFox-Setup-8.6.1-x64.exe",
+      "signature": "0Y/TeQSUdn8RlOwUk7btnEymOyEJ7tYcChW8OZU3+M5QjFsSeK3ki1Q9vk5fLGT1hTbTkb6lzBuZo5C1qeHIDQ==",
+      "size": 19692841
     }
   }
 }

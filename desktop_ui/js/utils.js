@@ -401,6 +401,7 @@ export const roomBridge = {
   provisionTunnel: () => bridgeRequest("rm", "winefox-ui-room", "provisionTunnel"),
   stopTunnel: () => bridgeRequest("rm", "winefox-ui-room", "stopTunnel"),
   cloudflaredAvailable: () => bridgeRequest("rm", "winefox-ui-room", "cloudflaredAvailable"),
+  openChatroom: (nickname, password) => bridgeRequest("rm", "winefox-ui-room", "openChatroom", { nickname, password }),
   onState: (fn) => {
     roomStateListeners.add(fn);
     return () => roomStateListeners.delete(fn);

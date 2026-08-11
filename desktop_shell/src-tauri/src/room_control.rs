@@ -37,6 +37,10 @@ pub struct RoomSettings {
     pub per_member_queue_limit: u32,
     pub room_queue_limit: u32,
     pub message_retention_days: u32,
+    /// 端口，None=随机端口（Python 权威校验）。
+    pub port: Option<u16>,
+    /// 绑定地址，取值 "0.0.0.0" 或 "127.0.0.1"（Python 权威校验）。
+    pub bind_host: String,
 }
 
 fn send_room_command(
@@ -67,6 +71,15 @@ pub fn start_room(
         || settings.password.is_empty()
     {
         return Err("房间名称、房主名称和密码为必填项".into());
+    }
+    // 端口/绑定地址早检：Python 才是权威校验，这里只提前给出友好错误。
+    if let Some(p) = settings.port {
+        if !(1024..=65535).contains(&p) {
+            return Err("端口需在 1024-65535 之间".into());
+        }
+    }
+    if !matches!(settings.bind_host.as_str(), "" | "0.0.0.0" | "127.0.0.1") {
+        return Err("绑定地址无效".into());
     }
     // 密码明文只经由 stdin 传给同进程 sidecar，不进入事件/日志。
     let payload = json!({
@@ -112,7 +125,14 @@ pub fn set_room_tunnel(
         return Err(crate::debug_mode::DEBUG_MODE_REQUIRED.to_string());
     }
     let current_public_id = state.inner.lock().unwrap().room.public_id.clone();
-    let verified = crate::tunnel::verify_public_url(&url, current_public_id.as_deref())?;
+    // 按 scheme 分流：https 做本地深度校验（info 端点 + public_id），
+    // http 仅过静态语法门禁（回环身份 + allowlist 的权威校验在 Python 侧）。
+    let parsed = crate::tunnel::parse_public_url(&url)?;
+    let verified = if parsed.scheme == "https" {
+        crate::tunnel::verify_public_url(&url, current_public_id.as_deref())?
+    } else {
+        parsed.base()
+    };
     send_room_command(&app, &manager, json!({ "cmd": "room_tunnel", "url": verified }))
 }
 
@@ -123,6 +143,51 @@ pub fn clear_room_tunnel(
     manager: State<'_, Arc<SidecarManager>>,
 ) -> Result<(), String> {
     send_room_command(&app, &manager, json!({ "cmd": "room_clear_tunnel" }))
+}
+
+/// 打开聊天室独立窗口：直接加载本机房间网关 http://127.0.0.1:<port>/。
+/// 已有窗口则聚焦；昵称+密码非空时经 initialization_script 自动加入。
+#[tauri::command]
+pub fn open_room_chatroom(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    nickname: Option<String>,
+    password: Option<String>,
+) -> Result<(), String> {
+    if let Some(w) = app.get_webview_window("chatroom") {
+        let _ = w.show();
+        let _ = w.set_focus();
+        return Ok(());
+    }
+    let (port, _local_url) = {
+        let inner = state.inner.lock().unwrap();
+        (inner.room.port, inner.room.local_url.clone())
+    };
+    let port = port.ok_or_else(|| "当前没有运行中的房间".to_string())?;
+    let url = tauri::WebviewUrl::External(
+        format!("http://127.0.0.1:{port}/")
+            .parse::<tauri::Url>()
+            .map_err(|e: url::ParseError| e.to_string())?,
+    );
+    let mut builder = tauri::WebviewWindowBuilder::new(&app, "chatroom", url)
+        .title("WineFox 聊天室")
+        .inner_size(900.0, 700.0)
+        .center()
+        .additional_browser_args("--no-proxy-server");
+    if let (Some(name), Some(pwd)) = (nickname, password) {
+        let n = serde_json::to_string(&name).unwrap_or_else(|_| "\"\"".into());
+        let p = serde_json::to_string(&pwd).unwrap_or_else(|_| "\"\"".into());
+        let script = format!(
+            "(()=>{{ if (sessionStorage.getItem('wf_autojoin')) return; \
+             const w=()=>{{ const f=document.getElementById('join-name'); if(!f) return setTimeout(w,200); \
+             const pw=document.getElementById('join-password'); if(pw) pw.value={p}; \
+             f.value={n}; sessionStorage.setItem('wf_autojoin','1'); \
+             const b=document.getElementById('join-submit'); if(b) b.click(); }}; w(); }})();",
+            n = n, p = p
+        );
+        builder = builder.initialization_script(&script);
+    }
+    builder.build().map(|_| ()).map_err(|e| e.to_string())
 }
 
 /// 是否安装了可用的 cloudflared（供实验室页面决定是否显示"自动创建"）。
@@ -224,11 +289,13 @@ pub fn parse_room_status(value: &serde_json::Value) -> RoomStatus {
         owner_name: get("ownerName"),
         port: value.get("port").and_then(|v| v.as_u64()).map(|p| p as u16),
         local_url: get("localUrl"),
+        lan_url: get("lanUrl"),
         tunnel_url: get("tunnelUrl"),
         tunnel_connected: value
             .get("tunnelConnected")
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
+        verify_warning: get("verifyWarning"),
         members: value.get("members").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
         max_members: value.get("maxMembers").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
         error: get("error"),
@@ -295,11 +362,15 @@ mod tests {
             password: "p".into(),
             max_members: 8,
             allow_chat: true,
+            port: Some(51423),
+            bind_host: "0.0.0.0".into(),
             ..RoomSettings::default()
         };
         let value = serde_json::to_value(&settings).unwrap();
         assert_eq!(value["name"], "R");
         assert_eq!(value["maxMembers"], 8);
+        assert_eq!(value["port"], 51423);
+        assert_eq!(value["bindHost"], "0.0.0.0");
         assert!(value.get("owner_name").is_none());
     }
 }

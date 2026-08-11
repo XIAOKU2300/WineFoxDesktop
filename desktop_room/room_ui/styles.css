@@ -268,4 +268,29 @@ button { cursor: pointer; }
   .pane-canvas { order: 2; min-height: 42vh; }
   .pane-params { order: 3; border-left: none; border-top: 1px solid var(--border); }
   .members { max-height: 72px; }
+
+  /* 触控目标：主要输入框与按钮不小于 44px */
+  .input, .btn, .btn-sm, .mode-btn, .num-btn { min-height: 44px; }
+  .icon-btn { min-height: 44px; min-width: 44px; }
+  .num-btn { width: 44px; }
+
+  /* 加入页/关闭页：卡片贴近全屏，底部留出安全区 */
+  .join-card { width: 100%; max-width: 100%; padding: var(--sp-3); }
+  .screen-join, .screen-closed { padding: var(--sp-3); padding-bottom: calc(var(--sp-3) + env(safe-area-inset-bottom)); }
+
+  /* 聊天输入区（滚动布局）底部让出安全区，滚动到底仍可点按 */
+  .composer { padding-bottom: calc(var(--sp-3) + env(safe-area-inset-bottom)); }
+}
+
+/* ---------- 更窄屏（≤480px 手机） ---------- */
+@media (max-width: 480px) {
+  .join-card, .boot-card, .closed-card { width: 100%; max-width: 100%; padding: var(--sp-2); }
+  .members { flex-wrap: nowrap; overflow-x: auto; max-height: 56px; }
+  .form-row { grid-template-columns: 1fr; }
+  .topbar { padding: 0 var(--sp-2); gap: var(--sp-2); }
+  .pane-head { padding: 10px var(--sp-2); }
+  .messages { padding: var(--sp-2); }
+  .params-body { padding: var(--sp-2); }
+  .composer { gap: var(--sp-2); }
+  .lightbox { padding: var(--sp-2); }
 }
