@@ -18,7 +18,12 @@ from . import protocol
 from .gateway import create_room_app
 from .security import hash_password, new_host_token, new_session_token, normalize_lookup
 from .storage import RoomStorage, new_public_id, utcnow_iso
-from .tunnel import TunnelValidationError, validate_tunnel_url_syntax, verify_tunnel
+from .tunnel import (
+    TunnelValidationError,
+    validate_tunnel_url_syntax,
+    verify_local_identity,
+    verify_tunnel,
+)
 
 log = logging.getLogger(__name__)
 
@@ -26,6 +31,20 @@ log = logging.getLogger(__name__)
 _ROOM_STOP_GRACE_SECONDS = 3.0
 
 _ROOM_STOPPED = "stopped"
+
+
+def _detect_lan_url(port: int) -> str | None:
+    """探测本机局域网 IP 并返回 http://<LAN-IP>:<port>/（绑定 0.0.0.0 时供同网段设备访问）。"""
+    import socket
+
+    try:
+        _, _, ips = socket.gethostbyname_ex(socket.gethostname())
+    except Exception:  # pragma: no cover - 探测失败不影响主流程
+        return None
+    for ip in ips:
+        if ip and not ip.startswith("127.") and "." in ip:
+            return f"http://{ip}:{port}/"
+    return None
 
 
 class RoomStartError(Exception):
@@ -67,9 +86,12 @@ class RoomManager:
             "name": None,
             "ownerName": None,
             "port": None,
+            "bindHost": None,
             "localUrl": None,
+            "lanUrl": None,
             "tunnelUrl": None,
             "tunnelConnected": False,
+            "verifyWarning": None,
             "members": 0,
             "maxMembers": 0,
             "error": None,
@@ -113,6 +135,14 @@ class RoomManager:
         if len(owner_name) > 24:
             raise RoomStartError("房主名称过长", "INVALID_OWNER_NAME")
 
+        port = settings.get("port")
+        if port is not None:
+            if isinstance(port, bool) or not isinstance(port, int) or not (1024 <= port <= 65535):
+                raise RoomStartError("端口需在 1024-65535 之间", "INVALID_PORT")
+        bind_host = str(settings.get("bindHost") or "0.0.0.0")
+        if bind_host not in ("0.0.0.0", "127.0.0.1"):
+            raise RoomStartError("绑定地址无效", "INVALID_BIND_HOST")
+
         public_id = new_public_id()
         algorithm, params_json, salt_b64, hash_b64 = hash_password(password)
         host_token = new_host_token()
@@ -144,8 +174,16 @@ class RoomManager:
         app["notify_login_failure"] = self._on_login_failure
         runner = web.AppRunner(app)
         await runner.setup()
-        site = web.TCPSite(runner, host="127.0.0.1", port=0)
-        await site.start()
+        site = web.TCPSite(runner, host=bind_host, port=(port or 0))
+        try:
+            await site.start()
+        except OSError as exc:
+            await runner.cleanup()
+            storage.close()
+            raise RoomStartError(
+                f"端口被占用或无法绑定：{port if port else '随机端口'}",
+                "PORT_BIND_FAILED",
+            ) from exc
         try:
             port = int(site._server.sockets[0].getsockname()[1])
         except (AttributeError, IndexError, TypeError):  # pragma: no cover - 防御
@@ -175,9 +213,12 @@ class RoomManager:
                 "name": name,
                 "ownerName": owner_name,
                 "port": port,
+                "bindHost": bind_host,
                 "localUrl": f"http://127.0.0.1:{port}/",
+                "lanUrl": _detect_lan_url(port) if bind_host == "0.0.0.0" else None,
                 "tunnelUrl": None,
                 "tunnelConnected": False,
+                "verifyWarning": None,
                 "members": 1,
                 "maxMembers": int(settings.get("maxMembers", 8)),
                 "error": None,
@@ -266,17 +307,39 @@ class RoomManager:
         if not public_id:
             raise TunnelValidationError("当前没有运行中的房间")
         validated = validate_tunnel_url_syntax(url)
-        if not await verify_tunnel(validated, public_id):
-            raise TunnelValidationError("Tunnel 不可达或未指向本房间，请检查穿透配置")
-        hostname = (urlparse(validated).hostname or "").lower()
+        parsed = urlparse(validated)
+        scheme = (parsed.scheme or "").lower()
+        hostname = (parsed.hostname or "").lower()
+        port = self._status.get("port")
+        # 网关中间件只放行 allow_tunnel_hosts 中的 Host；Host 保留型隧道
+        # （FRP/nginx/Caddy）与直连不改写 Host 头，若先验证后放行本机探测必 403。
+        # 因此先临时放行，任何失败分支都回滚，保证 allowlist 与状态原子一致。
+        with self._lock:
+            prev_allowed = list(self._app.get("allow_tunnel_hosts", ())) if self._app is not None else []
+            if self._app is not None and hostname and hostname not in prev_allowed:
+                self._app["allow_tunnel_hosts"] = prev_allowed + [hostname]
+        try:
+            if not isinstance(port, int) or not await verify_local_identity(hostname, port, public_id):
+                raise TunnelValidationError("该地址的 Host 未指向本房间，请检查输入")
+            verify_warning = None
+            if scheme == "https":
+                if not await verify_tunnel(validated, public_id):
+                    raise TunnelValidationError("Tunnel 不可达或未指向本房间，请检查穿透配置")
+            else:
+                if not await verify_tunnel(validated, public_id):
+                    verify_warning = (
+                        "本机无法直接访问该公网地址，请确认路由器/防火墙已把端口转发到本机"
+                        "（NAT hairpin 下自测失败属正常）"
+                    )
+        except Exception:
+            with self._lock:
+                if self._app is not None:
+                    self._app["allow_tunnel_hosts"] = prev_allowed
+            raise
         with self._lock:
             self._status["tunnelUrl"] = validated
             self._status["tunnelConnected"] = True
-            if self._app is not None and hostname:
-                allowed = list(self._app.get("allow_tunnel_hosts", ()))
-                if hostname not in allowed:
-                    allowed.append(hostname)
-                self._app["allow_tunnel_hosts"] = allowed
+            self._status["verifyWarning"] = verify_warning
         self._publish()
         return self.get_status()
 
@@ -284,6 +347,7 @@ class RoomManager:
         with self._lock:
             self._status["tunnelUrl"] = None
             self._status["tunnelConnected"] = False
+            self._status["verifyWarning"] = None
             if self._app is not None:
                 self._app["allow_tunnel_hosts"] = []
         self._publish()

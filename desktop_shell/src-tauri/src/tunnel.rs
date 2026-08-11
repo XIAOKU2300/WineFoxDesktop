@@ -47,15 +47,15 @@ pub fn verify_public_url(url: &str, expected_public_id: Option<&str>) -> Result<
 }
 
 /// 仅做静态校验（scheme/host/userinfo），供单元测试与复用。
-fn parse_public_url(url: &str) -> Result<ParseOutcome, String> {
+pub(crate) fn parse_public_url(url: &str) -> Result<ParseOutcome, String> {
     let trimmed = url.trim();
     if trimmed.is_empty() {
         return Err("请输入公网地址".into());
     }
     let parsed = url::Url::parse(trimmed).map_err(|_| "地址格式无效".to_string())?;
     let scheme = parsed.scheme().to_ascii_lowercase();
-    if scheme != "https" {
-        return Err("公开邀请地址必须使用 HTTPS".into());
+    if scheme != "https" && scheme != "http" {
+        return Err("公开邀请地址必须使用 HTTPS 或 HTTP".into());
     }
     let host = parsed.host_str().ok_or_else(|| "地址缺少 Host".to_string())?;
     if host.is_empty() {
@@ -71,16 +71,17 @@ fn parse_public_url(url: &str) -> Result<ParseOutcome, String> {
     })
 }
 
-struct ParseOutcome {
-    scheme: String,
-    host: String,
-    port: Option<u16>,
+/// 静态校验结果。字段 `pub(crate)` 供 room_control.rs 按 scheme 分流读取。
+pub(crate) struct ParseOutcome {
+    pub(crate) scheme: String,
+    pub(crate) host: String,
+    pub(crate) port: Option<u16>,
 }
 
 impl ParseOutcome {
     /// 规范化后的 base URL。非标准端口显式携带（标准端口 url::Url::port()
     /// 返回 None，无需重复拼接），避免探测 /room/v1/info 时端口被静默丢弃。
-    fn base(&self) -> String {
+    pub(crate) fn base(&self) -> String {
         match self.port {
             Some(p) => format!("{}://{}:{}", self.scheme, self.host, p),
             None => format!("{}://{}", self.scheme, self.host),
@@ -308,8 +309,11 @@ mod tests {
     }
 
     #[test]
-    fn rejects_http() {
-        assert!(parse("http://abc.trycloudflare.com").is_err());
+    fn accepts_http_url() {
+        let out = parse("http://abc.trycloudflare.com").unwrap();
+        assert_eq!(out.scheme, "http");
+        assert_eq!(out.host, "abc.trycloudflare.com");
+        assert_eq!(out.base(), "http://abc.trycloudflare.com");
     }
 
     #[test]
@@ -323,6 +327,7 @@ mod tests {
     fn rejects_userinfo() {
         assert!(parse("https://user:pass@abc.trycloudflare.com").is_err());
         assert!(parse("https://user@abc.trycloudflare.com").is_err());
+        assert!(parse("http://user:pass@abc.trycloudflare.com").is_err());
     }
 
     #[test]
@@ -331,6 +336,10 @@ mod tests {
             "file:///c:/temp/x",
             "javascript:alert(1)",
             "data:text/html,x",
+            "ftp://abc.trycloudflare.com",
+            "gopher://abc.trycloudflare.com",
+            "ws://abc.trycloudflare.com",
+            "wss://abc.trycloudflare.com",
         ] {
             assert!(parse(url).is_err(), "expected reject: {url}");
         }

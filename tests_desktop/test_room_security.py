@@ -204,13 +204,23 @@ class TunnelSyntaxTests(unittest.TestCase):
 
     def test_rejects_non_https_schemes(self) -> None:
         for bad in (
-            "http://abc", "ftp://abc", "wss://abc", "ws://abc",
+            "ftp://abc", "wss://abc", "ws://abc",
             "file:///C:/x", "javascript:alert(1)", "data:text/plain;base64,eA==",
             "about:blank", "gopher://abc",
         ):
             with self.subTest(bad=bad):
                 with self.assertRaises(TunnelValidationError):
                     validate_tunnel_url_syntax(bad)
+
+    def test_accepts_http_scheme(self) -> None:
+        self.assertEqual(
+            validate_tunnel_url_syntax("http://host:8443"),
+            "http://host:8443",
+        )
+        self.assertEqual(
+            validate_tunnel_url_syntax("http://192.168.1.5:51423/"),
+            "http://192.168.1.5:51423",
+        )
 
     def test_rejects_missing_host_and_userinfo(self) -> None:
         with self.assertRaises(TunnelValidationError):
@@ -451,6 +461,67 @@ class ManagerLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_set_tunnel_requires_running_room(self) -> None:
         with self.assertRaises(TunnelValidationError):
             await self.manager.set_tunnel("https://abc.trycloudflare.com")
+
+    async def test_start_with_custom_port(self) -> None:
+        import socket as _socket
+        with _socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            free_port = s.getsockname()[1]
+        settings = dict(TEST_SETTINGS, port=free_port, bindHost="127.0.0.1")
+        status = await self.manager.start(settings)
+        self.assertEqual(status["port"], free_port)
+        self.assertEqual(status["bindHost"], "127.0.0.1")
+        self.assertEqual(status["localUrl"], f"http://127.0.0.1:{free_port}/")
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"http://127.0.0.1:{free_port}/room/v1/info") as resp:
+                self.assertEqual(resp.status, 200)
+
+    async def test_start_rejects_invalid_port_and_bind(self) -> None:
+        for port in (80, 65536):
+            with self.subTest(port=port):
+                with self.assertRaises(RoomStartError) as ctx:
+                    await self.manager.start(dict(TEST_SETTINGS, port=port))
+                self.assertEqual(ctx.exception.error_code, "INVALID_PORT")
+        with self.assertRaises(RoomStartError) as ctx:
+            await self.manager.start(dict(TEST_SETTINGS, port="abc"))
+        self.assertEqual(ctx.exception.error_code, "INVALID_PORT")
+        with self.assertRaises(RoomStartError) as ctx:
+            await self.manager.start(dict(TEST_SETTINGS, bindHost="8.8.8.8"))
+        self.assertEqual(ctx.exception.error_code, "INVALID_BIND_HOST")
+
+    async def test_start_port_busy_raises_port_bind_failed(self) -> None:
+        status = await self.manager.start(dict(TEST_SETTINGS))
+        busy_port = status["port"]
+        other = RoomManager(emit=self.emitted.append, rooms_root=Path(self.tmp.name))
+        try:
+            with self.assertRaises(RoomStartError) as ctx:
+                await other.start(dict(TEST_SETTINGS, port=busy_port))
+            self.assertEqual(ctx.exception.error_code, "PORT_BIND_FAILED")
+        finally:
+            await other.shutdown()
+
+    async def test_set_tunnel_http_direct_connect(self) -> None:
+        status = await self.manager.start(dict(TEST_SETTINGS))
+        port = status["port"]
+        result = await self.manager.set_tunnel(f"http://127.0.0.1:{port}")
+        self.assertEqual(result["tunnelUrl"], f"http://127.0.0.1:{port}")
+        self.assertTrue(result["tunnelConnected"])
+        self.assertIsNone(result["verifyWarning"])
+        self.assertIn("127.0.0.1", self.manager._app["allow_tunnel_hosts"])
+
+    async def test_set_tunnel_http_unreachable_records_warning(self) -> None:
+        await self.manager.start(dict(TEST_SETTINGS))
+        result = await self.manager.set_tunnel("http://127.0.0.1:1")
+        self.assertTrue(result["tunnelConnected"])
+        self.assertIsNotNone(result["verifyWarning"])
+
+    async def test_set_tunnel_https_unreachable_rolls_back_allowlist(self) -> None:
+        from unittest.mock import AsyncMock, patch
+        await self.manager.start(dict(TEST_SETTINGS))
+        with patch("desktop_room.manager.verify_tunnel", new=AsyncMock(return_value=False)):
+            with self.assertRaises(TunnelValidationError):
+                await self.manager.set_tunnel("https://abc.trycloudflare.com")
+        self.assertNotIn("abc.trycloudflare.com", self.manager._app["allow_tunnel_hosts"])
 
 
 class ModelSafetyTests(unittest.TestCase):
