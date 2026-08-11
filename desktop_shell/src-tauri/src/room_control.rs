@@ -99,13 +99,18 @@ pub fn get_room_status(state: State<'_, Arc<AppState>>) -> RoomStatus {
 
 /// 设置已由外部 Tunnel（Cloudflare/FRP）解析出的公网 HTTPS 地址。
 /// Rust 先做本地校验并验证 /room/v1/info 与 public_id 一致，再交给 sidecar。
+/// 调试模式未解锁时稳定返回 DEBUG_MODE_REQUIRED（避免任意 Host 探测）。
 #[tauri::command]
 pub fn set_room_tunnel(
     app: AppHandle,
     manager: State<'_, Arc<SidecarManager>>,
     state: State<'_, Arc<AppState>>,
+    debug: State<'_, DebugMode>,
     url: String,
 ) -> Result<(), String> {
+    if !debug.is_enabled() {
+        return Err(crate::debug_mode::DEBUG_MODE_REQUIRED.to_string());
+    }
     let current_public_id = state.inner.lock().unwrap().room.public_id.clone();
     let verified = crate::tunnel::verify_public_url(&url, current_public_id.as_deref())?;
     send_room_command(&app, &manager, json!({ "cmd": "room_tunnel", "url": verified }))
@@ -203,9 +208,9 @@ pub fn handle_room_status(app: &AppHandle, payload: &serde_json::Value) {
         let state_guard = app.state::<Arc<AppState>>();
         let mut inner = state_guard.inner.lock().unwrap();
         inner.room = parsed.clone();
-        if host_token.is_some() {
-            inner.room_host_token = host_token;
-        }
+        // 每次 status 更新都以本次上报为准：无 host_token 时清空旧令牌，
+        // 避免房间停止/重建后残留上一轮的房主令牌。
+        inner.room_host_token = host_token;
     }
     let _ = app.emit("room-status", &parsed);
 }

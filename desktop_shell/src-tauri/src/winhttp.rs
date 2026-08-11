@@ -76,8 +76,9 @@ pub fn https_get(
         }
         let _guard_request = HandleGuard(request);
 
-        // 跟随 GitHub Release 的 302 重定向
-        let redirect_policy: u32 = WINHTTP_OPTION_REDIRECT_POLICY_ALWAYS;
+        // 跟随 GitHub Release 的 302 重定向，但禁止 HTTPS→HTTP 降级。
+        // 1 = WINHTTP_OPTION_REDIRECT_POLICY_DISALLOW_HTTPS_TO_HTTP
+        let redirect_policy: u32 = 1;
         WinHttpSetOption(
             request,
             WINHTTP_OPTION_REDIRECT_POLICY,

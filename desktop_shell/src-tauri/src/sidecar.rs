@@ -499,7 +499,7 @@ fn session_main(me: &Arc<SidecarManager>) {
                         return;
                     }
                     Some(Line::Other(v)) => {
-                        me.log("debug", &format!("sidecar event: {v}"));
+                        me.log("debug", &format!("sidecar event: {}", sanitize::sanitize_line(&v.to_string())));
                     }
                 }
             }

@@ -213,8 +213,8 @@ async def _upload_handler(request: web.Request) -> web.Response:
                 files.append(_process_image(raw))
             except ImageErrorDetail as exc:
                 return error_response(exc.message, exc.error_code, exc.status)
-    except (ValueError, TypeError) as exc:
-        return error_response(f"multipart 解析失败: {exc}", "BAD_REQUEST", 400)
+    except (ValueError, TypeError):
+        return error_response("multipart 解析失败", "BAD_REQUEST", 400)
 
     if not files:
         return error_response("未收到图片文件", "NO_FILE", 400)
@@ -281,7 +281,10 @@ async def _attachment_get_handler(request: web.Request, *, thumb: bool = False) 
     if not path.is_file():
         return error_response("附件文件缺失", "ATTACHMENT_NOT_FOUND", 404)
     content_type = "image/png" if thumb else row["mime_type"]
-    return web.FileResponse(path, headers={"Content-Type": content_type})
+    return web.FileResponse(path, headers={
+        "Content-Type": content_type,
+        "X-Content-Type-Options": "nosniff",
+    })
 
 
 def install_upload_routes(app: web.Application) -> None:

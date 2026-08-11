@@ -16,7 +16,7 @@ from typing import Any, Awaitable, Callable
 
 from aiohttp import web
 
-from .security import hash_session_token
+from .security import constant_time_equal, hash_session_token
 
 SESSION_COOKIE = "wf_room_session"
 _HOST_TOKEN_HEADER = "X-WineFox-Room-Host"
@@ -28,7 +28,8 @@ def resolve_member(request: web.Request) -> sqlite3.Row | None:
     storage = app["room_storage"]
     # 房主面板代理路径
     host_token = app.get("host_token")
-    if host_token and request.headers.get(_HOST_TOKEN_HEADER) == host_token:
+    header = request.headers.get(_HOST_TOKEN_HEADER)
+    if host_token and header is not None and constant_time_equal(header, host_token):
         room_id = int(app["room_id"])
         members = storage.active_members(room_id)
         for member in members:
@@ -79,5 +80,6 @@ def require_member(
     return wrapped
 
 
-def error_response(message: str, code: str, status: int = 400) -> web.Response:
-    return web.json_response({"error": message, "errorCode": code}, status=status)
+def error_response(message: str, code: str, status: int = 400, *,
+                   headers: dict[str, str] | None = None) -> web.Response:
+    return web.json_response({"error": message, "errorCode": code}, status=status, headers=headers)

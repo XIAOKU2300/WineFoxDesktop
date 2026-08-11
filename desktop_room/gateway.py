@@ -18,6 +18,7 @@ from aiohttp import web
 
 from . import protocol
 from .models import room_snapshot
+from .security import constant_time_equal
 from .storage import RoomStorage
 
 log = logging.getLogger(__name__)
@@ -79,7 +80,8 @@ def host_origin_middleware(host_token: str):
         if hostname in _ALLOWED_HOSTS:
             return await handler(request)
         # 2) 面板代理注入的房主令牌（Rust 代理改写请求，Host 为 winefox-panel.localhost）
-        if request.headers.get(_HAS_HOST_TOKEN) == host_token:
+        header = request.headers.get(_HAS_HOST_TOKEN)
+        if header is not None and constant_time_equal(header, host_token):
             return await handler(request)
         # 3) 用户手动配置的 Tunnel 公网域名（访客只能走这里进来）
         if hostname in request.app.get("allow_tunnel_hosts", ()):

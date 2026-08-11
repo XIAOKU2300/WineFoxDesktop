@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any
 
@@ -35,9 +36,19 @@ MAX_JOIN_IP_KEY_LENGTH = 64
 
 
 def _client_ip(request: web.Request) -> str:
+    """限流用客户端 IP 键。
+
+    网关只监听 127.0.0.1，公网流量必经 Cloudflare 隧道，因此优先信任
+    CF-Connecting-IP（由 CF 覆写，不可被访客伪造）；其次取 X-Forwarded-For 的
+    **最后**一项（代理链把真实远端 IP 追加在尾部，取末项可抵抗伪造头）。
+    直接连回环的请求退回 request.remote。
+    """
+    cf = request.headers.get("CF-Connecting-IP")
+    if cf:
+        return cf.strip()[:MAX_JOIN_IP_KEY_LENGTH] or "unknown"
     forwarded = request.headers.get("X-Forwarded-For")
     if forwarded:
-        return forwarded.split(",")[0].strip()[:MAX_JOIN_IP_KEY_LENGTH] or "unknown"
+        return forwarded.split(",")[-1].strip()[:MAX_JOIN_IP_KEY_LENGTH] or "unknown"
     return (request.remote or "unknown")[:MAX_JOIN_IP_KEY_LENGTH]
 
 
@@ -64,11 +75,11 @@ async def _join_handler(request: web.Request) -> web.Response:
     ip = _client_ip(request)
     public_id = str(room["public_id"])
     if not limiter.ip_allows(ip):
-        return error_response("尝试过于频繁，请稍后再试", "RATE_LIMITED_IP",
-                              429)
+        return error_response("尝试过于频繁，请稍后再试", "RATE_LIMITED_IP", 429,
+                              headers={"Retry-After": str(int(limiter.backoff_seconds(ip)))})
     if not limiter.room_allows(public_id, ip):
-        return error_response("尝试过于频繁，请稍后再试", "RATE_LIMITED_ROOM",
-                              429)
+        return error_response("尝试过于频繁，请稍后再试", "RATE_LIMITED_ROOM", 429,
+                              headers={"Retry-After": str(int(limiter.backoff_seconds(ip)))})
 
     name = body.get("name")
     password = body.get("password")
@@ -88,9 +99,10 @@ async def _join_handler(request: web.Request) -> web.Response:
     if storage.active_member_count(room_id) >= int(room["max_members"]):
         return error_response("房间人数已满", "ROOM_FULL", 409)
 
-    # 密码校验在全局并发门禁内执行（防 Argon2 被拖垮）。
+    # 密码校验在全局并发门禁内执行，且 Argon2id 是同步 CPU 密集调用，
+    # 必须移到线程池，避免阻塞事件循环（单线程里 Semaphore 只排队不并行）。
     async with limiter.concurrent_guard():
-        ok = await _verify(room, password)
+        ok = await asyncio.to_thread(_verify, room, password)
     if not ok:
         limiter.record_failure(ip, public_id)
         notify = app.get("notify_login_failure")
@@ -123,8 +135,8 @@ async def _join_handler(request: web.Request) -> web.Response:
     return response
 
 
-async def _verify(room, password: str) -> bool:
-    """Argon2id 校验（参数从房间行读取）。在限流并发门禁内调用。"""
+def _verify(room, password: str) -> bool:
+    """Argon2id 校验（同步阻塞调用，由调用方 asyncio.to_thread 执行）。"""
     return verify_password(
         password,
         room["password_salt"],
