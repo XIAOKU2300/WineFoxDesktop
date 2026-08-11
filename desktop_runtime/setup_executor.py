@@ -108,9 +108,21 @@ class SetupJob:
     cancel_requested: asyncio.Event = field(default_factory=asyncio.Event)
     _progress_at: float = 0.0
     _event_cb: Any = None
+    _subscribers: set = field(default_factory=set)
 
     def set_event_callback(self, cb) -> None:
         self._event_cb = cb
+
+    def subscribe(self) -> asyncio.Queue:
+        """Return a queue that receives every future event; seeds past ones."""
+        q: asyncio.Queue = asyncio.Queue()
+        self._subscribers.add(q)
+        for event in self.events:
+            q.put_nowait(event)
+        return q
+
+    def unsubscribe(self, q: asyncio.Queue) -> None:
+        self._subscribers.discard(q)
 
     def emit(self, type_: str, **payload: Any) -> None:
         event = {"type": type_, **payload, "at": time.time()}
@@ -120,6 +132,8 @@ class SetupJob:
                 self._event_cb(event)
             except Exception:
                 pass
+        for q in list(self._subscribers):
+            q.put_nowait(event)
 
     def emit_throttled(self, type_: str, **payload: Any) -> None:
         now = time.monotonic()
@@ -203,16 +217,24 @@ class SetupExecutor:
         self.install_dir = install_dir
         self.work_dir = work_dir
         self.secret_store = secret_store
-        self._session = session or aiohttp.ClientSession(
-            headers={"User-Agent": "WineFoxDesktop/8.6 setup"},
-            timeout=aiohttp.ClientTimeout(total=300, connect=30, sock_read=300),
-        )
         self._owns_session = session is None
+        self._session = session
         self._url_rewriter = url_rewriter  # test-only hook, never wired in prod
         self._job_counter = 0
 
+    def _session_for(self) -> aiohttp.ClientSession:
+        # Defer session creation: aiohttp 3.14 refuses to build a ClientSession
+        # without a running loop, and the composition root is synchronous.
+        if self._session is None:
+            self._session = aiohttp.ClientSession(
+                headers={"User-Agent": "WineFoxDesktop/8.6 setup"},
+                timeout=aiohttp.ClientTimeout(total=300, connect=30, sock_read=300),
+            )
+            self._owns_session = True
+        return self._session
+
     async def close(self) -> None:
-        if self._owns_session:
+        if self._owns_session and self._session is not None:
             await self._session.close()
 
     def new_job(
@@ -432,7 +454,7 @@ class SetupExecutor:
             if job.cancel_requested.is_set():
                 raise SetupError(SetupErrorCode.CANCELLED, "已取消")
             try:
-                resp = await self._session.get(
+                resp = await self._session_for().get(
                     current,
                     headers=headers,
                     allow_redirects=False,
@@ -547,7 +569,7 @@ class SetupExecutor:
             if job.cancel_requested.is_set():
                 raise SetupError(SetupErrorCode.CANCELLED, "已取消")
             try:
-                resp = await self._session.get(current, headers=headers, allow_redirects=False, ssl=True)
+                resp = await self._session_for().get(current, headers=headers, allow_redirects=False, ssl=True)
             except aiohttp.ClientError as exc:
                 raise SetupError(SetupErrorCode.NETWORK_UNREACHABLE, f"网络错误: {exc}") from exc
             if resp.status in (301, 302, 303, 307, 308):

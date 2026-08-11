@@ -388,6 +388,11 @@ class DesktopEngine:
     async def probe_lora_bridge(self) -> dict[str, Any]:
         return await self.lora_download.bridge_status()
 
+    async def refresh_after_env_setup(self) -> dict[str, Any]:
+        """环境中心装完 Bridge 后调用：清 probe 缓存、强制重探、重载 profiles。"""
+        await self._after_lora_installed()
+        return {"ok": True, "bridge": await self.probe_lora_bridge()}
+
     async def _after_lora_installed(self) -> None:
         self._last_probe = None
         self._last_probe_at = 0.0

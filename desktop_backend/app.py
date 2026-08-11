@@ -24,7 +24,9 @@ from .security import (
     SecurityManager,
     WRITE_METHODS,
 )
+from .setup_handlers import register_setup_routes
 from .static import register_static
+from desktop_runtime.setup_errors import SetupError, SetupErrorCode
 
 logger = logging.getLogger("winefox")
 access_logger = logging.getLogger("winefox.access")
@@ -50,6 +52,19 @@ _ACCESS_LOG_SKIP = (BOOTSTRAP_PREFIX,)
 
 def _skip_access_log(path: str) -> bool:
     return path.startswith(_ACCESS_LOG_SKIP) or path == "/api/v1/health"
+
+
+def _setup_status(code: str) -> int:
+    """SetupError 稳定码 -> HTTP status（客户端只需关心 code，status 是传输载体）。"""
+    if code == SetupErrorCode.JOB_NOT_FOUND:
+        return 404
+    if code in (SetupErrorCode.JOB_BUSY, SetupErrorCode.ROLLBACK_FAILED, SetupErrorCode.CANCELLED):
+        return 409
+    if code == SetupErrorCode.DISK_SPACE_LOW:
+        return 507
+    if code in (SetupErrorCode.INTERNAL, SetupErrorCode.UNKNOWN):
+        return 500
+    return 422
 
 
 def _apply_security_headers(resp, path: str, csp: str) -> None:
@@ -86,6 +101,9 @@ def _make_middlewares(
     async def error_mapper(request: web.Request, handler):
         try:
             return await handler(request)
+        except SetupError as exc:
+            # 环境中心稳定错误码必须原样透传到 UI（冻结契约，见迁移文档第 6 节）
+            return error_to_response(request, AppError(_setup_status(exc.code), exc.code, exc.message, exc.details))
         except AppError as exc:
             return error_to_response(request, exc)
         except web.HTTPException as exc:
@@ -134,6 +152,7 @@ def create_app(
     engine: Any = None,
     config: Any = None,
     uploads: Any = None,
+    setup: Any = None,
     static_dir: Optional[str] = DEFAULT_STATIC_DIR,
     max_upload_bytes: int = DEFAULT_MAX_UPLOAD_BYTES,
     csp: Optional[str] = None,
@@ -141,8 +160,8 @@ def create_app(
 ) -> web.Application:
     """装配后端应用。
 
-    engine/config/uploads 为 Protocol 实现（Agent 02/03/04）；None 时业务路由返回
-    503（便于仅静态/健康检查场景）。
+    engine/config/uploads/setup 为 Protocol 实现（Agent 02/03/04）；None 时业务路由
+    返回 503（便于仅静态/健康检查场景）。
     """
     security = SecurityManager(extra_allowed_hosts=extra_allowed_hosts)
     csp = csp or CSP_DEFAULT
@@ -154,11 +173,13 @@ def create_app(
         "engine": engine,
         "config": config,
         "uploads": uploads,
+        "setup": setup,
         "security": security,
         "max_upload_bytes": int(max_upload_bytes),
         "started_at": time.monotonic(),
     }
     register_routes(app)
+    register_setup_routes(app)
     register_static(app, static_dir)
 
     async def _on_shutdown(app_: web.Application) -> None:

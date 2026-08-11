@@ -14,6 +14,7 @@ from winefox_core.storage import Database
 
 from .config_adapter import DesktopConfigAdapter
 from .engine import DesktopEngine
+from .setup_manager import SetupManager
 from .upload_store import FileUploadStore
 
 
@@ -48,10 +49,16 @@ class DesktopRuntime:
             output_dir=self.paths.output_dir,
             data_root=self.paths.root,
         )
+        self.setup = SetupManager(
+            install_dir=self.paths.install_dir,
+            work_dir=self.paths.root / "setup_work",
+            secret_store=self.config,
+        )
         self.server = WineFoxBackendServer(
             engine=self.engine,
             config=self.config,
             uploads=self.uploads,
+            setup=self.setup,
             static_dir=str(resource_path("desktop_ui")),
         )
         # 房间网关管理器：由 sidecar 注入 emit 回调并启动。
@@ -68,4 +75,5 @@ class DesktopRuntime:
     async def stop(self) -> None:
         await self.server.stop()
         await self.engine.stop()
+        await self.setup.close()
         self.database.close()

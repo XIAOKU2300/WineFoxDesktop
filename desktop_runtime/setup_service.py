@@ -85,12 +85,22 @@ class BridgeState:
 
 
 @dataclass
+class ManualState:
+    name: str
+    present: bool
+
+    def to_dict(self) -> dict[str, object]:
+        return {"name": self.name, "present": self.present}
+
+
+@dataclass
 class EnvironmentStatus:
     candidates: list[RootCandidate] = field(default_factory=list)
     root: Path | None = None
     nodes: dict[str, NodeState] = field(default_factory=dict)
     models: dict[str, ModelState] = field(default_factory=dict)
     bridge: BridgeState = field(default_factory=BridgeState)
+    manual: list[ManualState] = field(default_factory=list)
     python: PythonProbe = field(default_factory=lambda: PythonProbe(found=False))
 
     @property
@@ -99,7 +109,7 @@ class EnvironmentStatus:
             return "no_root"
         missing = any(not n.present for n in self.nodes.values()) or any(
             (not m.present) or m.corrupt for m in self.models.values()
-        ) or not self.bridge.installed
+        ) or not self.bridge.installed or any(not mf.present for mf in self.manual)
         return "repair_needed" if missing else "ready"
 
     @property
@@ -111,6 +121,9 @@ class EnvironmentStatus:
         return [n.id for n in self.nodes.values() if not n.present]
 
     def to_dict(self) -> dict[str, object]:
+        python = self.python.to_dict()
+        if python.get("executable"):  # never leak absolute paths across the API
+            python["executable"] = Path(python["executable"]).name
         return {
             "state_code": self.state_code,
             "candidates": [c.to_dict() for c in self.candidates],
@@ -118,7 +131,8 @@ class EnvironmentStatus:
             "nodes": [n.to_dict() for n in self.nodes.values()],
             "models": [m.to_dict() for m in self.models.values()],
             "bridge": self.bridge.to_dict(),
-            "python": self.python.to_dict(),
+            "manual": [m.to_dict() for m in self.manual],
+            "python": python,
         }
 
 
@@ -174,6 +188,13 @@ class Scanner:
             version = None
         return BridgeState(installed=True, version=version)
 
+    def detect_manual(self, root: Path) -> list[ManualState]:
+        states: list[ManualState] = []
+        for mf in self.manifest.manual_files:
+            path = safe_comfyui_path(root, mf.dest)
+            states.append(ManualState(name=mf.name, present=path.is_file()))
+        return states
+
     def detect_models(self, root: Path) -> dict[str, ModelState]:
         states: dict[str, ModelState] = {}
         for model in self.manifest.models.values():
@@ -203,6 +224,7 @@ class Scanner:
             status.nodes = self.detect_nodes(root)
             status.models = self.detect_models(root)
             status.bridge = self.detect_bridge(root)
+            status.manual = self.detect_manual(root)
             status.python = resolve_python_executable(root, self.manifest.python)
         else:
             status.python = PythonProbe(
