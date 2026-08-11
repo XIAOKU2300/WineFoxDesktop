@@ -1,6 +1,6 @@
 # WineFox Packaging（Agent 09）
 
-版本单一来源：`packaging/version.json`（`app` = 8.5.10，`protocol` = 1）。
+版本单一来源：`packaging/version.json`（当前 `app` = 8.5.11，`protocol` = 1）。
 主程序与 sidecar 的版本由此文件统一盖章（build.ps1 → `_version.py` /
 VSVersionInfo / tauri.conf.json / generated_version.nsh），并在构建期与
 安装期双重校验一致。

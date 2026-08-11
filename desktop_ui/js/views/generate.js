@@ -97,6 +97,7 @@ export class GenerateView {
             el("span", {}, "LoRA"),
             el("span", { class: "lora-total", id: "g-lora-total" }, this.loraCountText(loras.length)),
           ]),
+          el("button", { class: "icon-btn", id: "g-reset-lora", type: "button", title: "重置已选 LoRA", "aria-label": "重置已选 LoRA", disabled: !this.state.loras.size }, [ic("x")]),
           el("button", { class: "icon-btn", id: "g-refresh-loras", type: "button", title: "刷新 LoRA 列表", "aria-label": "刷新 LoRA 列表" }, [ic("refresh")]),
         ]),
         this.loraDrawer(loras),
@@ -216,6 +217,8 @@ export class GenerateView {
     if (meta) meta.textContent = this.loraResultLabel(loras.length, filtered.length);
     const clear = $("#g-lora-search-clear", this.root);
     if (clear) clear.hidden = !this.state.loraQuery;
+    const reset = $("#g-reset-lora", this.root);
+    if (reset) reset.disabled = !this.state.loras.size;
     this.updateLoraCount(loras.length);
     if (this.state.loraExpanded) this.setupLoraPagination();
   }
@@ -294,15 +297,14 @@ export class GenerateView {
       el("span", { class: "l-strength" }, active ? Number(this.state.loras.get(id).strength).toFixed(1) : "—"),
     ]);
     btn.addEventListener("click", () => {
-      if (this.state.loras.has(id)) this.state.loras.delete(id);
-      else {
+      // 仅支持单选：点击已选项取消，点击其他项替换当前选择
+      const active = this.state.loras.has(id);
+      this.state.loras.clear();
+      if (!active) {
         const strength = Number(l.strength);
         this.state.loras.set(id, { label, strength: Number.isFinite(strength) ? strength : 0.8 });
       }
-      const selected = this.state.loras.has(id);
-      btn.setAttribute("aria-pressed", selected ? "true" : "false");
-      btn.querySelector(".l-strength").textContent = selected ? this.state.loras.get(id).strength.toFixed(1) : "—";
-      this.updateLoraCount();
+      this.renderLoraResults();
     });
     const copy = el("button", {
       type: "button", class: "icon-btn lora-copy",
@@ -547,6 +549,12 @@ export class GenerateView {
       if (input) input.value = "";
       this.renderLoraResults();
       input?.focus();
+    });
+    g("g-reset-lora")?.addEventListener("click", () => {
+      if (!s.loras.size) return;
+      s.loras.clear();
+      this.renderLoraResults();
+      toast("已清除 LoRA 选择", "ok");
     });
     g("g-refresh-loras")?.addEventListener("click", async () => {
       try {

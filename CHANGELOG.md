@@ -1,5 +1,11 @@
 # Changelog
 
+## 8.5.11
+
+- **LoRA 单选与重置**：生成页 LoRA 仅支持单选（点击新项替换当前选择），并在列表标题新增「重置已选 LoRA」按钮，可一键清空选择。
+- **画布固定比例**：生成页画布按 832:1216 固定比例居中展示，不再随窗口变大而拉伸；窗口变大时多出的空间由左栏（模型与工作流）与右栏（参数）吸收。
+- **侧栏随窗口增长**：左栏宽度由 `clamp(208px, 22vw, 420px)` 控制，右栏 `clamp(268px, 24vw, 360px)`；设置页导航与首次运行向导侧栏同样按视口宽度增长（其他界面同理），窄窗口仍回退到紧凑宽度。
+
 ## 8.5.10
 
 - Reduced route, diagnostics, settings, connection retry, and incremental model-list stalls.

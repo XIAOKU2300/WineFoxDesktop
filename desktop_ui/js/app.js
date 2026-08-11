@@ -60,7 +60,7 @@ function buildRail() {
     el("div", { class: "rail-foot" }, [
       el("span", { class: "rail-signature" }, "狐"),
       el("span", { class: "hint" }, "WineFox Desktop"),
-      el("span", { class: "hint" }, "v8.5.10 · 本地创作空间"),
+      el("span", { class: "hint" }, "v8.5.11 · 本地创作空间"),
     ]),
   );
 }

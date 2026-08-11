@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -17,6 +18,7 @@ from desktop_integration_tests.fake_comfyui.server import start_fake_comfyui
 TINY_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAE0lEQVR4nGM8ISfHAANMcBZeDgA0dgEMydTl/QAAAABJRU5ErkJggg=="
 )
+APP_VERSION = json.loads((Path(__file__).parents[1] / "packaging" / "version.json").read_text(encoding="utf-8"))["app"]
 
 
 class DesktopRuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
@@ -51,7 +53,7 @@ class DesktopRuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_bootstrap_settings_upload_and_offline_job(self) -> None:
         status, health = await self._json("GET", "/api/v1/health")
         self.assertEqual(status, 200)
-        self.assertEqual(health["version"], "8.5.10")
+        self.assertEqual(health["version"], APP_VERSION)
 
         _, settings = await self._json("GET", "/api/v1/settings")
         self.assertTrue(settings["comfyui"]["ssl_verify"])

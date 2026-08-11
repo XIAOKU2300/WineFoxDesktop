@@ -42,8 +42,8 @@ pub struct SidecarManager {
     child: Mutex<Option<Child>>,
     stdin: Mutex<Option<ChildStdin>>,
     job: JobGuard,
-    tx: Sender<SessionEvent>,
-    rx: Mutex<Receiver<SessionEvent>>,
+    tx: Mutex<Option<Sender<SessionEvent>>>,
+    rx: Mutex<Option<Receiver<SessionEvent>>>,
 }
 
 impl SidecarManager {
@@ -55,8 +55,8 @@ impl SidecarManager {
             child: Mutex::new(None),
             stdin: Mutex::new(None),
             job: JobGuard::new(),
-            tx,
-            rx: Mutex::new(rx),
+            tx: Mutex::new(Some(tx)),
+            rx: Mutex::new(Some(rx)),
         })
     }
 
@@ -163,6 +163,12 @@ impl SidecarManager {
             inner.shutdown_mode = None;
         }
         self.emit_status();
+        // 每次会话使用独立的 channel：隔离上一个失败会话残留的
+        // StdoutClosed 事件，避免新会话启动即被误判为崩溃。
+        // receiver/sender 由新会话取出接管，锁不会被长期持有。
+        let (tx, rx) = mpsc::channel::<SessionEvent>();
+        *self.tx.lock().unwrap() = Some(tx);
+        *self.rx.lock().unwrap() = Some(rx);
         let me = Arc::clone(self);
         std::thread::Builder::new()
             .name("sidecar-session".into())
@@ -399,7 +405,7 @@ fn session_main(me: &Arc<SidecarManager>) {
     *me.child.lock().unwrap() = Some(child);
     *me.stdin.lock().unwrap() = Some(stdin);
 
-    let tx = me.tx.clone();
+    let tx = me.tx.lock().unwrap().as_ref().expect("tx present").clone();
     std::thread::spawn(move || {
         for line in BufReader::new(stdout).lines() {
             match line {
@@ -428,7 +434,9 @@ fn session_main(me: &Arc<SidecarManager>) {
         }
     });
 
-    let rx = me.rx.lock().unwrap();
+    // receiver 从共享槽位取出归本会话所有：循环期间不持锁，
+    // 避免阻塞后续会话的 channel 替换（自动重启/手动重试）。
+    let rx = me.rx.lock().unwrap().take().expect("rx present");
     let boot_deadline = Instant::now() + ready_timeout();
 
     loop {

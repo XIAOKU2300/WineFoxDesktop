@@ -26,7 +26,9 @@ SIDECAR_DIR = os.path.normpath(
 if SIDECAR_DIR not in sys.path:
     sys.path.insert(0, SIDECAR_DIR)
 
-APP_VERSION = "8.5.10"
+ROOT_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+with open(os.path.join(ROOT_DIR, "packaging", "version.json"), encoding="utf-8") as version_file:
+    APP_VERSION = json.load(version_file)["app"]
 
 
 class SidecarProc:
