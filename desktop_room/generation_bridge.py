@@ -31,6 +31,7 @@ from .auth import error_response, resolve_member
 from .models import job_public, message_payload
 from .protocol import parse_client_request_id
 from .rooms import _ChatRateBucket
+from .security import contains_lone_surrogate
 from .storage import RoomStorage
 from .uploads import ImageErrorDetail, _process_image, _store_file, _store_thumb
 
@@ -487,6 +488,8 @@ def _sanitize_request(raw: dict[str, Any], settings: dict[str, Any]) -> dict[str
         raise GenerationError("提示词不能为空", "EMPTY_PROMPT", 400)
     if len(prompt) > MAX_PROMPT_LENGTH:
         raise GenerationError(f"提示词过长（最多 {MAX_PROMPT_LENGTH} 字）", "PROMPT_TOO_LONG", 400)
+    if contains_lone_surrogate(prompt):
+        raise GenerationError("提示词包含无法识别的字符，请重新输入", "INVALID_CHARACTERS", 400)
     out["prompt"] = prompt
 
     negative = raw.get("negative_prompt")
@@ -494,6 +497,8 @@ def _sanitize_request(raw: dict[str, Any], settings: dict[str, Any]) -> dict[str
         negative = str(negative).strip()
         if len(negative) > MAX_PROMPT_LENGTH:
             raise GenerationError("负面提示词过长", "PROMPT_TOO_LONG", 400)
+        if contains_lone_surrogate(negative):
+            raise GenerationError("负面提示词包含无法识别的字符，请重新输入", "INVALID_CHARACTERS", 400)
         out["negative_prompt"] = negative
 
     out["width"] = _clamp_int(raw.get("width"), 64, 2048, 832)

@@ -27,6 +27,7 @@ from desktop_room.security import (
     NameErrorDetail,
     RESERVED_NAMES,
     constant_time_equal,
+    contains_lone_surrogate,
     hash_password,
     hash_session_token,
     normalize_lookup,
@@ -139,6 +140,28 @@ class SessionTokenTests(unittest.TestCase):
     def test_constant_time_compare(self) -> None:
         self.assertTrue(constant_time_equal("abc", "abc"))
         self.assertFalse(constant_time_equal("abc", "abd"))
+
+
+class LoneSurrogateTests(unittest.TestCase):
+    """孤立代理字符检测（Windows IME/剪贴板可能产生，无法 UTF-8 编码）。"""
+
+    def test_accepts_plain_text(self) -> None:
+        for text in ("abc", "中文房间", "😀 合法代理对", "1234567"):
+            self.assertFalse(contains_lone_surrogate(text))
+
+    def test_detects_lone_low_surrogate(self) -> None:
+        # 用户实际遇到的崩溃字符：\udcac（孤立低代理）
+        self.assertTrue(contains_lone_surrogate("1234567\udcac"))
+        self.assertTrue(contains_lone_surrogate("a\udc00b"))
+
+    def test_detects_lone_high_surrogate(self) -> None:
+        self.assertTrue(contains_lone_surrogate("\ud83d"))
+        self.assertTrue(contains_lone_surrogate("名称\udbff"))
+
+    def test_valid_surrogate_pair_not_flagged(self) -> None:
+        # 高代理 + 低代理 = 合法 Unicode 字符（emoji），不视为孤立
+        self.assertFalse(contains_lone_surrogate("😀"))
+        self.assertFalse(contains_lone_surrogate("a😀b"))
 
 
 class RateLimitTests(unittest.TestCase):
@@ -436,6 +459,23 @@ class ManagerLifecycleTests(unittest.IsolatedAsyncioTestCase):
             ) as resp:
                 self.assertEqual(resp.status, 403)
 
+    async def test_lan_host_allowed_others_denied(self) -> None:
+        status = await self.manager.start(dict(TEST_SETTINGS))
+        port = status["port"]
+        # 模拟管理器探测到的本机局域网 IP 放行（真实探测依赖网卡，测试直接注入）
+        self.manager._app["lan_hosts"] = ["192.168.9.9"]
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"http://127.0.0.1:{port}/room/v1/info",
+                headers={"Host": "192.168.9.9"},
+            ) as resp:
+                self.assertEqual(resp.status, 200)
+            async with session.get(
+                f"http://127.0.0.1:{port}/room/v1/info",
+                headers={"Host": "192.168.9.10"},
+            ) as resp:
+                self.assertEqual(resp.status, 403)
+
     async def test_stop_returns_to_stopped_and_closes_gateway(self) -> None:
         status = await self.manager.start(dict(TEST_SETTINGS))
         port = status["port"]
@@ -448,6 +488,17 @@ class ManagerLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_start_requires_fields(self) -> None:
         with self.assertRaises(RoomStartError):
             await self.manager.start({"name": "", "ownerName": "", "password": ""})
+
+    async def test_start_rejects_lone_surrogates(self) -> None:
+        for field in ("name", "ownerName", "password"):
+            settings = dict(TEST_SETTINGS)
+            settings[field] = settings[field] + "\udcac"
+            with self.subTest(field=field):
+                with self.assertRaises(RoomStartError) as ctx:
+                    await self.manager.start(settings)
+                self.assertEqual(ctx.exception.error_code, "INVALID_CHARACTERS")
+        # 失败后状态仍为 stopped，不会残留半启动状态
+        self.assertEqual(self.manager.get_status()["state"], "stopped")
 
     async def test_start_twice_is_idempotent(self) -> None:
         await self.manager.start(dict(TEST_SETTINGS))
@@ -515,13 +566,15 @@ class ManagerLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["tunnelConnected"])
         self.assertIsNotNone(result["verifyWarning"])
 
-    async def test_set_tunnel_https_unreachable_rolls_back_allowlist(self) -> None:
+    async def test_set_tunnel_https_unreachable_records_warning(self) -> None:
         from unittest.mock import AsyncMock, patch
         await self.manager.start(dict(TEST_SETTINGS))
         with patch("desktop_room.manager.verify_tunnel", new=AsyncMock(return_value=False)):
-            with self.assertRaises(TunnelValidationError):
-                await self.manager.set_tunnel("https://abc.trycloudflare.com")
-        self.assertNotIn("abc.trycloudflare.com", self.manager._app["allow_tunnel_hosts"])
+            result = await self.manager.set_tunnel("https://abc.trycloudflare.com")
+        # 身份校验（回环 Host）通过即配置成功；公网探测失败仅记警告，不硬阻断
+        self.assertTrue(result["tunnelConnected"])
+        self.assertIsNotNone(result["verifyWarning"])
+        self.assertIn("abc.trycloudflare.com", self.manager._app["allow_tunnel_hosts"])
 
 
 class ModelSafetyTests(unittest.TestCase):

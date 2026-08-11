@@ -2,9 +2,26 @@
  * 房主身份经 Shell 桥传递，本页通过面板代理访问房间网关（X-WineFox-Room-Host
  * 令牌由 Rust 注入，页面本身不接触令牌）。
  */
-import { el, $, $$, ic, esc, toast, loadingState, copyText } from "../utils.js";
+import { el, $, $$, ic, esc, toast, loadingState, copyText, isDegenerate } from "../utils.js";
 import { roomBridge, debugBridge } from "../utils.js";
 import { store } from "../store.js";
+
+/* 是否含孤立代理字符（U+D800–U+DFFF）。
+ * Windows IME/剪贴板可能产生孤立代理；它们无法 UTF-8 编码，
+ * 在 Rust/Python 链路中会触发 UnicodeEncodeError。
+ * 合法代理对（高代理+低代理）计为正常字符，不视为孤立。 */
+function hasLoneSurrogate(text) {
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = text.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) { i++; continue; } // 合法代理对
+      return true;
+    }
+    if (code >= 0xdc00 && code <= 0xdfff) return true; // 孤立低代理
+  }
+  return false;
+}
 
 export class LabView {
   constructor() {
@@ -27,6 +44,15 @@ export class LabView {
   activate() {
     if (!this.unsub) {
       this.unsub = roomBridge.onState((state) => {
+        if (this._pendingStart) {
+          if (state.state === "online") {
+            this._pendingStart = false;
+            toast("房间已开启", "ok");
+          } else if (state.state === "failed" && state.error) {
+            this._pendingStart = false;
+            toast(state.error, "err");
+          }
+        }
         this.status = state;
         this.renderStatus();
       });
@@ -236,18 +262,31 @@ export class LabView {
       toast("请填写房间名称、房主名称与密码", "err");
       return;
     }
+    for (const [label, value] of [["房间名称", settings.name], ["房主名称", settings.ownerName], ["密码", settings.password]]) {
+      if (hasLoneSurrogate(value)) {
+        toast(`${label}包含无法识别的字符，请重新输入`, "err");
+        return;
+      }
+    }
     if (settings.port !== null && (settings.port < 1024 || settings.port > 65535)) {
       toast("端口需在 1024-65535 之间", "err");
       return;
     }
     const start = $("#lab-start");
     if (start) { start.disabled = true; start.setAttribute("aria-busy", "true"); }
+    // 房间已在线时 manager.start 幂等返回、不发布 room_status 事件，
+    // 因此只对「从停止→启动」的尝试挂 pending 标记，避免标记滞留误弹 toast。
+    if (this.status?.state !== "online") this._pendingStart = true;
     try {
       const res = await roomBridge.start(settings);
       if (!res.ok) {
+        this._pendingStart = false;
         if (res.error === "DEBUG_MODE_REQUIRED") toast("需要先在左上角 Logo 连续点击 10 次解锁调试模式", "err");
         else toast(res.error || "开启房间失败", "err");
       }
+    } catch {
+      this._pendingStart = false;
+      toast("开启房间失败：无法连接桌面服务", "err");
     } finally {
       if (start) { start.disabled = false; start.removeAttribute("aria-busy"); }
     }
@@ -319,10 +358,19 @@ export class LabView {
     }
 
     if (!s || !s.state || s.state === "stopped" || s.state === "") {
-      box.replaceChildren(el("div", { class: "empty" }, [
+      const empty = el("div", { class: "empty" }, [
         ic("queue"),
         el("div", { class: "empty-desc" }, "当前没有运行中的房间。"),
-      ]));
+      ]);
+      // 调试模式下聊天室入口始终可见：房间未开时点入向导会提示先开房。
+      if (store.get("debugEnabled")) {
+        box.replaceChildren(
+          empty,
+          el("div", { class: "row gap-2", style: "justify-content:center" }, [this.chatEntryButton()]),
+        );
+      } else {
+        box.replaceChildren(empty);
+      }
       if (stop) stop.hidden = true;
       if (tunnelHint) tunnelHint.textContent = "未配置公网地址。";
       return;
@@ -347,38 +395,47 @@ export class LabView {
       s.tunnelUrl ? ["公网地址", s.tunnelUrl] : null,
     ].filter(Boolean);
 
-    const inviteUrl = s.tunnelUrl || s.localUrl;
+    // 邀请地址优先级：公网隧道 → 局域网地址 → 本机地址（尽量给对方一个可用的链接）。
+    const inviteUrl = s.tunnelUrl || s.lanUrl || s.localUrl;
     const copyBtn = inviteUrl
       ? el("button", { class: "btn btn-sm", id: "lab-copy-url", type: "button" }, [ic("copy"), esc("复制邀请地址")])
       : null;
     if (copyBtn) {
-      copyBtn.addEventListener("click", () => {
-        if (inviteUrl) { void copyText(inviteUrl); toast("邀请地址已复制", "ok"); }
+      copyBtn.addEventListener("click", async () => {
+        if (!inviteUrl) return;
+        try { await copyText(inviteUrl); toast("邀请地址已复制", "ok"); }
+        catch { toast("复制失败，请手动选择地址", "err"); }
       });
     }
     const lanCopy = s.lanUrl
       ? el("button", { class: "btn btn-sm", id: "lab-copy-lan", type: "button" }, [ic("copy"), esc("复制局域网地址")])
       : null;
     if (lanCopy) {
-      lanCopy.addEventListener("click", () => {
-        void copyText(s.lanUrl);
-        toast("局域网地址已复制", "ok");
+      lanCopy.addEventListener("click", async () => {
+        try { await copyText(s.lanUrl); toast("局域网地址已复制", "ok"); }
+        catch { toast("复制失败，请手动选择地址", "err"); }
       });
     }
-    const enterBtn = s.state === "online"
-      ? el("button", { class: "btn btn-primary", id: "lab-enter-chat", type: "button" }, [ic("queue"), esc("进入聊天室")])
-      : null;
-    if (enterBtn) enterBtn.addEventListener("click", () => this.openWizard());
+    // 调试模式下聊天室入口始终显示（房间未开时点入向导会提示先开房）。
+    const enterBtn = store.get("debugEnabled") ? this.chatEntryButton() : null;
 
-    box.replaceChildren(
+    // 不可把 null 直接传给 replaceChildren：浏览器会强制转为文本节点 "null"。
+    box.replaceChildren(...[
       el("div", { class: "summary-table" }, rows.map(([k, v]) => el("div", { class: "summary-row" }, [
         el("span", { class: "summary-key" }, esc(k)),
         el("span", { class: "summary-value" }, esc(String(v))),
       ]))),
       (copyBtn || lanCopy || enterBtn) ? el("div", { class: "row gap-2 wrap" }, [copyBtn, lanCopy, enterBtn].filter(Boolean)) : null,
-      s.verifyWarning ? el("div", { class: "notice warn" }, [ic("warn"), el("span", {}, esc(s.verifyWarning))]) : null,
-      s.error ? el("div", { class: "notice warn", role: "alert" }, [ic("warn"), el("span", {}, esc(s.error))]) : null,
-    );
+      !isDegenerate(s.verifyWarning) ? el("div", { class: "notice warn" }, [ic("warn"), el("span", {}, esc(s.verifyWarning))]) : null,
+      !isDegenerate(s.error) ? el("div", { class: "notice warn", role: "alert" }, [ic("warn"), el("span", {}, esc(s.error))]) : null,
+    ].filter(Boolean));
+  }
+
+  /* 调试模式下始终可见的"进入聊天室"按钮。 */
+  chatEntryButton() {
+    const btn = el("button", { class: "btn btn-primary", id: "lab-enter-chat", type: "button" }, [ic("queue"), esc("进入聊天室")]);
+    btn.addEventListener("click", () => this.openWizard());
+    return btn;
   }
 
   /* 进入聊天室向导：两步（认证链接 → 昵称/密码）。 */
@@ -459,6 +516,11 @@ export class LabView {
       const input = $("#wizard-url", overlay);
       const url = (input?.value || "").trim();
       if (!url) { toast("请填写公网域名或局域网 IP", "warn"); return; }
+      if (!this.status || this.status.state !== "online") {
+        httpHint.hidden = true;
+        setNotice("warn", "当前没有运行中的房间，请先在实验室开启房间");
+        return;
+      }
       const btn = $("#wizard-confirm", overlay);
       if (btn.disabled) return;
       btn.disabled = true;
@@ -484,6 +546,10 @@ export class LabView {
       if (btn.disabled) return;
       const nick = ($("#wizard-name", overlay)?.value || "").trim();
       const pwd = ($("#wizard-password", overlay)?.value || "").trim();
+      if (hasLoneSurrogate(nick) || hasLoneSurrogate(pwd)) {
+        toast("昵称或密码包含无法识别的字符，请重新输入", "err");
+        return;
+      }
       btn.disabled = true;
       try {
         const res = await roomBridge.openChatroom(nick || null, pwd || null);

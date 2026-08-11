@@ -95,13 +95,14 @@ export class SettingsView {
     let nodes = this.sectionNodes.get(this.section);
     if (!nodes) {
       const content = this[`sec_${this.section}`]();
-      nodes = Array.isArray(content) ? content : [content];
+      // replaceChildren 收到 null 会渲染出文本 "null"，这里统一过滤掉空项。
+      nodes = (Array.isArray(content) ? content : [content]).filter(Boolean);
       this.sectionNodes.set(this.section, nodes);
       body.replaceChildren(...nodes);
       this.attachSaveButtons();
       return;
     }
-    body.replaceChildren(...nodes);
+    body.replaceChildren(...nodes.filter(Boolean));
   }
 
   input(id, value, opts = {}) {

@@ -250,6 +250,19 @@ class RoomChatTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(resp.status, 400)
             self.assertEqual((await resp.json())["errorCode"], "EMPTY_TEXT")
 
+    async def test_message_with_lone_surrogate_rejected(self) -> None:
+        async with await self._join("代理信者") as resp:
+            self.assertEqual(resp.status, 200)
+        async with self.guest.post(
+            f"{self.base}/room/v1/messages",
+            json={"text": "你好\udcac"},
+        ) as resp:
+            self.assertEqual(resp.status, 400)
+            self.assertEqual((await resp.json())["errorCode"], "INVALID_CHARACTERS")
+        # 未被写入数据库
+        async with self.guest.get(f"{self.base}/room/v1/messages") as resp:
+            self.assertEqual(len((await resp.json())["messages"]), 0)
+
     async def test_delete_own_message_allowed_sender_only(self) -> None:
         async with await self._join("删信者") as resp:
             self.assertEqual(resp.status, 200)

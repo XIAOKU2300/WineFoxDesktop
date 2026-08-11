@@ -120,30 +120,23 @@ pub fn get_room_status(state: State<'_, Arc<AppState>>) -> RoomStatus {
     state.inner.lock().unwrap().room.clone()
 }
 
-/// 设置已由外部 Tunnel（Cloudflare/FRP）解析出的公网 HTTPS 地址。
-/// Rust 先做本地校验并验证 /room/v1/info 与 public_id 一致，再交给 sidecar。
+/// 设置已由外部 Tunnel（Cloudflare/FRP）解析出的公网地址。
+/// Rust 只做静态语法门禁（scheme/host/userinfo）；Host 身份与公网可达性的
+/// 权威校验在 Python sidecar：回环 Host 身份是硬要求，公网探测失败仅记警告
+/// （本机探测公网地址在证书/NAT hairpin/防火墙下常失败，不应硬阻断）。
 /// 调试模式未解锁时稳定返回 DEBUG_MODE_REQUIRED（避免任意 Host 探测）。
 #[tauri::command]
 pub fn set_room_tunnel(
     app: AppHandle,
     manager: State<'_, Arc<SidecarManager>>,
-    state: State<'_, Arc<AppState>>,
     debug: State<'_, DebugMode>,
     url: String,
 ) -> Result<(), String> {
     if !debug.is_enabled() {
         return Err(crate::debug_mode::DEBUG_MODE_REQUIRED.to_string());
     }
-    let current_public_id = state.inner.lock().unwrap().room.public_id.clone();
-    // 按 scheme 分流：https 做本地深度校验（info 端点 + public_id），
-    // http 仅过静态语法门禁（回环身份 + allowlist 的权威校验在 Python 侧）。
     let parsed = crate::tunnel::parse_public_url(&url)?;
-    let verified = if parsed.scheme == "https" {
-        crate::tunnel::verify_public_url(&url, current_public_id.as_deref())?
-    } else {
-        parsed.base()
-    };
-    send_room_command(&app, &manager, json!({ "cmd": "room_tunnel", "url": verified }))
+    send_room_command(&app, &manager, json!({ "cmd": "room_tunnel", "url": parsed.base() }))
 }
 
 /// 清除已配置的公网 Tunnel（退回本地房间）。
