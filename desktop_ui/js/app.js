@@ -60,7 +60,7 @@ function buildRail() {
     el("div", { class: "rail-foot" }, [
       el("span", { class: "rail-signature" }, "狐"),
       el("span", { class: "hint" }, "WineFox Desktop"),
-      el("span", { class: "hint" }, "v8.5.9 · 本地创作空间"),
+      el("span", { class: "hint" }, "v8.5.10 · 本地创作空间"),
     ]),
   );
 }
@@ -148,6 +148,7 @@ function switchView(routeId) {
   if (!entry) return;
 
   if (currentEntry && currentEntry !== entry) {
+    currentEntry.view.deactivate?.();
     currentEntry.root.hidden = true;
     currentEntry.root.removeAttribute("id");
     currentEntry.root.classList.remove("view-motion-enter");
@@ -156,6 +157,7 @@ function switchView(routeId) {
   currentEntry = entry;
   entry.root.id = "view-root";
   entry.root.hidden = false;
+  if (entry.mounted) entry.view.activate?.();
   playViewEntrance(entry, token);
   scheduleMount(entry);
 }
@@ -207,14 +209,18 @@ function refreshHealth({ manual = false } = {}) {
     const connText = $("#conn-status .conn-text");
     if (connText) connText.textContent = "正在重新检测…";
   }
-  const comfyRequest = manual ? api.probe({ force: true }) : api.comfyui();
   healthRefreshPromise = Promise.allSettled([
-    withTimeout(api.health(), 5000),
-    withTimeout(comfyRequest, 5000),
+    withTimeout((signal) => api.health({ signal }), 5000),
+    withTimeout(
+      (signal) => manual ? api.probe({ force: true }, { signal }) : api.comfyui({ signal }),
+      5000,
+    ),
   ]).then(([healthResult, comfyResult]) => {
     if (healthResult.status === "fulfilled") {
       store.set("health", healthResult.value);
     } else {
+      store.set("health", null);
+      store.set("comfyui", null);
       const conn = $("#conn-status");
       if (conn) {
         conn.className = "conn err";
@@ -227,6 +233,7 @@ function refreshHealth({ manual = false } = {}) {
       applyHealth(healthResult.value);
       return;
     }
+    store.set("comfyui", null);
     const conn = $("#conn-status");
     if (conn) {
       conn.className = "conn err";
@@ -270,9 +277,21 @@ async function maybeLoadMock() {
   installMock({ scenario: query.get("scenario") || "success" });
 }
 
-function withTimeout(promise, ms = 4000) {
+function withTimeout(run, ms = 4000) {
+  const controller = new AbortController();
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("preload timeout")), ms);
+    const timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error("preload timeout"));
+    }, ms);
+    let promise;
+    try {
+      promise = Promise.resolve(run(controller.signal));
+    } catch (error) {
+      clearTimeout(timer);
+      reject(error);
+      return;
+    }
     promise.then(
       (value) => { clearTimeout(timer); resolve(value); },
       (error) => { clearTimeout(timer); reject(error); },
@@ -282,23 +301,22 @@ function withTimeout(promise, ms = 4000) {
 
 async function preloadWorkspace() {
   sendLaunchProgress("正在读取设置与模型目录");
-  const catalog = api.catalog();
   const sources = {
-    health: api.health(),
-    settings: api.settings(),
-    catalog,
-    models: catalog,
-    secrets: api.secrets(),
-    history: api.history({ limit: 24 }),
-    categories: api.categories(),
-    favorites: api.favorites({ limit: 24 }),
-    comfyui: api.comfyui(),
+    health: (signal) => api.health({ signal }),
+    settings: (signal) => api.settings({ signal }),
+    catalog: (signal) => api.catalog({ signal }),
+    secrets: (signal) => api.secrets({ signal }),
+    history: (signal) => api.history({ limit: 24 }, { signal }),
+    categories: (signal) => api.categories({ signal }),
+    favorites: (signal) => api.favorites({ limit: 24 }, { signal }),
+    comfyui: (signal) => api.comfyui({ signal }),
   };
   const entries = Object.entries(sources);
-  const results = await Promise.allSettled(entries.map(([, promise]) => withTimeout(promise)));
+  const results = await Promise.allSettled(entries.map(([, run]) => withTimeout(run)));
   results.forEach((result, index) => {
     if (result.status === "fulfilled") store.set(entries[index][0], result.value);
   });
+  if (store.get("catalog")) store.set("models", store.get("catalog"));
   applyHealth(store.get("health"));
   sendLaunchProgress("正在铺开创作界面");
 }

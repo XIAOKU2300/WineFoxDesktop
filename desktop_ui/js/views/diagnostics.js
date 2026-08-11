@@ -13,6 +13,7 @@ export class DiagnosticsView {
     this.loadToken = 0;
     this.loading = false;
     this.detailTimer = null;
+    this.requestControllers = new Set();
   }
 
   mount(container) {
@@ -58,7 +59,7 @@ export class DiagnosticsView {
     this.cancelDetailRender();
     body.replaceChildren(loadingState("正在汇集诊断信息"));
     try {
-      const data = await withDeadline(this.requestDiagnostics(), 12000, "诊断请求超过 12 秒，已停止等待");
+      const data = await this.withDeadline((signal) => this.requestDiagnostics(signal), 12000, "诊断请求超过 12 秒，已取消本次等待");
       if (token !== this.loadToken) return;
       this.data = data;
       this.error = null;
@@ -77,8 +78,8 @@ export class DiagnosticsView {
     this.renderBody();
   }
 
-  async requestDiagnostics() {
-    return await api.diagnostics();
+  async requestDiagnostics(signal) {
+    return await api.diagnostics({ signal });
   }
 
   renderBody() {
@@ -258,7 +259,7 @@ export class DiagnosticsView {
     if (btn?.disabled) return;
     if (btn) btn.disabled = true;
     try {
-      const res = await withDeadline(api.exportDiagnostics(), 10000, "导出诊断信息超时");
+      const res = await this.withDeadline((signal) => api.exportDiagnostics({ signal }), 10000, "导出诊断信息超时");
       const content = res.content || JSON.stringify(res, null, 2);
       downloadText(`winefox_diagnostics_${new Date().toISOString().slice(0, 10)}.log`, content, "text/plain");
       toast("已导出脱敏日志", "ok");
@@ -270,15 +271,45 @@ export class DiagnosticsView {
     }
     if (btn) btn.disabled = false;
   }
+
+  withDeadline(run, ms, message) {
+    const controller = new AbortController();
+    this.requestControllers.add(controller);
+    return withDeadline(run, ms, message, controller)
+      .finally(() => this.requestControllers.delete(controller));
+  }
+
+  deactivate() {
+    this.loadToken += 1;
+    this.loading = false;
+    this.cancelDetailRender();
+    this.requestControllers.forEach((controller) => controller.abort());
+    this.requestControllers.clear();
+  }
+
+  activate() {
+    if (!this.data && !this.loading) void this.load();
+  }
 }
 
 function urlHost(url) {
   try { return new URL(url).host; } catch { return "—"; }
 }
 
-function withDeadline(promise, ms, message) {
+function withDeadline(run, ms, message, controller = new AbortController()) {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(message)), ms);
+    const timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error(message));
+    }, ms);
+    let promise;
+    try {
+      promise = Promise.resolve(run(controller.signal));
+    } catch (error) {
+      clearTimeout(timer);
+      reject(error);
+      return;
+    }
     promise.then(
       (value) => { clearTimeout(timer); resolve(value); },
       (error) => { clearTimeout(timer); reject(error); },

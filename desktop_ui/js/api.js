@@ -21,7 +21,7 @@ export class ApiError extends Error {
 }
 
 async function request(path, opts = {}) {
-  const { method = "GET", body, headers = {}, query } = opts;
+  const { method = "GET", body, headers = {}, query, signal } = opts;
   let url = API_BASE + path;
   if (query) {
     const qs = new URLSearchParams();
@@ -31,7 +31,7 @@ async function request(path, opts = {}) {
     const s = qs.toString();
     if (s) url += "?" + s;
   }
-  const init = { method, credentials: "same-origin", headers: { ...headers } };
+  const init = { method, credentials: "same-origin", headers: { ...headers }, signal };
   if (!["GET", "HEAD"].includes(method.toUpperCase())) {
     init.headers["X-WineFox-Client"] = "1";
   }
@@ -43,6 +43,7 @@ async function request(path, opts = {}) {
   try {
     res = await fetch(url, init);
   } catch (e) {
+    if (e?.name === "AbortError") throw e;
     throw new ApiError(0, "无法连接后端服务（网络不可用或服务未启动）", { offline: true });
   }
   let data = null;
@@ -67,16 +68,16 @@ export const api = {
   del: (path) => request(path, { method: "DELETE" }),
 
   /* ---- 业务端点 ---- */
-  health: () => request("/health"),
-  settings: () => request("/settings"),
-  saveSettings: (patch) => request("/settings", { method: "PATCH", body: JSON.stringify(patch) }),
-  secrets: () => request("/secrets"),
-  setSecret: (key, value) => request(`/secrets/${encodeURIComponent(key)}`, { method: "PUT", body: JSON.stringify({ value }) }),
-  clearSecret: (key) => request(`/secrets/${encodeURIComponent(key)}`, { method: "DELETE" }),
-  comfyui: () => request("/comfyui"),
-  probe: (payload = {}) => request("/comfyui/probe", { method: "POST", body: JSON.stringify(payload) }),
-  catalog: () => request("/catalog"),
-  models: () => request("/models"),
+  health: (options = {}) => request("/health", options),
+  settings: (options = {}) => request("/settings", options),
+  saveSettings: (patch, options = {}) => request("/settings", { ...options, method: "PATCH", body: JSON.stringify(patch) }),
+  secrets: (options = {}) => request("/secrets", options),
+  setSecret: (key, value, options = {}) => request(`/secrets/${encodeURIComponent(key)}`, { ...options, method: "PUT", body: JSON.stringify({ value }) }),
+  clearSecret: (key, options = {}) => request(`/secrets/${encodeURIComponent(key)}`, { ...options, method: "DELETE" }),
+  comfyui: (options = {}) => request("/comfyui", options),
+  probe: (payload = {}, options = {}) => request("/comfyui/probe", { ...options, method: "POST", body: JSON.stringify(payload) }),
+  catalog: (options = {}) => request("/catalog", options),
+  models: (options = {}) => request("/models", options),
   uploads: async (formData) => {
     const result = await request("/uploads", { method: "POST", body: formData });
     return {
@@ -88,19 +89,19 @@ export const api = {
   submitJob: (payload) => request("/jobs", { method: "POST", body: JSON.stringify(payload) }),
   job: (id) => request(`/jobs/${encodeURIComponent(id)}`),
   cancelJob: (id) => request(`/jobs/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
-  history: (query) => request("/history", { query }),
+  history: (query, options = {}) => request("/history", { ...options, query }),
   favoriteHistory: (id) => request(`/history/${encodeURIComponent(id)}/favorite`, { method: "POST" }),
   unfavoriteHistory: (id) => request(`/history/${encodeURIComponent(id)}/unfavorite`, { method: "POST" }),
   trashHistory: (id) => request(`/history/${encodeURIComponent(id)}/trash`, { method: "POST" }),
   restoreHistory: (id) => request(`/history/${encodeURIComponent(id)}/restore`, { method: "POST" }),
   purgeHistory: (id) => request(`/history/${encodeURIComponent(id)}/purge`, { method: "POST" }),
-  categories: () => request("/categories"),
-  favorites: (query) => request("/favorites", { query }),
+  categories: (options = {}) => request("/categories", options),
+  favorites: (query, options = {}) => request("/favorites", { ...options, query }),
   createFavorite: (body) => request("/favorites", { method: "POST", body: JSON.stringify(body) }),
   updateFavorite: (id, body) => request(`/favorites/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(body) }),
   deleteFavorite: (id) => request(`/favorites/${encodeURIComponent(id)}`, { method: "DELETE" }),
-  diagnostics: () => request("/diagnostics"),
-  exportDiagnostics: () => request("/diagnostics/export", { method: "POST" }),
+  diagnostics: (options = {}) => request("/diagnostics", options),
+  exportDiagnostics: (options = {}) => request("/diagnostics/export", { ...options, method: "POST" }),
 };
 
 /* ================= 任务轮询 =================

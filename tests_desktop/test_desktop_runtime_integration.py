@@ -51,7 +51,7 @@ class DesktopRuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_bootstrap_settings_upload_and_offline_job(self) -> None:
         status, health = await self._json("GET", "/api/v1/health")
         self.assertEqual(status, 200)
-        self.assertEqual(health["version"], "8.5.9")
+        self.assertEqual(health["version"], "8.5.10")
 
         _, settings = await self._json("GET", "/api/v1/settings")
         self.assertTrue(settings["comfyui"]["ssl_verify"])

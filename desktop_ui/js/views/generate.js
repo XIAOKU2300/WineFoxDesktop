@@ -2,7 +2,7 @@
  * 布局：左（模型族/工作流/LoRA/队列）｜中（画布，拖放）｜右（参数）
  * 支持 txt2img / img2img；任务轮询 running 1s / queued 2s / 错误退避至 10s。
  */
-import { el, $, $$, ic, esc, sanitizeName, fmtRelative, loadingState, copyText, STATUS_META, toast } from "../utils.js";
+import { el, $, $$, ic, esc, sanitizeName, sanitizeResourceName, fmtRelative, loadingState, copyText, STATUS_META, toast } from "../utils.js";
 import { api } from "../api.js";
 import { JobPoller } from "../api.js";
 import { store } from "../store.js";
@@ -282,7 +282,7 @@ export class GenerateView {
 
   loraChip(l) {
     const id = l.id ?? l.name;
-    const label = sanitizeName(l.name || l.label || id) || "未命名 LoRA";
+    const label = sanitizeResourceName(l.name || l.label || id) || "未命名 LoRA";
     const active = this.state.loras.has(id);
     const aliases = [l.character, ...(Array.isArray(l.aliases) ? l.aliases : []), ...(Array.isArray(l.tags) ? l.tags : [])].filter(Boolean);
     const btn = el("button", {

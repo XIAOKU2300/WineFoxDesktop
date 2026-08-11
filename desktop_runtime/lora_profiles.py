@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
+import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from winefox_core.lora_service import (
     LoraService,
     MODEL_FAMILY_ANIMA,
     MODEL_FAMILY_ILLUSTRIOUS,
+    is_generic_term,
+    normalize_match_key,
     normalize_lora_key,
 )
 
@@ -25,6 +30,240 @@ _PLUGIN_IDS = (
 )
 _FAMILIES = (MODEL_FAMILY_ANIMA, MODEL_FAMILY_ILLUSTRIOUS)
 _MAX_PROFILE_BYTES = 8 * 1024 * 1024
+_AUTO_CACHE_PATH = Path("cache") / "lora_profiles_metadata.json"
+_AUTO_CACHE_SCHEMA = 1
+_AUTO_TAG_DENY_RE = re.compile(
+    r"(?i)(?:^|[ _()-])(?:artist|copyright|series|style|quality|masterpiece|best quality|"
+    r"solo|girl|boy|woman|man|breast|penis|nipple|hair|eyes?|smile|blush|looking|"
+    r"standing|sitting|background|clothing|dress|shirt|skirt|swimsuit|bikini|pose)(?:$|[ _()-])"
+)
+_AUTO_FRANCHISE_ONLY = {
+    "bluearchive",
+    "genshinimpact",
+    "honkaistarrail",
+    "wutheringwaves",
+    "azurlane",
+    "cyberpunk2077",
+    "原神",
+    "星穹铁道",
+    "崩坏星穹铁道",
+    "鸣潮",
+    "碧蓝航线",
+    "蓝色档案",
+    "赛博朋克2077",
+}
+
+
+def lora_metadata_cache_key(server_address: str) -> str:
+    normalized = str(server_address or "").strip().rstrip("/").casefold()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:20]
+
+
+def _read_auto_cache(data_root: Path) -> dict[str, Any]:
+    path = Path(data_root) / _AUTO_CACHE_PATH
+    try:
+        if not path.is_file() or path.is_symlink() or path.stat().st_size > _MAX_PROFILE_BYTES:
+            return {}
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) and value.get("schemaVersion") == _AUTO_CACHE_SCHEMA else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _atomic_write_json(path: Path, value: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        with temp.open("w", encoding="utf-8", newline="\n") as handle:
+            json.dump(value, handle, ensure_ascii=False, indent=2, sort_keys=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp, path)
+    finally:
+        try:
+            temp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def cached_generated_lora_profiles(data_root: Path, cache_key: str) -> dict[str, dict[str, dict[str, Any]]]:
+    cache = _read_auto_cache(data_root)
+    servers = cache.get("servers") if isinstance(cache.get("servers"), dict) else {}
+    bucket = servers.get(str(cache_key)) if isinstance(servers, dict) else {}
+    raw_profiles = bucket.get("profiles") if isinstance(bucket, dict) else {}
+    result: dict[str, dict[str, dict[str, Any]]] = {family: {} for family in _FAMILIES}
+    if not isinstance(raw_profiles, dict):
+        return result
+    for family in _FAMILIES:
+        items = raw_profiles.get(family)
+        if isinstance(items, dict):
+            result[family] = {
+                str(key): dict(value)
+                for key, value in items.items()
+                if isinstance(value, dict)
+            }
+    return result
+
+
+def cache_generated_lora_profiles(
+    data_root: Path,
+    cache_key: str,
+    profiles: Mapping[str, Mapping[str, Mapping[str, Any]]],
+) -> None:
+    cache = _read_auto_cache(data_root)
+    servers = dict(cache.get("servers") or {}) if isinstance(cache.get("servers"), dict) else {}
+    previous = servers.get(cache_key) if isinstance(servers.get(cache_key), dict) else {}
+    merged: dict[str, dict[str, dict[str, Any]]] = {family: {} for family in _FAMILIES}
+    old_profiles = previous.get("profiles") if isinstance(previous, dict) else {}
+    for family in _FAMILIES:
+        old_items = old_profiles.get(family) if isinstance(old_profiles, dict) else {}
+        if isinstance(old_items, dict):
+            merged[family].update(
+                {str(key): dict(value) for key, value in old_items.items() if isinstance(value, dict)}
+            )
+        new_items = profiles.get(family) if isinstance(profiles, Mapping) else {}
+        if isinstance(new_items, Mapping):
+            merged[family].update(
+                {str(key): dict(value) for key, value in new_items.items() if isinstance(value, Mapping)}
+            )
+    servers[cache_key] = {"updatedAt": int(time.time()), "profiles": merged}
+    _atomic_write_json(
+        Path(data_root) / _AUTO_CACHE_PATH,
+        {"schemaVersion": _AUTO_CACHE_SCHEMA, "servers": servers},
+    )
+
+
+def _metadata_json_map(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str) or len(value) > _MAX_PROFILE_BYTES:
+        return {}
+    try:
+        decoded = json.loads(value)
+    except (TypeError, ValueError):
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def _metadata_family(filename: str, metadata: Mapping[str, Any]) -> str:
+    evidence = " ".join(
+        str(value or "")
+        for value in (
+            filename,
+            metadata.get("modelspec.title"),
+            metadata.get("ss_output_name"),
+            metadata.get("ss_base_model_version"),
+            metadata.get("ss_sd_model_name"),
+        )
+    ).casefold()
+    if re.search(r"(?:^|[^a-z])anima(?:[^a-z]|$)", evidence):
+        return MODEL_FAMILY_ANIMA
+    if re.search(r"illustrious|illu(?:strious)?|ilxl|noobai|noobxl", evidence):
+        return MODEL_FAMILY_ILLUSTRIOUS
+    return ""
+
+
+def _metadata_aliases(filename: str, metadata: Mapping[str, Any]) -> list[str]:
+    values = [
+        metadata.get("modelspec.title"),
+        metadata.get("ss_output_name"),
+        Path(str(filename)).stem,
+    ]
+    aliases: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        value = re.sub(r"\s+", " ", str(raw or "").strip())[:120]
+        marker = normalize_match_key(value)
+        if (
+            not value
+            or not re.search(r"[A-Za-z\u3040-\u30ff\u3400-\u9fff]", value)
+            or not marker
+            or marker in seen
+            or marker in _AUTO_FRANCHISE_ONLY
+            or is_generic_term(value)
+        ):
+            continue
+        seen.add(marker)
+        aliases.append(value)
+    return aliases
+
+
+def _metadata_activation_tags(metadata: Mapping[str, Any], aliases: Iterable[str]) -> list[str]:
+    frequencies = _metadata_json_map(metadata.get("ss_tag_frequency"))
+    totals: dict[str, float] = {}
+    display: dict[str, str] = {}
+    for tags in frequencies.values():
+        if not isinstance(tags, dict):
+            continue
+        for raw_tag, raw_count in tags.items():
+            tag = re.sub(r"\s+", " ", str(raw_tag or "").strip())[:100]
+            try:
+                count = float(raw_count)
+            except (TypeError, ValueError):
+                continue
+            marker = normalize_match_key(tag)
+            if not marker or count <= 0:
+                continue
+            totals[marker] = totals.get(marker, 0.0) + count
+            display.setdefault(marker, tag)
+    if not totals:
+        return []
+    high_water = max(totals.values())
+    alias_markers = [normalize_match_key(alias) for alias in aliases if normalize_match_key(alias)]
+    alias_tokens = {
+        token
+        for alias in aliases
+        for token in re.findall(r"[a-z0-9]{4,}", str(alias).casefold())
+        if normalize_match_key(token) not in _AUTO_FRANCHISE_ONLY
+    }
+    accepted: list[tuple[float, str]] = []
+    for marker, count in totals.items():
+        tag = display[marker]
+        related = (
+            any(
+                min(len(marker), len(alias_marker)) >= 4
+                and (marker in alias_marker or alias_marker in marker)
+                for alias_marker in alias_markers
+            )
+            or any(token in marker or marker in token for token in alias_tokens)
+        )
+        if (
+            not related
+            or count < max(2.0, high_water * 0.45)
+            or marker in _AUTO_FRANCHISE_ONLY
+            or is_generic_term(tag)
+            or _AUTO_TAG_DENY_RE.search(tag)
+            or not re.search(r"[A-Za-z]", tag)
+            or re.search(r"[\u3040-\u30ff\u3400-\u9fff]", tag)
+        ):
+            continue
+        accepted.append((count, tag))
+    accepted.sort(key=lambda item: (-item[0], item[1].casefold()))
+    return [tag for _, tag in accepted[:4]]
+
+
+def profile_from_comfy_metadata(
+    filename: str,
+    metadata: Mapping[str, Any],
+    *,
+    default_family: str = MODEL_FAMILY_ILLUSTRIOUS,
+) -> tuple[str, dict[str, Any]] | None:
+    fallback_family = str(default_family or "").strip().lower()
+    family = _metadata_family(filename, metadata)
+    if not family and fallback_family in _FAMILIES:
+        family = fallback_family
+    aliases = _metadata_aliases(filename, metadata)
+    triggers = _metadata_activation_tags(metadata, aliases)
+    if not family or not aliases or not triggers:
+        return None
+    key = aliases[0]
+    return family, {
+        "lora": str(filename),
+        "character": key,
+        "aliases": aliases[1:],
+        "trigger_words": triggers,
+        "source": "comfyui_metadata",
+    }
 
 
 @dataclass(frozen=True)
@@ -95,6 +334,45 @@ def _names(kind: str, family: str) -> tuple[str, ...]:
     return (f"{kind}_illustrious.json",)
 
 
+def _candidate_files(roots: Iterable[Path], kind: str, family: str) -> list[Path]:
+    """Find direct and importer-nested files without unbounded recursion."""
+    paths: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        try:
+            root_resolved = root.resolve(strict=True)
+        except OSError:
+            continue
+        bases = [root, root / kind]
+        try:
+            children = [
+                child
+                for child in root.iterdir()
+                if child.is_dir() and not child.is_symlink()
+            ]
+        except OSError:
+            children = []
+        # Covers data_root/legacy/<kind> and imports/<batch>/<kind> while
+        # deliberately refusing arbitrary recursive scans.
+        bases.extend(child / kind for child in children)
+        for base in bases:
+            for filename in _names(kind, family):
+                path = base / filename
+                try:
+                    if not path.is_file() or path.is_symlink():
+                        continue
+                    resolved = path.resolve(strict=True)
+                    resolved.relative_to(root_resolved)
+                    marker = os.path.normcase(str(resolved))
+                except (OSError, ValueError):
+                    continue
+                if marker in seen:
+                    continue
+                seen.add(marker)
+                paths.append(path)
+    return paths
+
+
 def _profile_for_lora(items: dict[str, dict[str, Any]], lora_name: str) -> dict[str, Any] | None:
     wanted = normalize_lora_key(lora_name)
     return next(
@@ -103,45 +381,67 @@ def _profile_for_lora(items: dict[str, dict[str, Any]], lora_name: str) -> dict[
     )
 
 
-def load_lora_profiles(data_root: Path, env: dict[str, str] | None = None) -> LoadedLoraProfiles:
+def load_lora_profiles(
+    data_root: Path,
+    env: dict[str, str] | None = None,
+    *,
+    auto_cache_key: str = "",
+) -> LoadedLoraProfiles:
     profiles: dict[str, dict[str, dict[str, Any]]] = {family: {} for family in _FAMILIES}
     source_names: list[str] = []
-    for root in _candidate_roots(Path(data_root), dict(os.environ if env is None else env)):
-        for family in _FAMILIES:
-            items = profiles[family]
-            for filename in _names("lora_profiles", family):
-                path = root / filename
-                loaded = _read_map(path)
-                if loaded:
-                    items.update({str(key): dict(value) for key, value in loaded.items() if isinstance(value, dict)})
-                    source_names.append(filename)
-            for filename in _names("lora_aliases", family):
-                path = root / filename
-                aliases = _read_map(path)
-                if aliases:
-                    source_names.append(filename)
-                for alias, lora_name in aliases.items():
-                    alias = str(alias or "").strip()
-                    lora_name = str(lora_name or "").strip()
-                    if not alias or not lora_name:
-                        continue
-                    profile = _profile_for_lora(items, lora_name)
-                    if profile is None:
-                        profile = {"lora": lora_name, "character": alias, "aliases": [], "source": "legacy_alias"}
-                        items.setdefault(alias, profile)
-                    raw_aliases = profile.get("aliases") or []
-                    if isinstance(raw_aliases, str):
-                        raw_aliases = [raw_aliases]
-                    profile["aliases"] = list(dict.fromkeys([*(str(value) for value in raw_aliases), alias]))
-            for filename in _names("lora_character_prompts", family):
-                path = root / filename
-                prompts = _read_map(path)
-                if prompts:
-                    source_names.append(filename)
-                for lora_name, prompt in prompts.items():
-                    profile = _profile_for_lora(items, str(lora_name))
-                    if profile is not None and str(prompt or "").strip() and not profile.get("trigger_prompt"):
-                        profile["trigger_prompt"] = str(prompt).strip()
+    roots = _candidate_roots(Path(data_root), dict(os.environ if env is None else env))
+    for family in _FAMILIES:
+        items = profiles[family]
+        # Load every profile first so aliases imported from another nested
+        # directory attach to the real profile instead of creating a stub.
+        for path in _candidate_files(roots, "lora_profiles", family):
+            loaded = _read_map(path)
+            if loaded:
+                items.update({str(key): dict(value) for key, value in loaded.items() if isinstance(value, dict)})
+                source_names.append(path.name)
+        for path in _candidate_files(roots, "lora_aliases", family):
+            aliases = _read_map(path)
+            if aliases:
+                source_names.append(path.name)
+            for alias, lora_name in aliases.items():
+                alias = str(alias or "").strip()
+                lora_name = str(lora_name or "").strip()
+                if not alias or not lora_name:
+                    continue
+                profile = _profile_for_lora(items, lora_name)
+                if profile is None:
+                    profile = {"lora": lora_name, "character": alias, "aliases": [], "source": "legacy_alias"}
+                    items.setdefault(alias, profile)
+                raw_aliases = profile.get("aliases") or []
+                if isinstance(raw_aliases, str):
+                    raw_aliases = [raw_aliases]
+                profile["aliases"] = list(dict.fromkeys([*(str(value) for value in raw_aliases), alias]))
+        for path in _candidate_files(roots, "lora_character_prompts", family):
+            prompts = _read_map(path)
+            if prompts:
+                source_names.append(path.name)
+            for lora_name, prompt in prompts.items():
+                profile = _profile_for_lora(items, str(lora_name))
+                if profile is not None and str(prompt or "").strip() and not profile.get("trigger_prompt"):
+                    profile["trigger_prompt"] = str(prompt).strip()
+    generated = (
+        cached_generated_lora_profiles(data_root, auto_cache_key)
+        if str(auto_cache_key).strip()
+        else {family: {} for family in _FAMILIES}
+    )
+    generated_added = False
+    for family in _FAMILIES:
+        items = profiles[family]
+        for key, profile in generated.get(family, {}).items():
+            lora_name = str(profile.get("lora") or profile.get("lora_name") or "").strip()
+            # Imported/user-maintained profiles always win, even when their
+            # display key differs from the generated cache key.
+            if not lora_name or key in items or _profile_for_lora(items, lora_name) is not None:
+                continue
+            items[str(key)] = dict(profile)
+            generated_added = True
+    if generated_added:
+        source_names.append(_AUTO_CACHE_PATH.name)
     return LoadedLoraProfiles(profiles=profiles, sources=tuple(dict.fromkeys(source_names)))
 
 

@@ -26,8 +26,8 @@ export class SettingsView {
     const cachedSettings = store.get("settings");
     const cachedSecrets = store.get("secrets");
     const [settingsResult, secretsResult] = await Promise.allSettled([
-      cachedSettings ? Promise.resolve(cachedSettings) : withDeadline(api.settings(), 6000, "读取设置超时"),
-      cachedSecrets ? Promise.resolve(cachedSecrets) : withDeadline(api.secrets(), 6000, "读取密钥状态超时"),
+      cachedSettings ? Promise.resolve(cachedSettings) : withDeadline((signal) => api.settings({ signal }), 6000, "读取设置超时"),
+      cachedSecrets ? Promise.resolve(cachedSecrets) : withDeadline((signal) => api.secrets({ signal }), 6000, "读取密钥状态超时"),
     ]);
     if (token !== this.loadToken) return;
     this.settings = settingsResult.status === "fulfilled" ? settingsResult.value : null;
@@ -225,7 +225,7 @@ export class SettingsView {
         const key = clearBtn.dataset.clear;
         void (async () => {
           try {
-            await withDeadline(api.clearSecret(key), 6000, "清除密钥超时");
+            await withDeadline((signal) => api.clearSecret(key, { signal }), 6000, "清除密钥超时");
             this.setSecretState(key, false);
             toast("已清除", "ok");
           } catch (err) {
@@ -322,7 +322,7 @@ export class SettingsView {
       if (save?.disabled) return;
       if (save) disabledButton(save, true, "保存中…");
       try {
-        await withDeadline(api.setSecret(key, v), 6000, "保存密钥超时");
+        await withDeadline((signal) => api.setSecret(key, v, { signal }), 6000, "保存密钥超时");
         this.setSecretState(key, true);
         close();
         toast("已保存", "ok");
@@ -562,7 +562,7 @@ export class SettingsView {
     const btn = $("#s-test", this.root);
     if (btn) disabledButton(btn, true, "检测中…");
     try {
-      const res = await withDeadline(api.probe(), 12000, "连接检测超时，后台可能仍在等待 ComfyUI");
+      const res = await withDeadline((signal) => api.probe({ force: true }, { signal }), 12000, "连接检测超时，已取消本次等待");
       store.set("comfyui", res);
       toast(res.result === "ok" ? "连接正常" : "连接异常：" + (res.summary || ""), res.result === "ok" ? "ok" : "err");
     } catch (e) {
@@ -652,7 +652,7 @@ export class SettingsView {
     this.saving = true;
     if (button) disabledButton(button, true, "保存中…");
     try {
-      const updated = await withDeadline(api.saveSettings(patch), 8000, "保存设置超时");
+      const updated = await withDeadline((signal) => api.saveSettings(patch, { signal }), 8000, "保存设置超时，已取消本次请求");
       this.settings = updated || { ...this.settings, ...patch };
       store.set("settings", this.settings);
       // Keep the currently visible controls untouched. Dropping only this
@@ -669,9 +669,21 @@ export class SettingsView {
   }
 }
 
-function withDeadline(promise, ms, message) {
+function withDeadline(run, ms, message) {
+  const controller = new AbortController();
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(message)), ms);
+    const timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error(message));
+    }, ms);
+    let promise;
+    try {
+      promise = Promise.resolve(run(controller.signal));
+    } catch (error) {
+      clearTimeout(timer);
+      reject(error);
+      return;
+    }
     promise.then(
       (value) => { clearTimeout(timer); resolve(value); },
       (error) => { clearTimeout(timer); reject(error); },

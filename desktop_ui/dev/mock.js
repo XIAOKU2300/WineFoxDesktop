@@ -162,7 +162,7 @@ export function installMock({ scenario = "success" } = {}) {
     health: () => json(offline ? { status: "offline" } : {
       status: sc === "fail" ? "degraded" : "ok",
       app: { name: "WineFox Desktop", version: "1.0.0-mock" },
-      plugin: { name: "astrbot_plugin_comfyui_pro_UltraPlusMax", version: "8.5.9" },
+      plugin: { name: "astrbot_plugin_comfyui_pro_UltraPlusMax", version: "8.5.10" },
       comfyui: sc === "fail" ? { connected: false, version: null } : { connected: true, version: "0.3.25" },
       first_run: sc === "wizard",
       time: new Date().toISOString(),
@@ -219,7 +219,7 @@ export function installMock({ scenario = "success" } = {}) {
     }),
     diagnostics: () => json({
       app: { name: "WineFox Desktop", version: "1.0.0-mock", build: "dev-mock" },
-      plugin: { name: "astrbot_plugin_comfyui_pro_UltraPlusMax", version: "8.5.9" },
+      plugin: { name: "astrbot_plugin_comfyui_pro_UltraPlusMax", version: "8.5.10" },
       comfyui: sc === "fail" ? { connected: false, version: null, url: "http://127.0.0.1:8188" } : { connected: true, version: "0.3.25", url: "http://127.0.0.1:8188" },
       nodes: { total: 320, missing: FAKE_NODES.filter((n) => !n.installed).map((n) => n.name) },
       config_health: [
@@ -230,7 +230,7 @@ export function installMock({ scenario = "success" } = {}) {
       log_tail: {
         truncated: true,
         lines: [
-          "[info] WineFox Desktop 启动，插件版本 8.5.9",
+          "[info] WineFox Desktop 启动，插件版本 8.5.10",
           "[info] 连接 ComfyUI 成功（127.0.0.1:8188）",
           sc === "fail" ? "[warn] 自定义节点缺失：ComfyUI-WanVideoWrapper" : "[info] 自定义节点全部就绪",
           "[info] 生成任务完成：seed=123456 · 24 步 · 2.3s",

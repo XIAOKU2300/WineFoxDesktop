@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import io
 import json
 import logging
 import mimetypes
@@ -28,8 +29,11 @@ from winefox_core.workflow_service import WorkflowEntry, WorkflowService
 from .config_adapter import DesktopConfigAdapter
 from .llm_client import OpenAICompatibleLLMClient, resolve_provider
 from .lora_profiles import (
+    cache_generated_lora_profiles,
     load_lora_profiles,
+    lora_metadata_cache_key,
     merge_prompt_tags,
+    profile_from_comfy_metadata,
     resolve_prompt_loras,
     resolve_selected_lora_triggers,
 )
@@ -39,6 +43,31 @@ from .workflow_builder import prepare_workflow
 logger = logging.getLogger("winefox.runtime.engine")
 
 TERMINAL_STATES = {"completed", "failed", "cancelled", "detached"}
+
+_IMAGE_FORMATS = {
+    "PNG": (".png", "image/png"),
+    "JPEG": (".jpg", "image/jpeg"),
+    "WEBP": (".webp", "image/webp"),
+    "GIF": (".gif", "image/gif"),
+    "BMP": (".bmp", "image/bmp"),
+    "TIFF": (".tiff", "image/tiff"),
+}
+
+
+def _detect_image_output(data: bytes) -> tuple[str, str]:
+    """Return a safe extension and MIME type from decoded image bytes."""
+    from PIL import Image, UnidentifiedImageError
+
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            image_format = str(image.format or "").upper()
+            image.verify()
+    except (OSError, UnidentifiedImageError, ValueError) as exc:
+        raise ValueError("ComfyUI returned undecodable image bytes") from exc
+    output = _IMAGE_FORMATS.get(image_format)
+    if output is None:
+        raise ValueError(f"ComfyUI returned unsupported image format: {image_format or 'unknown'}")
+    return output
 
 _WINDOWS_PATH_RE = re.compile(
     r"(?i)(?:\"[a-z]:[\\/][^\"\r\n]+\"|(?:[a-z]:[\\/]|\\\\)[^\s,;\"<>|?*]+)"
@@ -100,12 +129,10 @@ class DesktopEngine:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.workflows = WorkflowService(self.workflow_dir)
         self.workflows.scan()
-        self.loaded_lora_profiles = load_lora_profiles(self.data_root)
-        self.lora_service = LoraService(self.loaded_lora_profiles.profiles)
-        self._lora_profile_index: dict[str, list[Any]] = {}
-        for family in ("anima", "illustrious"):
-            for profile in self.lora_service.profiles_for(family).values():
-                self._lora_profile_index.setdefault(normalize_lora_key(profile.lora_name), []).append(profile)
+        self._lora_metadata_cache_key = lora_metadata_cache_key(
+            self._connection_config().server_address
+        )
+        self._reload_lora_profiles()
         self.history_store = HistoryStore(database)
         self.favorite_store = FavoriteStore(database)
         self._queue: asyncio.Queue[int] = asyncio.Queue(maxsize=20)
@@ -116,6 +143,22 @@ class DesktopEngine:
         self._last_probe: dict[str, Any] | None = None
         self._last_probe_at = 0.0
         self._probe_task: asyncio.Task[dict[str, Any]] | None = None
+        self._lora_metadata_task: asyncio.Task[None] | None = None
+        self._lora_metadata_attempted: set[str] = set()
+
+    def _reload_lora_profiles(self) -> None:
+        loaded = load_lora_profiles(
+            self.data_root,
+            auto_cache_key=self._lora_metadata_cache_key,
+        )
+        service = LoraService(loaded.profiles)
+        index: dict[str, list[Any]] = {}
+        for family in ("anima", "illustrious"):
+            for profile in service.profiles_for(family).values():
+                index.setdefault(normalize_lora_key(profile.lora_name), []).append(profile)
+        self.loaded_lora_profiles = loaded
+        self.lora_service = service
+        self._lora_profile_index = index
 
     async def start(self) -> None:
         if self._accepting:
@@ -134,6 +177,11 @@ class DesktopEngine:
 
     async def stop(self) -> None:
         self._accepting = False
+        metadata_task = self._lora_metadata_task
+        self._lora_metadata_task = None
+        if metadata_task is not None:
+            metadata_task.cancel()
+            await asyncio.gather(metadata_task, return_exceptions=True)
         worker = self._worker
         self._worker = None
         if worker is not None:
@@ -265,10 +313,19 @@ class DesktopEngine:
             }
         self._last_probe = result
         self._last_probe_at = time.monotonic()
+        if result.get("online"):
+            self._schedule_lora_metadata_refresh(result.get("loras", []))
         return result
 
     async def get_catalog(self) -> dict[str, Any]:
         probe = await self.probe_comfyui()
+        self._schedule_lora_metadata_refresh(probe.get("loras", []))
+        metadata_task = self._lora_metadata_task
+        if self.loaded_lora_profiles.count == 0 and metadata_task is not None:
+            try:
+                await asyncio.wait_for(asyncio.shield(metadata_task), timeout=2.2)
+            except asyncio.TimeoutError:
+                pass
         entries = self.workflows.all_entries()
         workflows = [
             {
@@ -310,6 +367,106 @@ class DesktopEngine:
                 "sources": list(self.loaded_lora_profiles.sources),
             },
         }
+
+    def _schedule_lora_metadata_refresh(self, filenames: Any) -> None:
+        if not isinstance(filenames, (list, tuple)):
+            return
+        active = self._lora_metadata_task
+        if active is not None and not active.done():
+            return
+        if active is not None and active.done():
+            self._lora_metadata_task = None
+        current_cache_key = lora_metadata_cache_key(
+            self._connection_config().server_address
+        )
+        if current_cache_key != self._lora_metadata_cache_key:
+            self._lora_metadata_cache_key = current_cache_key
+            self._lora_metadata_attempted.clear()
+            self._reload_lora_profiles()
+        existing = set(self._lora_profile_index)
+        candidates: list[str] = []
+        pending_markers: set[str] = set()
+        for value in filenames:
+            name = str(value or "").strip()
+            marker = normalize_lora_key(name)
+            if (
+                not name.lower().endswith(".safetensors")
+                or not marker
+                or marker in existing
+                or marker in self._lora_metadata_attempted
+                or marker in pending_markers
+            ):
+                continue
+            pending_markers.add(marker)
+            candidates.append(name)
+            if len(candidates) >= 500:
+                break
+        if candidates:
+            self._lora_metadata_task = asyncio.create_task(
+                self._refresh_lora_metadata_profiles(candidates),
+                name="winefox-lora-metadata",
+            )
+
+    async def _refresh_lora_metadata_profiles(self, filenames: list[str]) -> None:
+        try:
+            settings = self.config.snapshot()
+            defaults = settings.get("defaults") if isinstance(settings.get("defaults"), Mapping) else {}
+            default_family = str(
+                defaults.get("family")
+                or settings.get("model_family")
+                or "illustrious"
+            ).strip().lower()
+            deadline = time.monotonic() + 30.0
+            generated_count = 0
+            async with ComfyUIExecutor(self._connection_config()) as executor:
+                for offset in range(0, len(filenames), 40):
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0.1:
+                        break
+                    batch = filenames[offset : offset + 40]
+                    self._lora_metadata_attempted.update(
+                        normalize_lora_key(name) for name in batch
+                    )
+                    metadata_by_name = await executor.fetch_lora_metadata_batch(
+                            batch,
+                            max_items=40,
+                            concurrency=2,
+                            timeout_seconds=2.0,
+                            total_timeout_seconds=min(8.0, remaining),
+                            minimum_interval_seconds=0.05,
+                        )
+                    generated: dict[str, dict[str, dict[str, Any]]] = {
+                        "anima": {},
+                        "illustrious": {},
+                    }
+                    for filename, metadata in metadata_by_name.items():
+                        parsed = profile_from_comfy_metadata(
+                            filename,
+                            metadata,
+                            default_family=default_family,
+                        )
+                        if parsed is None:
+                            continue
+                        family, profile = parsed
+                        generated[family][normalize_lora_key(filename)] = profile
+                    if not any(generated.values()):
+                        continue
+                    await asyncio.to_thread(
+                        cache_generated_lora_profiles,
+                        self.data_root,
+                        self._lora_metadata_cache_key,
+                        generated,
+                    )
+                    generated_count += sum(len(items) for items in generated.values())
+                    self._reload_lora_profiles()
+            logger.info(
+                "Loaded %d high-confidence LoRA profiles from ComfyUI metadata",
+                generated_count,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # metadata enrichment must never affect probe/catalog
+            logger.warning("LoRA metadata enrichment skipped: %s", _redact_diagnostic_text(exc))
 
     def _catalog_lora(self, name: str) -> dict[str, Any]:
         wanted = normalize_lora_key(name)
@@ -484,7 +641,8 @@ class DesktopEngine:
             return
         self._update_job(job_id, "downloading", comfy_prompt_id=result.prompt_id)
         image = result.images[0]
-        relative = f"outputs/{job_id}.png"
+        extension, content_type = _detect_image_output(image)
+        relative = f"outputs/{job_id}{extension}"
         target = self.data_root / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(image)
@@ -506,6 +664,7 @@ class DesktopEngine:
                 "prompt_warnings": list(prompt_result.warnings),
                 "vision_reverse": vision_meta,
                 "auto_lora": auto_lora.metadata if auto_lora is not None else None,
+                "image_content_type": content_type,
             },
         )
         self._update_job(job_id, "completed", comfy_prompt_id=result.prompt_id)

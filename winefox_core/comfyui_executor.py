@@ -258,6 +258,87 @@ class ComfyUIExecutor:
             text_encoders=tuple(dict.fromkeys(text_encoders)),
         )
 
+    async def fetch_lora_metadata(
+        self,
+        filename: str,
+        *,
+        timeout_seconds: float = 2.0,
+    ) -> Dict[str, Any]:
+        """Fetch one safetensors metadata header through ComfyUI's HTTP API."""
+        safe_name = sanitize_comfy_name(filename, allow_subfolder=True)
+        if not safe_name.lower().endswith(".safetensors"):
+            return {}
+        try:
+            value = await asyncio.wait_for(
+                self._transport.get_json(
+                    "/view_metadata/loras",
+                    params={"filename": safe_name},
+                    retries=1,
+                ),
+                timeout=max(0.1, float(timeout_seconds)),
+            )
+        except (asyncio.TimeoutError, ComfyUIError):
+            return {}
+        return dict(value) if isinstance(value, Mapping) else {}
+
+    async def fetch_lora_metadata_batch(
+        self,
+        filenames: List[str],
+        *,
+        max_items: int = 40,
+        concurrency: int = 2,
+        timeout_seconds: float = 2.0,
+        total_timeout_seconds: float = 10.0,
+        minimum_interval_seconds: float = 0.05,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Fetch a bounded metadata batch without propagating per-file failures."""
+        safe_names: List[str] = []
+        seen: set[str] = set()
+        for filename in filenames:
+            try:
+                safe_name = sanitize_comfy_name(filename, allow_subfolder=True)
+            except ComfyUIError:
+                continue
+            marker = safe_name.casefold()
+            if not safe_name.lower().endswith(".safetensors") or marker in seen:
+                continue
+            seen.add(marker)
+            safe_names.append(safe_name)
+            if len(safe_names) >= max(1, int(max_items)):
+                break
+
+        results: Dict[str, Dict[str, Any]] = {}
+        semaphore = asyncio.Semaphore(max(1, min(int(concurrency), 4)))
+        rate_lock = asyncio.Lock()
+        next_start = 0.0
+
+        async def fetch_one(name: str) -> None:
+            nonlocal next_start
+            async with semaphore:
+                async with rate_lock:
+                    delay = next_start - time.monotonic()
+                    if delay > 0:
+                        await asyncio.sleep(delay)
+                    next_start = time.monotonic() + max(0.0, float(minimum_interval_seconds))
+                metadata = await self.fetch_lora_metadata(
+                    name,
+                    timeout_seconds=timeout_seconds,
+                )
+                if metadata:
+                    results[name] = metadata
+
+        tasks = [asyncio.create_task(fetch_one(name)) for name in safe_names]
+        if not tasks:
+            return results
+        done, pending = await asyncio.wait(
+            tasks,
+            timeout=max(0.1, float(total_timeout_seconds)),
+        )
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*done, *pending, return_exceptions=True)
+        return results
+
     def _extract_lora_names_from_object_info(self, object_info: Mapping[str, Any]) -> List[str]:
         names: set = set()
 

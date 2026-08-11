@@ -102,7 +102,7 @@ mod tests {
     use super::*;
 
     fn ready_line() -> String {
-        r#"{"type":"ready","protocol":1,"version":"8.5.9","host":"127.0.0.1","port":59265,"bootstrapPath":"/bootstrap/abc123","impl":"winefox-sidecar-fake","implVersion":"0.1.0","pid":1234}"#.to_string()
+        r#"{"type":"ready","protocol":1,"version":"8.5.10","host":"127.0.0.1","port":59265,"bootstrapPath":"/bootstrap/abc123","impl":"winefox-sidecar-fake","implVersion":"0.1.0","pid":1234}"#.to_string()
     }
 
     #[test]
@@ -111,11 +111,11 @@ mod tests {
         match line {
             Line::Ready(info) => {
                 assert_eq!(info.protocol, 1);
-                assert_eq!(info.version, "8.5.9");
+                assert_eq!(info.version, "8.5.10");
                 assert_eq!(info.port, 59265);
                 assert_eq!(info.bootstrap_path, "/bootstrap/abc123");
                 assert_eq!(info.pid, Some(1234));
-                assert!(validate_ready(&info, "8.5.9").is_ok());
+                assert!(validate_ready(&info, "8.5.10").is_ok());
             }
             _ => panic!("expected ready"),
         }
@@ -132,7 +132,7 @@ mod tests {
     #[test]
     fn rejects_missing_fields() {
         assert!(parse_line(r#"{"type":"ready","protocol":1}"#).is_none());
-        assert!(parse_line(r#"{"type":"ready","protocol":"x","version":"8.5.9"}"#).is_none());
+        assert!(parse_line(r#"{"type":"ready","protocol":"x","version":"8.5.10"}"#).is_none());
     }
 
     #[test]
@@ -140,7 +140,7 @@ mod tests {
         let line = parse_line(&ready_line().replace("\"protocol\":1", "\"protocol\":2")).unwrap();
         match line {
             Line::Ready(info) => {
-                let err = validate_ready(&info, "8.5.9").unwrap_err();
+                let err = validate_ready(&info, "8.5.10").unwrap_err();
                 assert_eq!(err, ReadyError::ProtocolMismatch { got: 2, expected: 1 });
             }
             _ => panic!("expected ready"),
@@ -149,11 +149,11 @@ mod tests {
 
     #[test]
     fn version_mismatch_is_rejected() {
-        let line = parse_line(&ready_line().replace("\"8.5.9\"", "\"9.9.9\"")).unwrap();
+        let line = parse_line(&ready_line().replace("\"8.5.10\"", "\"9.9.9\"")).unwrap();
         match line {
             Line::Ready(info) => {
-                let err = validate_ready(&info, "8.5.9").unwrap_err();
-                assert_eq!(err, ReadyError::VersionMismatch { got: "9.9.9".into(), expected: "8.5.9".into() });
+                let err = validate_ready(&info, "8.5.10").unwrap_err();
+                assert_eq!(err, ReadyError::VersionMismatch { got: "9.9.9".into(), expected: "8.5.10".into() });
             }
             _ => panic!("expected ready"),
         }
@@ -164,7 +164,7 @@ mod tests {
         let line = parse_line(&ready_line().replace("127.0.0.1", "0.0.0.0")).unwrap();
         match line {
             Line::Ready(info) => {
-                let err = validate_ready(&info, "8.5.9").unwrap_err();
+                let err = validate_ready(&info, "8.5.10").unwrap_err();
                 assert_eq!(err, ReadyError::NotLoopback { host: "0.0.0.0".into() });
             }
             _ => panic!("expected ready"),

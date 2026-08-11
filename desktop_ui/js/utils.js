@@ -73,6 +73,16 @@ export function sanitizeName(name) {
   return seg || s.replace(/^[\\/]+/, "");
 }
 
+/* Preserve safe ComfyUI-relative subfolders while never exposing local paths. */
+export function sanitizeResourceName(name) {
+  if (name == null) return "";
+  const value = String(name).trim().replace(/\\/g, "/");
+  if (!value) return "";
+  if (/^[a-z]:\//i.test(value) || value.startsWith("/")) return sanitizeName(value);
+  const parts = value.split("/").filter((part) => part && part !== "." && part !== "..");
+  return parts.join("/") || sanitizeName(value);
+}
+
 export function fmtTime(iso) {
   if (!iso) return "—";
   const d = new Date(iso);

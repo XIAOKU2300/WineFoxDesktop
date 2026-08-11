@@ -143,7 +143,7 @@ class DiagnosticsContractTests(unittest.IsolatedAsyncioTestCase):
         source = (Path(__file__).parents[1] / "desktop_ui" / "js" / "views" / "diagnostics.js").read_text(
             encoding="utf-8"
         )
-        self.assertIn("await api.diagnostics()", source)
+        self.assertIn("await api.diagnostics({ signal })", source)
         self.assertNotIn("api.comfyui()", source)
 
 

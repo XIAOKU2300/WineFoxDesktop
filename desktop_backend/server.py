@@ -2,7 +2,7 @@
 
 stdout 只输出一次 ready JSON（其余日志一律走 stderr）：
 
-    {"type":"ready","protocol":1,"version":"8.5.9",
+    {"type":"ready","protocol":1,"version":"8.5.10",
      "host":"127.0.0.1","port":51234,"bootstrapPath":"/bootstrap/<token>"}
 """
 

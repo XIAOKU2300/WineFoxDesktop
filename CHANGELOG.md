@@ -1,5 +1,11 @@
 # Changelog
 
+## 8.5.10
+
+- Reduced route, diagnostics, settings, connection retry, and incremental model-list stalls.
+- Restored robust ComfyUI queue/history output recovery and real image format persistence.
+- Preserved full LoRA resource names and restored imported alias/trigger profile discovery.
+
 ## 8.5.9
 
 - **管理员额度管理增强**：WineFox 管理台新增默认试用额度、本地/API 视频扣费价格保存，以及按筛选结果或用户名列表批量增减/设定额度。

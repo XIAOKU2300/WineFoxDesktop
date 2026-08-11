@@ -46,7 +46,7 @@
 
 ```powershell
 python -m winefox_sidecar --allow-simulate        # 开发运行
-python -m winefox_sidecar --version               # 打印 8.5.9
+python -m winefox_sidecar --version               # 打印 8.5.10
 python -m winefox_sidecar --selftest              # 自检：启动→health→握手→退出0
 ```
 

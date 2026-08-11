@@ -1,7 +1,7 @@
 /* WineFox Desktop — 模型与 LoRA 页
  * 展示 checkpoint / LoRA / 自定义节点状态；v1 无在线下载（缺失给出安装指引）。
  */
-import { el, $, $$, ic, esc, sanitizeName, fmtBytes, loadingState, copyText, toast } from "../utils.js";
+import { el, $, $$, ic, esc, sanitizeResourceName, fmtBytes, loadingState, copyText, toast } from "../utils.js";
 import { api } from "../api.js";
 import { store } from "../store.js";
 
@@ -14,6 +14,7 @@ export class ModelsView {
     this.resourceObserver = null;
     this.resourceFallback = null;
     this.resourcePageFrame = null;
+    this.paginationState = null;
   }
 
   async mount(container) {
@@ -76,6 +77,7 @@ export class ModelsView {
     const body = $("#m-body");
     if (!body) return;
     this.teardownPagination();
+    this.paginationState = null;
     const d = this.data || {};
     const summary = el("div", { class: "row wrap gap-2" }, [
       el("span", { class: "badge ok" }, esc(`${(d.checkpoints || []).length} 个 checkpoint`)),
@@ -95,7 +97,7 @@ export class ModelsView {
   checkpointList(items) {
     if (!items.length) return this.empty("未检测到 checkpoint", "将模型放入 ComfyUI 的 models/checkpoints 目录后重新扫描。");
     return this.resourceList(items, "checkpoints", (m) => {
-      const name = sanitizeName(m.name);
+      const name = sanitizeResourceName(m.name);
       const row = el("div", { class: "model-row" + (m.compat === "missing" ? " missing" : m.compat === "incompatible" ? " incompatible" : "") }, [
         el("div", { class: "grow" }, [
           this.copyableName(name, "Checkpoint"),
@@ -111,7 +113,7 @@ export class ModelsView {
   loraList(items) {
     if (!items.length) return this.empty("未检测到 LoRA", "将 LoRA 放入 ComfyUI 的 models/loras 目录后重新扫描。");
     return this.resourceList(items, "loras", (m) => {
-      const name = sanitizeName(m.name);
+      const name = sanitizeResourceName(m.name);
       const asList = (value) => Array.isArray(value) ? value : value ? [value] : [];
       const aliases = [...new Set([m.character, ...asList(m.aliases), ...asList(m.tags)].filter(Boolean))];
       const row = el("div", { class: "model-row" + (m.compat === "missing" ? " missing" : m.compat === "incompatible" ? " incompatible" : "") }, [
@@ -154,9 +156,11 @@ export class ModelsView {
     const limit = this.visible[key] || 40;
     const list = el("div", { class: "model-list" }, items.slice(0, limit).map(renderRow));
     if (items.length > limit) {
-      list.append(el("div", { class: "model-sentinel", dataset: { resource: key } }, [
+      const sentinel = el("div", { class: "model-sentinel", dataset: { resource: key } }, [
         loadingState(`正在载入更多 ${key === "loras" ? "LoRA" : "资源"}`, { compact: true }),
-      ]));
+      ]);
+      list.append(sentinel);
+      this.paginationState = { items, key, renderRow, sentinel };
     }
     return list;
   }
@@ -212,11 +216,24 @@ export class ModelsView {
 
   loadMoreResources(key) {
     if (!key || this.resourcePageFrame != null) return;
+    const state = this.paginationState;
+    if (!state || state.key !== key || !state.sentinel.isConnected) return;
     this.resourceObserver?.disconnect();
     this.resourcePageFrame = requestAnimationFrame(() => {
       this.resourcePageFrame = null;
-      this.visible[key] = (this.visible[key] || 40) + 40;
-      this.renderBody();
+      const start = this.visible[key] || 40;
+      const end = Math.min(start + 40, state.items.length);
+      const fragment = document.createDocumentFragment();
+      state.items.slice(start, end).forEach((item) => fragment.append(state.renderRow(item)));
+      state.sentinel.before(fragment);
+      this.visible[key] = end;
+      if (end >= state.items.length) {
+        state.sentinel.remove();
+        this.paginationState = null;
+        this.teardownPagination();
+      } else if (typeof IntersectionObserver === "function") {
+        this.setupPagination();
+      }
     });
   }
 
@@ -228,5 +245,6 @@ export class ModelsView {
     this.teardownPagination();
     if (this.resourcePageFrame != null) cancelAnimationFrame(this.resourcePageFrame);
     this.resourcePageFrame = null;
+    this.paginationState = null;
   }
 }

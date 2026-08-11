@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
+from io import BytesIO
 from typing import Any
 
+from PIL import Image
+
+from desktop_runtime.engine import _detect_image_output
 from desktop_runtime.lora_profiles import (
     merge_prompt_tags,
     resolve_prompt_loras,
@@ -81,7 +86,64 @@ class _HistoryTransport:
         raise ComfyUIError("missing output", kind=ErrorKind.DOWNLOAD, status=404)
 
 
+class _MetadataTransport:
+    base_url = "http://127.0.0.1:8188"
+
+    def __init__(self) -> None:
+        self.requests: list[tuple[str, dict[str, Any]]] = []
+
+    async def start(self):
+        return self
+
+    async def close(self) -> None:
+        return None
+
+    async def get_json(self, path: str, *, params=None, **_kwargs):
+        params = dict(params or {})
+        self.requests.append((path, params))
+        if str(params.get("filename") or "").startswith("slow"):
+            await asyncio.sleep(1)
+        return {"modelspec.title": str(params.get("filename") or "")}
+
+
 class BackendGenerationRegressionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_lora_metadata_batch_is_bounded_and_uses_standard_endpoint(self) -> None:
+        transport = _MetadataTransport()
+        executor = ComfyUIExecutor(ComfyUIServerConfig(), transport=transport)
+
+        result = await executor.fetch_lora_metadata_batch(
+            [
+                "characters/A.safetensors",
+                "characters/B.safetensors",
+                "characters/C.safetensors",
+                "../escape.safetensors",
+                "model.ckpt",
+            ],
+            max_items=2,
+            concurrency=2,
+            minimum_interval_seconds=0,
+        )
+
+        self.assertEqual(set(result), {"characters/A.safetensors", "characters/B.safetensors"})
+        self.assertEqual(len(transport.requests), 2)
+        self.assertTrue(all(path == "/view_metadata/loras" for path, _ in transport.requests))
+        self.assertEqual(
+            {request[1]["filename"] for request in transport.requests},
+            {"characters/A.safetensors", "characters/B.safetensors"},
+        )
+
+    async def test_lora_metadata_timeout_is_non_fatal(self) -> None:
+        transport = _MetadataTransport()
+        executor = ComfyUIExecutor(ComfyUIServerConfig(), transport=transport)
+
+        result = await executor.fetch_lora_metadata_batch(
+            ["slow_model.safetensors"],
+            timeout_seconds=0.01,
+            total_timeout_seconds=0.05,
+        )
+
+        self.assertEqual(result, {})
+
     async def test_native_queue_arrays_preserve_prompt_ids(self) -> None:
         transport = _HistoryTransport()
         executor = ComfyUIExecutor(ComfyUIServerConfig(), transport=transport)
@@ -128,6 +190,27 @@ class BackendGenerationRegressionTests(unittest.IsolatedAsyncioTestCase):
             transport.view_requests,
             [{"filename": "final.png", "subfolder": "nested/results", "type": "temp"}],
         )
+
+
+class ImagePersistenceRegressionTests(unittest.TestCase):
+    def encoded(self, image_format: str) -> bytes:
+        output = BytesIO()
+        Image.new("RGB", (2, 2), (120, 30, 80)).save(output, format=image_format)
+        return output.getvalue()
+
+    def test_real_image_format_controls_extension_and_mime(self) -> None:
+        self.assertEqual(_detect_image_output(self.encoded("PNG")), (".png", "image/png"))
+        self.assertEqual(_detect_image_output(self.encoded("JPEG")), (".jpg", "image/jpeg"))
+        self.assertEqual(_detect_image_output(self.encoded("WEBP")), (".webp", "image/webp"))
+        self.assertEqual(_detect_image_output(self.encoded("GIF")), (".gif", "image/gif"))
+
+    def test_invalid_image_bytes_are_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "undecodable"):
+            _detect_image_output(b"not-an-image")
+
+    def test_unknown_decodable_image_format_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unsupported image format"):
+            _detect_image_output(self.encoded("PPM"))
 
 
 class LoraMigrationRegressionTests(unittest.TestCase):

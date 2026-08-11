@@ -26,7 +26,7 @@ SIDECAR_DIR = os.path.normpath(
 if SIDECAR_DIR not in sys.path:
     sys.path.insert(0, SIDECAR_DIR)
 
-APP_VERSION = "8.5.9"
+APP_VERSION = "8.5.10"
 
 
 class SidecarProc:
