@@ -31,6 +31,12 @@ a { color: var(--primary); text-decoration: none; }
 a:hover { text-decoration: underline; }
 img, svg { display: block; }
 svg { fill: none; stroke: currentColor; }
+.ui-icon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  overflow: visible;
+}
 ::placeholder { color: var(--faint); }
 
 /* ---- 焦点可见性：完整键盘焦点 ---- */

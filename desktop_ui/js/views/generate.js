@@ -2,7 +2,7 @@
  * 布局：左（模型族/工作流/LoRA/队列）｜中（画布，拖放）｜右（参数）
  * 支持 txt2img / img2img；任务轮询 running 1s / queued 2s / 错误退避至 10s。
  */
-import { el, $, $$, ic, esc, sanitizeName, fmtRelative, loadingState, STATUS_META, toast } from "../utils.js";
+import { el, $, $$, ic, esc, sanitizeName, fmtRelative, loadingState, copyText, STATUS_META, toast } from "../utils.js";
 import { api } from "../api.js";
 import { JobPoller } from "../api.js";
 import { store } from "../store.js";
@@ -177,8 +177,8 @@ export class GenerateView {
       el("div", { class: "lora-result-meta", id: "g-lora-result-meta", role: "status", "aria-live": "polite" },
         this.loraResultLabel(loras.length, filtered.length)),
       el("div", {
-        class: "lora-list", id: "g-lora-list", role: "listbox",
-        tabindex: "0", "aria-label": "LoRA 列表", "aria-multiselectable": "true",
+        class: "lora-list", id: "g-lora-list", role: "list",
+        tabindex: "0", "aria-label": "LoRA 列表",
       }, this.loraListContent(loras, filtered)),
     ]);
   }
@@ -264,20 +264,30 @@ export class GenerateView {
       const loras = this.familyLoras(store.get("catalog")?.loras || []);
       const filtered = this.filteredLoras(loras);
       if (this.state.loraVisible >= filtered.length) return;
-      this.state.loraVisible = Math.min(this.state.loraVisible + 40, filtered.length);
-      this.renderLoraResults();
+      const list = $("#g-lora-list", this.root);
+      const sentinel = $("#g-lora-sentinel", this.root);
+      if (!list || !sentinel) return;
+      const start = this.state.loraVisible;
+      const end = Math.min(start + 40, filtered.length);
+      sentinel.before(...filtered.slice(start, end).map((lora) => this.loraChip(lora)));
+      this.state.loraVisible = end;
+      if (end >= filtered.length) {
+        this.teardownLoraPagination();
+        sentinel.remove();
+      } else {
+        this.setupLoraPagination();
+      }
     });
   }
 
   loraChip(l) {
     const id = l.id ?? l.name;
-    const label = l.label || l.name || id || "未命名 LoRA";
+    const label = sanitizeName(l.name || l.label || id) || "未命名 LoRA";
     const active = this.state.loras.has(id);
     const aliases = [l.character, ...(Array.isArray(l.aliases) ? l.aliases : []), ...(Array.isArray(l.tags) ? l.tags : [])].filter(Boolean);
     const btn = el("button", {
-      type: "button", class: "lora-chip", role: "option",
+      type: "button", class: "lora-chip",
       "aria-pressed": active ? "true" : "false",
-      "aria-selected": active ? "true" : "false",
       title: esc(aliases.length ? `${label} · ${aliases.join("、")}` : label),
     }, [
       el("span", { class: "l-name" }, esc(label)),
@@ -291,11 +301,22 @@ export class GenerateView {
       }
       const selected = this.state.loras.has(id);
       btn.setAttribute("aria-pressed", selected ? "true" : "false");
-      btn.setAttribute("aria-selected", selected ? "true" : "false");
       btn.querySelector(".l-strength").textContent = selected ? this.state.loras.get(id).strength.toFixed(1) : "—";
       this.updateLoraCount();
     });
-    return btn;
+    const copy = el("button", {
+      type: "button", class: "icon-btn lora-copy",
+      title: "复制完整 LoRA 名称", "aria-label": `复制 ${label}`,
+    }, [ic("copy")]);
+    copy.addEventListener("click", async () => {
+      try {
+        await copyText(label);
+        toast("LoRA 名称已复制", "ok");
+      } catch {
+        toast("无法访问剪贴板", "warn");
+      }
+    });
+    return el("div", { class: "lora-chip-row", role: "listitem" }, [btn, copy]);
   }
 
   /* ============ 中栏：画布 ============ */

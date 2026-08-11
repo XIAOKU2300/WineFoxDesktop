@@ -163,6 +163,27 @@
 .form-row-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-4); }
 @media (max-width: 900px) { .form-row, .form-row-3 { grid-template-columns: 1fr; } }
 
+/* Context notices must own their icon geometry. Without this boundary an
+   intrinsic SVG can grow with the flex item and obscure the whole card. */
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+}
+.notice > .ui-icon { margin-top: 2px; color: var(--aizome); }
+.notice > span { min-width: 0; overflow-wrap: anywhere; }
+.notice.info { border-left-color: var(--aizome); }
+.notice.warn { border-left-color: var(--warn); }
+.notice.warn > .ui-icon { color: var(--warn); }
+
 /* ================= 分隔线 ================= */
 .divider { height: 1px; background: var(--hairline); border: 0; margin: var(--sp-4) 0; }
 

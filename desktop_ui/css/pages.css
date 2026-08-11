@@ -37,6 +37,9 @@
 .conn.err .dot { background: var(--danger); }
 .conn.warn { color: var(--warn); border-color: transparent; background: var(--warn-soft); }
 .conn.warn .dot { background: var(--warn); }
+.conn-retry { flex: none; color: var(--muted); }
+.conn-retry:hover { color: var(--primary); background: var(--primary-soft); }
+.conn-retry.is-loading svg { animation: spin 0.8s linear infinite; }
 
 /* ================= 侧栏导航 ================= */
 .shell { flex: 1; min-width: 0; min-height: 0; display: flex; overflow: hidden; }
@@ -188,8 +191,15 @@
   padding-right: 3px; scrollbar-gutter: stable;
 }
 .lora-list:focus-visible { outline-offset: -2px; }
+.lora-chip-row {
+  flex: none;
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  min-width: 0;
+}
 .lora-chip {
-  flex: none; display: flex; align-items: center; gap: var(--sp-2);
+  flex: 1; min-width: 0; display: flex; align-items: flex-start; gap: var(--sp-2);
   padding: 6px 8px; border-radius: var(--r-sm);
   border: 1px solid var(--border); background: var(--surface-2);
   font-size: var(--fs-sm); text-align: left; width: 100%;
@@ -197,9 +207,26 @@
 }
 .lora-chip:hover { border-color: var(--primary); }
 .lora-chip[aria-pressed="true"] { border-color: var(--primary); background: var(--primary-soft); }
-.lora-chip .l-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lora-chip .l-name {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+  line-height: 1.45;
+  user-select: text;
+}
 .lora-chip .l-strength { width: 56px; flex: none; font-size: var(--fs-xs); color: var(--muted); font-family: var(--font-mono); text-align: right; }
 .lora-chip[aria-pressed="false"] .l-strength { opacity: 0.45; }
+.lora-copy {
+  flex: 0 0 30px;
+  width: 30px;
+  height: auto;
+  min-height: 32px;
+  align-self: stretch;
+  border: 1px solid transparent;
+}
+.lora-copy:hover { border-color: var(--border); }
 .lora-empty { flex: none; padding: var(--sp-4) var(--sp-2); line-height: 1.65; text-align: center; }
 .lora-sentinel { flex: none; min-height: 70px; overflow: hidden; }
 .lora-sentinel .wfx-loading { min-height: 70px; gap: var(--sp-2); }
@@ -452,19 +479,40 @@
 .fav-cell .fav-note b { display: block; font-weight: 550; color: var(--text-2); font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ================= 模型页 ================= */
-.model-list { display: flex; flex-direction: column; gap: var(--sp-2); }
+.model-list { display: flex; flex-direction: column; gap: var(--sp-2); min-height: 72px; }
 .model-more { align-self: center; margin: var(--sp-2) 0; }
 .model-row {
-  display: flex; align-items: center; gap: var(--sp-3);
+  display: flex; align-items: flex-start; gap: var(--sp-3); min-width: 0;
   padding: var(--sp-3) var(--sp-4);
   border: 1px solid var(--border); border-radius: var(--r-md);
   background: var(--surface);
 }
-.model-row .m-name { flex: 1; min-width: 0; font-size: var(--fs-md); font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.model-row .m-sub { font-size: var(--fs-xs); color: var(--muted); }
+.model-row > .grow { min-width: 0; }
+.model-row .m-name-wrap { display: flex; align-items: flex-start; gap: 6px; min-width: 0; }
+.model-row .m-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-md);
+  font-weight: 550;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+  user-select: text;
+}
+.model-row .m-copy { flex: 0 0 28px; margin-top: -4px; margin-right: -3px; }
+.model-row .m-sub { margin-top: 3px; font-size: var(--fs-xs); color: var(--muted); overflow-wrap: anywhere; line-height: 1.5; }
 .model-row.missing { border-color: var(--warn); background: var(--warn-soft); }
 .model-row.incompatible { border-color: var(--danger); background: var(--danger-soft); }
-.model-row .m-warn { font-size: var(--fs-xs); color: var(--warn); max-width: 340px; }
+.model-row .m-warn { font-size: var(--fs-xs); color: var(--warn); max-width: min(340px, 32%); overflow-wrap: anywhere; }
+.model-sentinel { min-height: 76px; overflow: hidden; }
+.model-sentinel .wfx-loading { min-height: 76px; }
+
+@media (max-width: 760px) {
+  .model-row { flex-wrap: wrap; }
+  .model-row > .grow { flex-basis: calc(100% - 84px); }
+  .model-row .m-warn { width: 100%; max-width: none; }
+}
 
 .workflow-override {
   padding: var(--sp-3);

@@ -186,8 +186,27 @@ function applyComfyUI(probe) {
     : "ComfyUI 未连接";
 }
 
-function refreshHealth() {
-  if (healthRefreshPromise) return healthRefreshPromise;
+function setConnectionRetryBusy(busy) {
+  const button = $("#conn-retry");
+  if (!button) return;
+  button.disabled = busy;
+  button.classList.toggle("is-loading", busy);
+  button.setAttribute("aria-busy", busy ? "true" : "false");
+}
+
+function refreshHealth({ manual = false } = {}) {
+  if (healthRefreshPromise) {
+    if (manual) {
+      setConnectionRetryBusy(true);
+      healthRefreshPromise.finally(() => setConnectionRetryBusy(false));
+    }
+    return healthRefreshPromise;
+  }
+  if (manual) {
+    setConnectionRetryBusy(true);
+    const connText = $("#conn-status .conn-text");
+    if (connText) connText.textContent = "正在重新检测…";
+  }
   healthRefreshPromise = Promise.allSettled([
     withTimeout(api.health(), 5000),
     withTimeout(api.comfyui(), 5000),
@@ -206,11 +225,16 @@ function refreshHealth() {
   }).catch((error) => {
     console.warn("WineFox health refresh failed", error);
   }).finally(() => {
+    if (manual) setConnectionRetryBusy(false);
     healthRefreshPromise = null;
     clearTimeout(connTimer);
     connTimer = setTimeout(refreshHealth, document.hidden ? 30000 : 10000);
   });
   return healthRefreshPromise;
+}
+
+function bindConnectionRetry() {
+  $("#conn-retry")?.addEventListener("click", () => refreshHealth({ manual: true }));
 }
 
 function bindTheme() {
@@ -291,6 +315,7 @@ function bindJobTally() {
 async function boot() {
   await maybeLoadMock();
   bindTheme();
+  bindConnectionRetry();
   buildRail();
   bindJobTally();
   await preloadWorkspace();

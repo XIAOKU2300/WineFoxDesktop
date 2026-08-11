@@ -124,6 +124,30 @@ export function downloadText(filename, text, mime = "text/plain") {
   setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
+/** Copy plain text without storing it outside the current process. */
+export async function copyText(text) {
+  const value = String(text ?? "");
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const input = el("textarea", {
+    readonly: true,
+    "aria-hidden": "true",
+    style: "position:fixed;left:-9999px;top:0;opacity:0",
+  }, value);
+  document.body.append(input);
+  let copied = false;
+  try {
+    input.select();
+    copied = document.execCommand("copy");
+  } finally {
+    input.remove();
+  }
+  if (!copied) throw new Error("Clipboard is unavailable");
+}
+
 /* ================= Toast（全局单例） ================= */
 let toastRegion = null;
 export function toast(msg, kind = "ok", ms = 3200) {
@@ -177,7 +201,13 @@ export function ic(name, attrs = {}) {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("viewBox", "0 0 16 16");
   svg.setAttribute("aria-hidden", "true");
-  for (const [k, v] of Object.entries(attrs)) svg.setAttribute(k, v);
+  svg.setAttribute("class", ["ui-icon", attrs.class].filter(Boolean).join(" "));
+  svg.setAttribute("width", attrs.width || "16");
+  svg.setAttribute("height", attrs.height || "16");
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class" || k === "width" || k === "height") continue;
+    svg.setAttribute(k, v);
+  }
   svg.innerHTML = ICONS[name] || ICONS.info;
   return svg;
 }

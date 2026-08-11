@@ -1,7 +1,7 @@
 /* WineFox Desktop — 模型与 LoRA 页
  * 展示 checkpoint / LoRA / 自定义节点状态；v1 无在线下载（缺失给出安装指引）。
  */
-import { el, $, $$, ic, esc, sanitizeName, fmtBytes, loadingState } from "../utils.js";
+import { el, $, $$, ic, esc, sanitizeName, fmtBytes, loadingState, copyText, toast } from "../utils.js";
 import { api } from "../api.js";
 import { store } from "../store.js";
 
@@ -11,6 +11,9 @@ export class ModelsView {
     this.data = null;
     this.loaded = false;
     this.visible = { checkpoints: 40, loras: 40, nodes: 40 };
+    this.resourceObserver = null;
+    this.resourceFallback = null;
+    this.resourcePageFrame = null;
   }
 
   async mount(container) {
@@ -58,6 +61,7 @@ export class ModelsView {
   async load() {
     const body = $("#m-body");
     if (!body) return;
+    this.teardownPagination();
     body.replaceChildren(loadingState("正在扫描模型与 LoRA"));
     try {
       this.data = await api.models();
@@ -71,6 +75,7 @@ export class ModelsView {
   renderBody() {
     const body = $("#m-body");
     if (!body) return;
+    this.teardownPagination();
     const d = this.data || {};
     const summary = el("div", { class: "row wrap gap-2" }, [
       el("span", { class: "badge ok" }, esc(`${(d.checkpoints || []).length} 个 checkpoint`)),
@@ -84,14 +89,16 @@ export class ModelsView {
     else if (this.tab === "loras") list = this.loraList(d.loras || []);
     else list = this.nodeList(d);
     body.replaceChildren(summary, list);
+    this.setupPagination();
   }
 
   checkpointList(items) {
     if (!items.length) return this.empty("未检测到 checkpoint", "将模型放入 ComfyUI 的 models/checkpoints 目录后重新扫描。");
     return this.resourceList(items, "checkpoints", (m) => {
+      const name = sanitizeName(m.name);
       const row = el("div", { class: "model-row" + (m.compat === "missing" ? " missing" : m.compat === "incompatible" ? " incompatible" : "") }, [
         el("div", { class: "grow" }, [
-          el("div", { class: "m-name" }, esc(sanitizeName(m.name))),
+          this.copyableName(name, "Checkpoint"),
           el("div", { class: "m-sub" }, esc(`${m.family || "通用"} · ${fmtBytes(m.size)}`)),
         ]),
         this.compatBadge(m),
@@ -104,10 +111,13 @@ export class ModelsView {
   loraList(items) {
     if (!items.length) return this.empty("未检测到 LoRA", "将 LoRA 放入 ComfyUI 的 models/loras 目录后重新扫描。");
     return this.resourceList(items, "loras", (m) => {
+      const name = sanitizeName(m.name);
+      const asList = (value) => Array.isArray(value) ? value : value ? [value] : [];
+      const aliases = [...new Set([m.character, ...asList(m.aliases), ...asList(m.tags)].filter(Boolean))];
       const row = el("div", { class: "model-row" + (m.compat === "missing" ? " missing" : m.compat === "incompatible" ? " incompatible" : "") }, [
         el("div", { class: "grow" }, [
-          el("div", { class: "m-name" }, esc(sanitizeName(m.name))),
-          el("div", { class: "m-sub" }, esc(`${m.family || "通用"}${m.character ? " · " + m.character : ""}${m.tags?.length ? " · 别名 " + m.tags.join(" / ") : ""}`)),
+          this.copyableName(name, "LoRA"),
+          el("div", { class: "m-sub" }, esc(`${m.family || "通用"}${aliases.length ? " · 别名 " + aliases.join(" / ") : ""}`)),
         ]),
         this.compatBadge(m),
         el("span", { class: "m-warn" }, esc(m.missing_reason || m.warning || "")),
@@ -144,17 +154,79 @@ export class ModelsView {
     const limit = this.visible[key] || 40;
     const list = el("div", { class: "model-list" }, items.slice(0, limit).map(renderRow));
     if (items.length > limit) {
-      const more = el("button", { class: "btn btn-sm model-more", type: "button" }, `再显示 ${Math.min(40, items.length - limit)} 项`);
-      more.addEventListener("click", () => {
-        this.visible[key] = limit + 40;
-        this.renderBody();
-      });
-      list.append(more);
+      list.append(el("div", { class: "model-sentinel", dataset: { resource: key } }, [
+        loadingState(`正在载入更多 ${key === "loras" ? "LoRA" : "资源"}`, { compact: true }),
+      ]));
     }
     return list;
   }
 
+  copyableName(name, kind) {
+    const label = name || `未命名 ${kind}`;
+    const copy = el("button", {
+      class: "icon-btn m-copy",
+      type: "button",
+      title: `复制完整${kind}名称`,
+      "aria-label": `复制 ${label}`,
+    }, [ic("copy")]);
+    copy.addEventListener("click", async () => {
+      try {
+        await copyText(label);
+        toast(`${kind} 名称已复制`, "ok");
+      } catch {
+        toast("无法访问剪贴板", "warn");
+      }
+    });
+    return el("div", { class: "m-name-wrap" }, [
+      el("div", { class: "m-name", title: label }, esc(label)),
+      copy,
+    ]);
+  }
+
+  setupPagination() {
+    const sentinel = $(".model-sentinel", this.root);
+    if (!sentinel) return;
+    if (typeof IntersectionObserver === "function") {
+      this.resourceObserver = new IntersectionObserver((entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) this.loadMoreResources(sentinel.dataset.resource);
+      }, { root: this.root, rootMargin: "160px 0px", threshold: 0.01 });
+      this.resourceObserver.observe(sentinel);
+      return;
+    }
+
+    const onScroll = () => {
+      if (this.root.scrollHeight - this.root.scrollTop - this.root.clientHeight <= 160) {
+        this.loadMoreResources(sentinel.dataset.resource);
+      }
+    };
+    this.resourceFallback = onScroll;
+    this.root.addEventListener("scroll", onScroll, { passive: true });
+  }
+
+  teardownPagination() {
+    this.resourceObserver?.disconnect();
+    this.resourceObserver = null;
+    if (this.resourceFallback && this.root) this.root.removeEventListener("scroll", this.resourceFallback);
+    this.resourceFallback = null;
+  }
+
+  loadMoreResources(key) {
+    if (!key || this.resourcePageFrame != null) return;
+    this.resourceObserver?.disconnect();
+    this.resourcePageFrame = requestAnimationFrame(() => {
+      this.resourcePageFrame = null;
+      this.visible[key] = (this.visible[key] || 40) + 40;
+      this.renderBody();
+    });
+  }
+
   empty(title, desc) {
     return el("div", { class: "empty" }, [ic("model"), el("div", { class: "empty-title" }, title), el("div", { class: "empty-desc" }, desc)]);
+  }
+
+  dispose() {
+    this.teardownPagination();
+    if (this.resourcePageFrame != null) cancelAnimationFrame(this.resourcePageFrame);
+    this.resourcePageFrame = null;
   }
 }
