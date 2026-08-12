@@ -68,7 +68,7 @@ function buildRail() {
     el("div", { class: "rail-foot" }, [
       el("span", { class: "rail-signature" }, "狐"),
       el("span", { class: "hint" }, "WineFox Desktop"),
-      el("span", { class: "hint" }, "v8.6.3 · 本地创作空间"),
+      el("span", { class: "hint" }, "v8.6.4 · 本地创作空间"),
     ]),
   );
 }

@@ -28,6 +28,8 @@ export class LabView {
     this.status = null;
     this.unsub = null;
     this.autoTunnelActive = false;
+    this._pendingStart = false;
+    this._pendingTimer = null;
   }
 
   mount(container) {
@@ -37,6 +39,7 @@ export class LabView {
   }
 
   deactivate() {
+    if (this._pendingTimer) { clearTimeout(this._pendingTimer); this._pendingTimer = null; }
     this.unsub?.();
     this.unsub = null;
   }
@@ -276,7 +279,19 @@ export class LabView {
     if (start) { start.disabled = true; start.setAttribute("aria-busy", "true"); }
     // 房间已在线时 manager.start 幂等返回、不发布 room_status 事件，
     // 因此只对「从停止→启动」的尝试挂 pending 标记，避免标记滞留误弹 toast。
-    if (this.status?.state !== "online") this._pendingStart = true;
+    if (this.status?.state !== "online") {
+      this._pendingStart = true;
+      // 兜底：ack 后长时间收不到 online/failed（如 sidecar 中途崩溃），
+      // 清除标记恢复按钮，避免永久卡死。state 仍为 starting 时 renderStatus 自会禁用。
+      if (this._pendingTimer) clearTimeout(this._pendingTimer);
+      this._pendingTimer = setTimeout(() => {
+        this._pendingTimer = null;
+        if (this._pendingStart) {
+          this._pendingStart = false;
+          this.renderStatus();
+        }
+      }, 45000);
+    }
     try {
       const res = await roomBridge.start(settings);
       if (!res.ok) {
@@ -288,7 +303,9 @@ export class LabView {
       this._pendingStart = false;
       toast("开启房间失败：无法连接桌面服务", "err");
     } finally {
-      if (start) { start.disabled = false; start.removeAttribute("aria-busy"); }
+      // 启动尚未完成（pending）时保持按钮禁用，直到收到 online/failed 事件
+      // 由 renderStatus 恢复，避免开房过程中可重复点击。
+      if (start && !this._pendingStart) { start.disabled = false; start.removeAttribute("aria-busy"); }
     }
   }
 
@@ -352,6 +369,16 @@ export class LabView {
     if (!box) return;
     const s = this.status;
 
+    // 开房过程中（starting 或启动未决）禁用开启按钮，online/failed 后恢复；
+    // 由 renderStatus 统一管理，避免 startRoom 的 finally 在 pending 期间恢复按钮。
+    const startBtn = $("#lab-start", this.root);
+    if (startBtn) {
+      const busy = s?.state === "starting" || (this._pendingStart && s?.state !== "online" && s?.state !== "failed");
+      startBtn.disabled = busy;
+      if (busy) startBtn.setAttribute("aria-busy", "true");
+      else startBtn.removeAttribute("aria-busy");
+    }
+
     if (debugChip) {
       const enabled = store.get("debugEnabled");
       debugChip.hidden = !enabled;
@@ -376,7 +403,9 @@ export class LabView {
       return;
     }
 
-    const open = ["online", "starting"].includes(s.state);
+    // starting 期间不显示关闭按钮：此刻 stop() 会在启动协程收尾前清空状态，
+    // 随后 start() 仍会把状态写成 online，造成竞态。
+    const open = s.state === "online";
     if (stop) stop.hidden = !open;
     const autoStop = $("#lab-tunnel-auto-stop", this.root);
     if (autoStop) autoStop.hidden = !(open && this.autoTunnelActive);
@@ -387,13 +416,26 @@ export class LabView {
     }
 
     const rows = [
-      ["状态", s.state === "online" ? "运行中" : s.state],
+      ["状态", s.state === "online" ? "运行中" : (s.state === "starting" ? "正在开启…" : s.state)],
       s.name ? ["房间", s.name] : null,
       ["成员", `${s.members ?? 0} / ${s.maxMembers ?? 0}`],
       s.localUrl ? ["本地地址", s.localUrl] : null,
       s.lanUrl ? ["局域网地址", s.lanUrl] : null,
       s.tunnelUrl ? ["公网地址", s.tunnelUrl] : null,
     ].filter(Boolean);
+
+    // 开房进度：state=starting 时显示真实进度条 + 当前阶段文字。
+    let progressBlock = null;
+    if (s.state === "starting" && s.progress != null) {
+      const pct = Math.max(0, Math.min(100, Number(s.progress) || 0));
+      progressBlock = el("div", { class: "stack-2", id: "lab-start-progress" }, [
+        el("div", { class: "row gap-2", style: "justify-content:space-between" }, [
+          el("span", { class: "hint" }, esc(s.stage || "正在开启房间…")),
+          el("span", { class: "hint" }, esc(`${pct}%`)),
+        ]),
+        el("div", { class: "progress" }, [el("i", { style: `width: ${pct}%` })]),
+      ]);
+    }
 
     // 邀请地址优先级：公网隧道 → 局域网地址 → 本机地址（尽量给对方一个可用的链接）。
     const inviteUrl = s.tunnelUrl || s.lanUrl || s.localUrl;
@@ -425,6 +467,7 @@ export class LabView {
         el("span", { class: "summary-key" }, esc(k)),
         el("span", { class: "summary-value" }, esc(String(v))),
       ]))),
+      progressBlock,
       (copyBtn || lanCopy || enterBtn) ? el("div", { class: "row gap-2 wrap" }, [copyBtn, lanCopy, enterBtn].filter(Boolean)) : null,
       !isDegenerate(s.verifyWarning) ? el("div", { class: "notice warn" }, [ic("warn"), el("span", {}, esc(s.verifyWarning))]) : null,
       !isDegenerate(s.error) ? el("div", { class: "notice warn", role: "alert" }, [ic("warn"), el("span", {}, esc(s.error))]) : null,

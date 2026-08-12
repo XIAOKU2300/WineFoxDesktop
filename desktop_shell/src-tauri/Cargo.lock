@@ -4828,7 +4828,7 @@ checksum = "d6bbff5f0aada427a1e5a6da5f1f98158182f26556f345ac9e04d36d0ebed650"
 
 [[package]]
 name = "winefox-desktop"
-version = "8.6.3"
+version = "8.6.4"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",

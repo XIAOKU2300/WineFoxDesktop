@@ -318,6 +318,8 @@ pub fn parse_room_status(value: &serde_json::Value) -> RoomStatus {
             .get("failedLoginAttempts")
             .and_then(|v| v.as_u64())
             .unwrap_or(0) as u32,
+        progress: value.get("progress").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+        stage: get("stage"),
     }
 }
 

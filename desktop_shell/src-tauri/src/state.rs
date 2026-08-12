@@ -54,6 +54,10 @@ pub struct RoomStatus {
     pub generation_paused: bool,
     pub members_join_paused: bool,
     pub failed_login_attempts: u32,
+    /// 开房阶段进度（0-100，state=starting 时生效；online 后为 100）。
+    pub progress: u32,
+    /// 开房阶段文字描述（如 "校验房间设置" / "加密房间密码"）。
+    pub stage: Option<String>,
 }
 
 impl RoomStatus {
