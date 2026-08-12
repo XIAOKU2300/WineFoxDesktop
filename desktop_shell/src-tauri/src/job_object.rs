@@ -13,9 +13,9 @@
 use std::sync::Mutex;
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
 use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    JobObjectExtendedLimitInformation,
+    AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+    SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 use windows_sys::Win32::System::Threading::{
     OpenProcess, TerminateProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
@@ -37,7 +37,10 @@ impl JobObject {
         unsafe {
             let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
             if handle.is_null() {
-                return Err(format!("CreateJobObjectW failed: {}", std::io::Error::last_os_error()));
+                return Err(format!(
+                    "CreateJobObjectW failed: {}",
+                    std::io::Error::last_os_error()
+                ));
             }
             let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
             info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
@@ -62,7 +65,10 @@ impl JobObject {
         unsafe {
             let process = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid);
             if process.is_null() {
-                return Err(format!("OpenProcess({pid}) failed: {}", std::io::Error::last_os_error()));
+                return Err(format!(
+                    "OpenProcess({pid}) failed: {}",
+                    std::io::Error::last_os_error()
+                ));
             }
             let ok = AssignProcessToJobObject(self.handle, process);
             CloseHandle(process);
@@ -105,7 +111,9 @@ pub struct JobGuard {
 
 impl JobGuard {
     pub fn new() -> JobGuard {
-        JobGuard { job: Mutex::new(None) }
+        JobGuard {
+            job: Mutex::new(None),
+        }
     }
 
     pub fn install(&self, job: JobObject) {

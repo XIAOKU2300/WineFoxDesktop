@@ -59,6 +59,8 @@ desktop_shell/src-tauri/binaries/*.exe
 packaging/.build/
 packaging/dist/
 packaging/pyinstaller/generated/
+packaging/nsis/payload/
+reports/pre-public-release-verify.json
 
 # Git 提交脚本（不需要提交）
 git提交.py

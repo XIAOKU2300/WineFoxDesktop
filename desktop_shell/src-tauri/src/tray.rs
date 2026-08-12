@@ -11,7 +11,10 @@ pub const TRAY_SHOW: &str = "show";
 pub const TRAY_HIDE: &str = "hide";
 pub const TRAY_EXIT: &str = "exit";
 
-pub fn build_tray<R: Runtime>(app: &AppHandle<R>, manager: &Arc<SidecarManager>) -> tauri::Result<()> {
+pub fn build_tray<R: Runtime>(
+    app: &AppHandle<R>,
+    manager: &Arc<SidecarManager>,
+) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, TRAY_SHOW, "显示主窗口", true, None::<&str>)?;
     let hide = MenuItem::with_id(app, TRAY_HIDE, "隐藏窗口", true, None::<&str>)?;
     let exit = MenuItem::with_id(app, TRAY_EXIT, "退出 WineFox", true, None::<&str>)?;

@@ -711,6 +711,9 @@ export class SettingsView {
     const ver = $("#up-version", this.root);
     if (ver && state.currentVersion) ver.textContent = state.currentVersion;
     const busy = state.busyTasks > 0;
+    const active = ["checking", "downloading", "verifying", "installing", "restarting"].includes(state.phase);
+    const checkButton = $("#up-check", this.root);
+    if (checkButton) checkButton.disabled = active;
     let node;
     switch (state.phase) {
       case "idle":
@@ -732,7 +735,7 @@ export class SettingsView {
           ]),
           state.notes ? el("p", { class: "up-notes text-sm" }, esc(state.notes)) : null,
           el("div", { class: "row gap-2" }, [
-            el("button", { class: "btn btn-primary btn-sm", type: "button", id: "up-install", disabled: busy }, [ic("download"), esc(busy ? "等待任务完成后更新" : "下载并安装")]),
+            el("button", { class: "btn btn-primary btn-sm", type: "button", id: "up-install", disabled: state.canInstall === false }, [ic("download"), esc(busy ? "等待任务完成后更新" : "下载并安装")]),
             el("button", { class: "btn btn-sm", type: "button", id: "up-later" }, "稍后提醒"),
           ]),
           busy ? el("span", { class: "text-xs", style: "color:var(--warn)" }, "当前有生成任务，安装需等任务完成后再执行。") : null,

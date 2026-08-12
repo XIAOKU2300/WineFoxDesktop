@@ -42,13 +42,30 @@ pub fn parse_line(raw: &str) -> Option<Line> {
     let kind = obj.get("type")?.as_str()?;
     match kind {
         "ready" => {
-            let protocol = obj.get("protocol").and_then(Value::as_u64).map(|p| p as u32)?;
+            let protocol = obj
+                .get("protocol")
+                .and_then(Value::as_u64)
+                .map(|p| p as u32)?;
             let version = obj.get("version").and_then(Value::as_str)?.to_string();
-            let host = obj.get("host").and_then(Value::as_str).unwrap_or("").to_string();
+            let host = obj
+                .get("host")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
             let port = obj.get("port").and_then(Value::as_u64).map(|p| p as u16)?;
-            let bootstrap_path = obj.get("bootstrapPath").and_then(Value::as_str)?.to_string();
+            let bootstrap_path = obj
+                .get("bootstrapPath")
+                .and_then(Value::as_str)?
+                .to_string();
             let pid = obj.get("pid").and_then(Value::as_u64).map(|p| p as u32);
-            Some(Line::Ready(ReadyInfo { protocol, version, host, port, bootstrap_path, pid }))
+            Some(Line::Ready(ReadyInfo {
+                protocol,
+                version,
+                host,
+                port,
+                bootstrap_path,
+                pid,
+            }))
         }
         "status" => {
             let busy = obj.get("busy").and_then(Value::as_bool).unwrap_or(false);
@@ -56,12 +73,24 @@ pub fn parse_line(raw: &str) -> Option<Line> {
             Some(Line::Status { busy, tasks })
         }
         "log" => {
-            let level = obj.get("level").and_then(Value::as_str).unwrap_or("info").to_string();
-            let message = obj.get("message").and_then(Value::as_str).unwrap_or("").to_string();
+            let level = obj
+                .get("level")
+                .and_then(Value::as_str)
+                .unwrap_or("info")
+                .to_string();
+            let message = obj
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
             Some(Line::Log { level, message })
         }
         "ack" => {
-            let cmd = obj.get("cmd").and_then(Value::as_str).unwrap_or("").to_string();
+            let cmd = obj
+                .get("cmd")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
             let ok = obj.get("ok").and_then(Value::as_bool).unwrap_or(false);
             Some(Line::Ack { cmd, ok })
         }
@@ -73,7 +102,11 @@ pub fn parse_line(raw: &str) -> Option<Line> {
         }
         "exit" => {
             let code = obj.get("code").and_then(Value::as_i64).unwrap_or(-1) as i32;
-            let reason = obj.get("reason").and_then(Value::as_str).unwrap_or("").to_string();
+            let reason = obj
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
             Some(Line::Exit { code, reason })
         }
         _ => Some(Line::Other(v)),
@@ -90,7 +123,10 @@ pub enum ReadyError {
 
 pub fn validate_ready(info: &ReadyInfo, expected_version: &str) -> Result<(), ReadyError> {
     if info.protocol != PROTOCOL {
-        return Err(ReadyError::ProtocolMismatch { got: info.protocol, expected: PROTOCOL });
+        return Err(ReadyError::ProtocolMismatch {
+            got: info.protocol,
+            expected: PROTOCOL,
+        });
     }
     if info.version != expected_version {
         return Err(ReadyError::VersionMismatch {
@@ -99,7 +135,9 @@ pub fn validate_ready(info: &ReadyInfo, expected_version: &str) -> Result<(), Re
         });
     }
     if !(info.host == "127.0.0.1" || info.host == "::1" || info.host == "localhost") {
-        return Err(ReadyError::NotLoopback { host: info.host.clone() });
+        return Err(ReadyError::NotLoopback {
+            host: info.host.clone(),
+        });
     }
     Ok(())
 }
@@ -148,7 +186,13 @@ mod tests {
         match line {
             Line::Ready(info) => {
                 let err = validate_ready(&info, "8.5.10").unwrap_err();
-                assert_eq!(err, ReadyError::ProtocolMismatch { got: 2, expected: 1 });
+                assert_eq!(
+                    err,
+                    ReadyError::ProtocolMismatch {
+                        got: 2,
+                        expected: 1
+                    }
+                );
             }
             _ => panic!("expected ready"),
         }
@@ -160,7 +204,13 @@ mod tests {
         match line {
             Line::Ready(info) => {
                 let err = validate_ready(&info, "8.5.10").unwrap_err();
-                assert_eq!(err, ReadyError::VersionMismatch { got: "9.9.9".into(), expected: "8.5.10".into() });
+                assert_eq!(
+                    err,
+                    ReadyError::VersionMismatch {
+                        got: "9.9.9".into(),
+                        expected: "8.5.10".into()
+                    }
+                );
             }
             _ => panic!("expected ready"),
         }
@@ -172,7 +222,12 @@ mod tests {
         match line {
             Line::Ready(info) => {
                 let err = validate_ready(&info, "8.5.10").unwrap_err();
-                assert_eq!(err, ReadyError::NotLoopback { host: "0.0.0.0".into() });
+                assert_eq!(
+                    err,
+                    ReadyError::NotLoopback {
+                        host: "0.0.0.0".into()
+                    }
+                );
             }
             _ => panic!("expected ready"),
         }
@@ -181,13 +236,37 @@ mod tests {
     #[test]
     fn parses_status_log_ack_exit() {
         let s = parse_line(r#"{"type":"status","busy":true,"tasks":2,"task":null}"#).unwrap();
-        assert_eq!(s, Line::Status { busy: true, tasks: 2 });
+        assert_eq!(
+            s,
+            Line::Status {
+                busy: true,
+                tasks: 2
+            }
+        );
         let l = parse_line(r#"{"type":"log","level":"warn","message":"hi"}"#).unwrap();
-        assert_eq!(l, Line::Log { level: "warn".into(), message: "hi".into() });
+        assert_eq!(
+            l,
+            Line::Log {
+                level: "warn".into(),
+                message: "hi".into()
+            }
+        );
         let a = parse_line(r#"{"type":"ack","cmd":"shutdown","ok":true}"#).unwrap();
-        assert_eq!(a, Line::Ack { cmd: "shutdown".into(), ok: true });
+        assert_eq!(
+            a,
+            Line::Ack {
+                cmd: "shutdown".into(),
+                ok: true
+            }
+        );
         let e = parse_line(r#"{"type":"exit","code":0,"reason":"shutdown-now"}"#).unwrap();
-        assert_eq!(e, Line::Exit { code: 0, reason: "shutdown-now".into() });
+        assert_eq!(
+            e,
+            Line::Exit {
+                code: 0,
+                reason: "shutdown-now".into()
+            }
+        );
     }
 
     #[test]
@@ -207,7 +286,10 @@ mod tests {
 
     #[test]
     fn unknown_types_are_kept() {
-        assert!(matches!(parse_line(r#"{"type":"future-thing","x":1}"#), Some(Line::Other(_))));
+        assert!(matches!(
+            parse_line(r#"{"type":"future-thing","x":1}"#),
+            Some(Line::Other(_))
+        ));
     }
 
     #[test]

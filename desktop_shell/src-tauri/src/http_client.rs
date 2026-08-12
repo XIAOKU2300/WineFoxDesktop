@@ -49,7 +49,8 @@ pub fn request(
         return Err("invalid HTTP path".into());
     }
     let addr = format!("{host}:{port}");
-    let sock_addr: std::net::SocketAddr = addr.parse().map_err(|_| format!("bad address: {addr}"))?;
+    let sock_addr: std::net::SocketAddr =
+        addr.parse().map_err(|_| format!("bad address: {addr}"))?;
     let mut stream = TcpStream::connect_timeout(&sock_addr, timeout)
         .map_err(|e| format!("connect {addr}: {e}"))?;
     stream
@@ -82,7 +83,9 @@ pub fn request(
         head.push_str(&format!("Content-Length: {}\r\n", payload.len()));
     }
     head.push_str("\r\n");
-    stream.write_all(head.as_bytes()).map_err(|e| e.to_string())?;
+    stream
+        .write_all(head.as_bytes())
+        .map_err(|e| e.to_string())?;
     if let Some(payload) = body {
         stream.write_all(payload).map_err(|e| e.to_string())?;
     }
@@ -235,11 +238,7 @@ mod tests {
                 }
                 bytes.extend_from_slice(&block[..read]);
             }
-            let header_end = bytes
-                .windows(4)
-                .position(|w| w == b"\r\n\r\n")
-                .unwrap()
-                + 4;
+            let header_end = bytes.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
             let header_text = String::from_utf8_lossy(&bytes[..header_end]);
             let content_length = header_text
                 .lines()

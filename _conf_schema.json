@@ -1404,7 +1404,7 @@
           "public_url": {
             "description": "展示页公网登录地址",
             "type": "string",
-            "default": "https://frp-own.com:53414/"
+            "default": ""
           },
           "admin_username": {
             "description": "展示页管理员用户名",
@@ -1412,10 +1412,10 @@
             "default": "admin"
           },
           "admin_password": {
-            "description": "展示页管理员初始密码",
+            "description": "展示页管理员初始密码（留空则首次启动随机生成）",
             "type": "string",
-            "default": "REDACTED_LEGACY_PASSWORD",
-            "hint": "首次初始化时写入管理员账号；后续可在 WineFox 管理台重置账号密码。"
+            "default": "",
+            "hint": "留空时首次初始化会随机生成并写入本地数据；后续可在 WineFox 管理台重置账号密码。"
           },
           "limit": {
             "description": "最多展示收藏数",

@@ -62,10 +62,7 @@ pub struct RoomStatus {
 
 impl RoomStatus {
     pub fn room_open(&self) -> bool {
-        !matches!(
-            self.state.as_str(),
-            "" | "stopped" | "closing" | "failed"
-        )
+        !matches!(self.state.as_str(), "" | "stopped" | "closing" | "failed")
     }
 }
 

@@ -18,9 +18,9 @@ use crate::sanitize;
 use crate::state::{AppState, SidecarState};
 use serde_json::json;
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, ChildStdin, Command, Stdio};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -114,10 +114,7 @@ impl SidecarManager {
         if let Some(dir) = &exe_dir {
             let cand = dir.join("winefox-sidecar.exe");
             if cand.is_file() {
-                return Ok((
-                    cand.to_string_lossy().into_owned(),
-                    vec![],
-                ));
+                return Ok((cand.to_string_lossy().into_owned(), vec![]));
             }
         }
 
@@ -128,10 +125,7 @@ impl SidecarManager {
         if dev_pkg.join("__main__.py").is_file() {
             let entry = dev_pkg.join("__main__.py");
             let py = std::env::var("WINE_FOX_PYTHON").unwrap_or_else(|_| "python".into());
-            return Ok((
-                py,
-                vec![entry.to_string_lossy().into_owned()],
-            ));
+            return Ok((py, vec![entry.to_string_lossy().into_owned()]));
         }
 
         Err("sidecar binary not found: set WINE_FOX_SIDECAR or run packaging/build.ps1".into())
@@ -449,60 +443,67 @@ fn session_main(me: &Arc<SidecarManager>) {
         };
 
         match ev {
-            Ok(SessionEvent::Line(raw)) => {
-                match handshake::parse_line(&raw) {
-                    None => {
-                        let clean = sanitize::sanitize_line(&raw);
-                        me.log("warn", &format!("ignored non-JSON stdout line: {clean}"));
-                    }
-                    Some(Line::Ready(info)) => {
-                        let st = me.state.inner.lock().unwrap().state;
-                        if st == SidecarState::Starting {
-                            if let Err(e) = on_ready(me, &info, pid) {
-                                me.fail(e);
-                                return;
-                            }
+            Ok(SessionEvent::Line(raw)) => match handshake::parse_line(&raw) {
+                None => {
+                    let clean = sanitize::sanitize_line(&raw);
+                    me.log("warn", &format!("ignored non-JSON stdout line: {clean}"));
+                }
+                Some(Line::Ready(info)) => {
+                    let st = me.state.inner.lock().unwrap().state;
+                    if st == SidecarState::Starting {
+                        if let Err(e) = on_ready(me, &info, pid) {
+                            me.fail(e);
+                            return;
                         }
                     }
-                    Some(Line::Status { busy, tasks }) => {
+                }
+                Some(Line::Status { busy, tasks }) => {
+                    let mut inner = me.state.inner.lock().unwrap();
+                    inner.busy = busy;
+                    inner.tasks = tasks;
+                    drop(inner);
+                    me.emit_status();
+                }
+                Some(Line::Log { level, message }) => {
+                    me.log(
+                        &format!("sidecar[{level}]"),
+                        &sanitize::sanitize_line(&message),
+                    );
+                }
+                Some(Line::Ack { cmd, ok }) => {
+                    me.log("info", &format!("sidecar ack: {cmd} ok={ok}"));
+                    if cmd == "shutdown" {
                         let mut inner = me.state.inner.lock().unwrap();
-                        inner.busy = busy;
-                        inner.tasks = tasks;
+                        inner.shutdown_pending = true;
+                        inner.shutdown_mode = Some(if inner.quitting {
+                            "now".into()
+                        } else {
+                            "wait".into()
+                        });
                         drop(inner);
                         me.emit_status();
                     }
-                    Some(Line::Log { level, message }) => {
-                        me.log(
-                            &format!("sidecar[{level}]"),
-                            &sanitize::sanitize_line(&message),
-                        );
-                    }
-                    Some(Line::Ack { cmd, ok }) => {
-                        me.log("info", &format!("sidecar ack: {cmd} ok={ok}"));
-                        if cmd == "shutdown" {
-                            let mut inner = me.state.inner.lock().unwrap();
-                            inner.shutdown_pending = true;
-                            inner.shutdown_mode =
-                                Some(if inner.quitting { "now".into() } else { "wait".into() });
-                            drop(inner);
-                            me.emit_status();
-                        }
-                    }
-                    Some(Line::Room { payload }) => {
-                        let value: serde_json::Value =
-                            serde_json::from_str(&payload).unwrap_or(serde_json::Value::Null);
-                        crate::room_control::handle_room_status(&me.app, &value);
-                    }
-                    Some(Line::Exit { code, reason }) => {
-                        me.log("info", &format!("sidecar exit event: code={code} reason={reason}"));
-                        me.on_sidecar_exit(code, &reason);
-                        return;
-                    }
-                    Some(Line::Other(v)) => {
-                        me.log("debug", &format!("sidecar event: {}", sanitize::sanitize_line(&v.to_string())));
-                    }
                 }
-            }
+                Some(Line::Room { payload }) => {
+                    let value: serde_json::Value =
+                        serde_json::from_str(&payload).unwrap_or(serde_json::Value::Null);
+                    crate::room_control::handle_room_status(&me.app, &value);
+                }
+                Some(Line::Exit { code, reason }) => {
+                    me.log(
+                        "info",
+                        &format!("sidecar exit event: code={code} reason={reason}"),
+                    );
+                    me.on_sidecar_exit(code, &reason);
+                    return;
+                }
+                Some(Line::Other(v)) => {
+                    me.log(
+                        "debug",
+                        &format!("sidecar event: {}", sanitize::sanitize_line(&v.to_string())),
+                    );
+                }
+            },
             Ok(SessionEvent::StdoutClosed) => {
                 me.log("warn", "sidecar stdout closed");
                 me.on_sidecar_exit(-1, "stdout-closed");
@@ -511,7 +512,10 @@ fn session_main(me: &Arc<SidecarManager>) {
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 let st = me.state.inner.lock().unwrap().state;
                 if st == SidecarState::Starting && Instant::now() > boot_deadline {
-                    me.fail(format!("等待 ready 握手超时（{}s）", ready_timeout().as_secs()));
+                    me.fail(format!(
+                        "等待 ready 握手超时（{}s）",
+                        ready_timeout().as_secs()
+                    ));
                     return;
                 }
             }
@@ -622,9 +626,7 @@ mod cookie_tests {
     #[test]
     fn strips_set_cookie_attributes_before_proxying() {
         assert_eq!(
-            session_cookie_pair(
-                "winefox_session=abc123; HttpOnly; Path=/; SameSite=Strict"
-            ),
+            session_cookie_pair("winefox_session=abc123; HttpOnly; Path=/; SameSite=Strict"),
             Some("winefox_session=abc123".into())
         );
         assert_eq!(session_cookie_pair("Path=/; HttpOnly"), None);

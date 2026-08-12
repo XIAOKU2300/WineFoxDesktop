@@ -311,7 +311,7 @@ class StabilityStaticTests(unittest.TestCase):
             "def _load_favorite_gallery_html(",
             "start_gallery_webui",
             "WineFox",
-            "REDACTED_LEGACY_PASSWORD",
+            "Gallery 管理员初始密码已随机生成",
             "6666",
             "/gallery.html",
             "/draw.html",
@@ -1535,6 +1535,57 @@ class StabilityStaticTests(unittest.TestCase):
             self.assertFalse(first.exists())
             self.assertFalse(store._favorite_sidecar_path(first).exists())
             self.assertTrue(second.exists())
+
+    def test_gallery_admin_password_is_generated_and_stable(self):
+        gpt_magic = _load_gpt_magic_for_store_tests()
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp) / "data"
+            store = gpt_magic.GptMagicStore(data_dir)
+            password = store.config()["gallery"]["admin_password"]
+            account = store.gallery_accounts()["admin"]
+
+            self.assertEqual(len(password), 16)
+            self.assertNotIn(password, ("", "114514", "admin"))
+            self.assertEqual(account["credential_epoch"], 1)
+            self.assertTrue(
+                store._verify_gallery_password(
+                    password,
+                    account["salt"],
+                    account["password_hash"],
+                    account["password_algo"],
+                    account["password_iterations"],
+                )
+            )
+
+            reloaded = gpt_magic.GptMagicStore(data_dir)
+            self.assertEqual(reloaded.config()["gallery"]["admin_password"], password)
+
+    def test_legacy_builtin_gallery_admin_rotates_only_once(self):
+        gpt_magic = _load_gpt_magic_for_store_tests()
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp) / "data"
+            store = gpt_magic.GptMagicStore(data_dir)
+            old_password = store.config()["gallery"]["admin_password"]
+            store.gallery_accounts()["admin"].pop("credential_epoch")
+            store.save()
+
+            migrated = gpt_magic.GptMagicStore(data_dir)
+            new_password = migrated.config()["gallery"]["admin_password"]
+            account = migrated.gallery_accounts()["admin"]
+            self.assertNotEqual(new_password, old_password)
+            self.assertEqual(account["credential_epoch"], 1)
+            self.assertFalse(
+                migrated._verify_gallery_password(
+                    old_password,
+                    account["salt"],
+                    account["password_hash"],
+                    account["password_algo"],
+                    account["password_iterations"],
+                )
+            )
+
+            reloaded = gpt_magic.GptMagicStore(data_dir)
+            self.assertEqual(reloaded.config()["gallery"]["admin_password"], new_password)
 
     def test_gallery_video_balance_billing_lifecycle(self):
         gpt_magic = _load_gpt_magic_for_store_tests()

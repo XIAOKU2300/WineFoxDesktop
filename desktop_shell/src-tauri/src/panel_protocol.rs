@@ -231,10 +231,7 @@ mod tests {
             resolve_target("/api/v1/health", 57466, None),
             Some((57466, "/api/v1/health".into()))
         );
-        assert_eq!(
-            resolve_target("/", 57466, None),
-            Some((57466, "/".into()))
-        );
+        assert_eq!(resolve_target("/", 57466, None), Some((57466, "/".into())));
     }
 
     #[test]
@@ -256,7 +253,10 @@ mod tests {
 
     #[test]
     fn unknown_port_still_rejected_when_room_port_set() {
-        assert_eq!(resolve_target("/12345/api/status", 57466, Some(51888)), None);
+        assert_eq!(
+            resolve_target("/12345/api/status", 57466, Some(51888)),
+            None
+        );
     }
 
     #[test]
@@ -406,7 +406,9 @@ mod tests {
         }
         let request = Request::builder()
             .method("GET")
-            .uri(format!("http://winefox-panel.localhost/{port}/room/v1/catalog"))
+            .uri(format!(
+                "http://winefox-panel.localhost/{port}/room/v1/catalog"
+            ))
             .header(header::ACCEPT, "application/json")
             .body(Vec::new())
             .unwrap();
