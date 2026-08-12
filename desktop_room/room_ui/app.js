@@ -193,6 +193,7 @@
     $("ws-room-name").textContent = state.room.name || "房间";
     $("ws-room-meta").textContent = state.member.role === "owner" ? `房主 · ${state.member.displayName}` : state.member.displayName;
     showScreen("workspace");
+    setMobPane("pane-chat"); // 移动端默认显示聊天面板
     if (!state.booted) {
       state.booted = true;
       wireWorkspace();
@@ -448,11 +449,25 @@
     if (!message) return;
     const existing = state.messages.findIndex((m) => m.id === message.id);
     if (existing >= 0) {
+      // 同一消息更新（乐观插入被 WS 广播/快照替换）：原位刷新，保持顺序。
       state.messages[existing] = message;
       renderMessages();
-    } else {
+      if (message.type === "generation_result") maybeShowResult(message);
+      return;
+    }
+    // 按 (createdAt, id) 排序插入：迟到/乱序到达的消息落到正确位置，
+    // 而不是一律追加到末尾造成顺序错乱。
+    const at = state.messages.findIndex((m) => {
+      const a = m.createdAt || 0;
+      const b = message.createdAt || 0;
+      return a > b || (a === b && Number(m.id) > Number(message.id));
+    });
+    if (at < 0) {
       state.messages.push(message);
       appendMessage(message);
+    } else {
+      state.messages.splice(at, 0, message);
+      renderMessages();
     }
     if (message.type === "generation_result") maybeShowResult(message);
   }
@@ -585,7 +600,11 @@
     if (!res.ok) {
       toast(chatErrorMessage(res.data.errorCode, res.data.error), "err");
       input.value = text;
+      return;
     }
+    // 乐观插入：POST 即返回该消息，立即入列（按时间排序），
+    // 不必等 WS 广播，发送者能即时看到自己的消息；广播到达后按同 id 替换。
+    if (res.data && res.data.message) upsertMessage(res.data.message);
   }
 
   function chatErrorMessage(code, fallback) {
@@ -878,6 +897,15 @@
   }
 
   /* ---------------- 事件绑定 ---------------- */
+  function setMobPane(paneClass) {
+    document.querySelectorAll(".mob-tab").forEach((t) => {
+      t.classList.toggle("mob-active", t.dataset.pane === paneClass);
+    });
+    document.querySelectorAll(".pane").forEach((p) => {
+      p.classList.toggle("mob-active", p.classList.contains(paneClass));
+    });
+  }
+
   function wireWorkspace() {
     $("chat-send").addEventListener("click", () => { void sendChat(); });
     $("chat-input").addEventListener("keydown", (e) => {
@@ -895,6 +923,11 @@
       location.reload();
     });
     $("closed-reload").addEventListener("click", () => location.reload());
+
+    // 移动端底部 Tab：切换聊天/画布/生成面板（桌面无 Tab 栏，绑定无害）
+    document.querySelectorAll(".mob-tab").forEach((tab) => {
+      tab.addEventListener("click", () => setMobPane(tab.dataset.pane));
+    });
 
     document.querySelectorAll("#g-mode .mode-btn").forEach((b) => {
       b.addEventListener("click", () => setMode(b.dataset.mode));

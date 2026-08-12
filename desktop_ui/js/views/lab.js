@@ -6,22 +6,9 @@ import { el, $, $$, ic, esc, toast, loadingState, copyText, isDegenerate } from 
 import { roomBridge, debugBridge } from "../utils.js";
 import { store } from "../store.js";
 
-/* 是否含孤立代理字符（U+D800–U+DFFF）。
- * Windows IME/剪贴板可能产生孤立代理；它们无法 UTF-8 编码，
- * 在 Rust/Python 链路中会触发 UnicodeEncodeError。
- * 合法代理对（高代理+低代理）计为正常字符，不视为孤立。 */
-function hasLoneSurrogate(text) {
-  for (let i = 0; i < text.length; i++) {
-    const code = text.charCodeAt(i);
-    if (code >= 0xd800 && code <= 0xdbff) {
-      const next = text.charCodeAt(i + 1);
-      if (next >= 0xdc00 && next <= 0xdfff) { i++; continue; } // 合法代理对
-      return true;
-    }
-    if (code >= 0xdc00 && code <= 0xdfff) return true; // 孤立低代理
-  }
-  return false;
-}
+// 代理字符校验：后端（manager.py contains_lone_surrogate）是权威；
+// 前端不做拦截，避免 WebView/IME 对合法中文（BMP CJK）误判为「无法识别的字符」。
+// 中文经 Rust ensure_ascii JSON + sidecar PYTHONUTF8 无损传给后端校验。
 
 export class LabView {
   constructor() {
@@ -58,6 +45,9 @@ export class LabView {
         }
         this.status = state;
         this.renderStatus();
+        // 房间状态变化（尤其是 starting→online）时刷新目录，避免陈旧的
+        // "暂时无法读取房间目录" 一直停留。
+        void this.loadCatalog();
       });
     }
     void this.refresh();
@@ -75,7 +65,14 @@ export class LabView {
   async loadCatalog() {
     const box = $("#lab-catalog", this.root);
     if (!box) return;
-    if (!this.status?.state || this.status.state === "stopped") {
+    const state = this.status?.state;
+    // 只在房间已上线（网关已绑定端口）时拉取；starting/failed 都不该发请求，
+    // 否则网关未就绪会命中"暂时无法读取房间目录"且不再刷新。
+    if (state === "starting") {
+      box.replaceChildren(loadingState("正在准备房间目录", { compact: true }));
+      return;
+    }
+    if (!state || state === "stopped" || state === "failed") {
       box.replaceChildren(el("div", { class: "empty" }, [
         ic("model"),
         el("div", { class: "empty-title" }, "暂无房间目录"),
@@ -83,24 +80,28 @@ export class LabView {
       ]));
       return;
     }
-    try {
-      const response = await fetch("/room/v1/catalog", { headers: { accept: "application/json" } });
-      if (!response.ok) throw new Error(String(response.status));
-      const data = await response.json();
-      const families = (data.families || []).map((f) => f.label || f.id || String(f));
-      box.replaceChildren(
-        el("div", { class: "row gap-2 wrap" }, [
-          el("span", { class: "chip" }, esc(`模型 ${families.length}`)),
-          el("span", { class: "chip" }, esc(`工作流 ${(data.workflows || []).length}`)),
-          el("span", { class: "chip" }, esc(`LoRA ${(data.loras || []).length}`)),
-        ]),
-      );
-    } catch {
-      box.replaceChildren(el("div", { class: "empty" }, [
-        ic("warn"),
-        el("div", { class: "empty-desc" }, "暂时无法读取房间目录。"),
-      ]));
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const response = await fetch("/room/v1/catalog", { headers: { accept: "application/json" } });
+        if (!response.ok) throw new Error(String(response.status));
+        const data = await response.json();
+        const families = (data.families || []).map((f) => f.label || f.id || String(f));
+        box.replaceChildren(
+          el("div", { class: "row gap-2 wrap" }, [
+            el("span", { class: "chip" }, esc(`模型 ${families.length}`)),
+            el("span", { class: "chip" }, esc(`工作流 ${(data.workflows || []).length}`)),
+            el("span", { class: "chip" }, esc(`LoRA ${(data.loras || []).length}`)),
+          ]),
+        );
+        return;
+      } catch {
+        if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 400));
+      }
     }
+    box.replaceChildren(el("div", { class: "empty" }, [
+      ic("warn"),
+      el("div", { class: "empty-desc" }, "暂时无法读取房间目录。"),
+    ]));
   }
 
   render() {
@@ -264,12 +265,6 @@ export class LabView {
     if (!settings.name || !settings.ownerName || !settings.password) {
       toast("请填写房间名称、房主名称与密码", "err");
       return;
-    }
-    for (const [label, value] of [["房间名称", settings.name], ["房主名称", settings.ownerName], ["密码", settings.password]]) {
-      if (hasLoneSurrogate(value)) {
-        toast(`${label}包含无法识别的字符，请重新输入`, "err");
-        return;
-      }
     }
     if (settings.port !== null && (settings.port < 1024 || settings.port > 65535)) {
       toast("端口需在 1024-65535 之间", "err");
@@ -589,10 +584,6 @@ export class LabView {
       if (btn.disabled) return;
       const nick = ($("#wizard-name", overlay)?.value || "").trim();
       const pwd = ($("#wizard-password", overlay)?.value || "").trim();
-      if (hasLoneSurrogate(nick) || hasLoneSurrogate(pwd)) {
-        toast("昵称或密码包含无法识别的字符，请重新输入", "err");
-        return;
-      }
       btn.disabled = true;
       try {
         const res = await roomBridge.openChatroom(nick || null, pwd || null);

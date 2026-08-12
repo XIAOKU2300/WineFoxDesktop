@@ -144,6 +144,8 @@ button { cursor: pointer; }
 .topbar-actions { display: flex; gap: var(--sp-2); }
 
 /* ---------- 工作台 ---------- */
+/* 工作台纵向排布：顶栏 → workspace（flex:1）→ 移动端 Tab 栏（桌面隐藏） */
+.screen-workspace { flex-direction: column; }
 .workspace {
   flex: 1; min-height: 0; display: grid;
   grid-template-columns: 300px 1fr 320px; gap: 0;
@@ -160,6 +162,15 @@ button { cursor: pointer; }
   font-size: var(--fs-xs); color: var(--muted); padding: 2px 8px;
   background: var(--surface-2); border-radius: var(--r-full);
 }
+
+/* 移动端底部 Tab 栏：桌面隐藏，窄屏显示 */
+.mob-tabs { display: none; }
+.mob-tab {
+  border: none; background: transparent; color: var(--muted);
+  font-size: var(--fs-md); font-weight: 600;
+  padding: 10px 0; flex: 1; transition: color .15s;
+}
+.mob-tab.mob-active { color: var(--primary); }
 
 /* 成员条 */
 .members {
@@ -266,10 +277,15 @@ button { cursor: pointer; }
 
 /* ---------- 窄屏（移动端访客） ---------- */
 @media (max-width: 860px) {
-  .workspace { grid-template-columns: 1fr; grid-template-rows: 42vh 1fr auto; overflow-y: auto; }
-  .pane-chat { order: 1; border-right: none; border-bottom: 1px solid var(--border); }
-  .pane-canvas { order: 2; min-height: 42vh; }
-  .pane-params { order: 3; border-left: none; border-top: 1px solid var(--border); }
+  /* 工作台改为底部 Tab 切换：一次只显示一个面板，避免三栏/42vh 堆叠挤乱 */
+  .workspace { display: flex; flex-direction: column; overflow: hidden; grid-template-columns: none; grid-template-rows: none; }
+  .pane { display: none; border: none; }
+  .pane.mob-active { display: flex; flex: 1; min-height: 0; }
+  .mob-tabs {
+    display: flex; flex: none; align-items: stretch;
+    border-top: 1px solid var(--border); background: var(--surface);
+  }
+  .mob-tab { padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
   .members { max-height: 72px; }
 
   /* 触控目标：主要输入框与按钮不小于 44px */
@@ -280,9 +296,6 @@ button { cursor: pointer; }
   /* 加入页/关闭页：卡片贴近全屏，底部留出安全区 */
   .join-card { width: 100%; max-width: 100%; padding: var(--sp-3); }
   .screen-join, .screen-closed { padding: var(--sp-3); padding-bottom: calc(var(--sp-3) + env(safe-area-inset-bottom)); }
-
-  /* 聊天输入区（滚动布局）底部让出安全区，滚动到底仍可点按 */
-  .composer { padding-bottom: calc(var(--sp-3) + env(safe-area-inset-bottom)); }
 }
 
 /* ---------- 更窄屏（≤480px 手机） ---------- */
