@@ -112,6 +112,9 @@ class RoomUiTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(marker, app_js)
         for marker in ("--primary: #9B5067", ".workspace", "prefers-color-scheme"):
             self.assertIn(marker, css)
+        # 回归守卫：hidden 属性必须最高优先级（否则 .screen-closed/.lightbox 的
+        # display:flex 会盖住 [hidden]{display:none}，导致关闭遮罩永远盖住页面）。
+        self.assertIn("[hidden] { display: none !important; }", css)
 
     # ------------------------------------------------------------------
     # 本地 http join：响应体携带 sessionToken，Cookie 仍带 Secure

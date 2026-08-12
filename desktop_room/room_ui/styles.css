@@ -78,6 +78,9 @@ button { cursor: pointer; }
 .screen { display: none; flex: 1; min-height: 0; }
 .screen[hidden] { display: none; }
 .screen:not([hidden]) { display: flex; }
+/* hidden 属性优先级必须最高：类里的 display:flex/grid 会覆盖浏览器默认
+   [hidden]{display:none}（如 .screen-closed、.lightbox），导致遮罩永远盖住页面。 */
+[hidden] { display: none !important; }
 
 /* ---------- 加入页 ---------- */
 .screen-join, .screen-boot { align-items: center; justify-content: center; padding: var(--sp-4); }
