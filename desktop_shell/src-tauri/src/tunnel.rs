@@ -25,7 +25,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 ///   * Host 不能为空
 ///   * 不允许 username:password 形式
 ///   * 必须能访问 /room/v1/info
-///   * 返回的 room public_id 必须与当前房间一致
+///   * 返回的 room id（public id）必须与当前房间一致
 pub fn verify_public_url(url: &str, expected_public_id: Option<&str>) -> Result<String, String> {
     let parsed = parse_public_url(url)?;
     let base = parsed.base();
@@ -34,9 +34,7 @@ pub fn verify_public_url(url: &str, expected_public_id: Option<&str>) -> Result<
         .map_err(|e| format!("无法访问房间信息端点：{e}"))?;
     let value: serde_json::Value = serde_json::from_slice(&body)
         .map_err(|e| format!("房间信息端点返回无效 JSON：{e}"))?;
-    let room_id = value
-        .pointer("/room/public_id")
-        .and_then(|v| v.as_str())
+    let room_id = extract_public_id(&value)
         .ok_or_else(|| "房间信息缺少 public_id".to_string())?;
     if let Some(expected) = expected_public_id {
         if !expected.is_empty() && room_id != expected {
@@ -44,6 +42,18 @@ pub fn verify_public_url(url: &str, expected_public_id: Option<&str>) -> Result<
         }
     }
     Ok(base)
+}
+
+/// 从 /room/v1/info 响应中提取房间公开 ID。
+/// 网关当前返回 `room.id`；为兼容历史契约也接受 `room.public_id`。
+fn extract_public_id(info: &serde_json::Value) -> Option<String> {
+    let room = info.get("room")?;
+    let id = room.get("id").or_else(|| room.get("public_id"))?.as_str()?;
+    if id.is_empty() {
+        None
+    } else {
+        Some(id.to_string())
+    }
 }
 
 /// 仅做静态校验（scheme/host/userinfo），供单元测试与复用。
@@ -350,6 +360,27 @@ mod tests {
         let out = parse("https://abc.trycloudflare.com/invite?room=1").unwrap();
         assert_eq!(out.scheme, "https");
         assert_eq!(out.host, "abc.trycloudflare.com");
+    }
+
+    #[test]
+    fn extracts_public_id_from_info_response() {
+        // 网关 /room/v1/info 返回 room.id（公开 ID）；自动隧道校验依赖此路径。
+        let current = serde_json::json!({
+            "protocol": 1,
+            "room": { "id": "abc123", "name": "R", "state": "online" },
+        });
+        assert_eq!(extract_public_id(&current).as_deref(), Some("abc123"));
+
+        // 兼容历史字段名 room.public_id。
+        let legacy = serde_json::json!({ "room": { "public_id": "legacy" } });
+        assert_eq!(extract_public_id(&legacy).as_deref(), Some("legacy"));
+
+        assert_eq!(extract_public_id(&serde_json::json!({ "room": {} })), None);
+        assert_eq!(extract_public_id(&serde_json::json!({})), None);
+        assert_eq!(
+            extract_public_id(&serde_json::json!({ "room": { "id": "" } })),
+            None
+        );
     }
 
     // ------------------------------------------------------------------

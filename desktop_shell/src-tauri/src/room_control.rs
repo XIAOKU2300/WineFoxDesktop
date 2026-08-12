@@ -182,7 +182,9 @@ pub fn open_room_chatroom(
         let p = serde_json::to_string(&pwd).unwrap_or_else(|_| "\"\"".into());
         let script = format!(
             "(()=>{{ if (sessionStorage.getItem('wf_autojoin')) return; \
-             const w=()=>{{ const f=document.getElementById('join-name'); if(!f) return setTimeout(w,200); \
+             const t0=Date.now(); \
+             const w=()=>{{ const f=document.getElementById('join-name'); \
+             if(!f){{ if(Date.now()-t0<30000) return setTimeout(w,200); return; }} \
              const pw=document.getElementById('join-password'); if(pw) pw.value={p}; \
              f.value={n}; sessionStorage.setItem('wf_autojoin','1'); \
              const b=document.getElementById('join-submit'); if(b) b.click(); }}; w(); }})();",

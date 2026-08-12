@@ -127,10 +127,10 @@ export class LabView {
         el("section", { class: "section-card" }, [
           el("div", { class: "sec-head" }, [ic("link"), el("h3", {}, "公网接入")]),
           el("div", { class: "sec-body" }, [
-            el("p", { class: "lead" }, "将 Cloudflare Tunnel 或 FRP 的公网 HTTPS 地址填入下方；WineFox 会校验地址后再启用。"),
+            el("p", { class: "lead" }, "将 Cloudflare Tunnel / FRP / 端口转发的公网地址填入下方（HTTPS 或 HTTP）；WineFox 会确认该地址指向本房间后再启用。"),
             el("div", { class: "row gap-2" }, [
               el("div", { class: "grow" }, [
-                el("input", { class: "input", id: "lab-tunnel-url", type: "url", placeholder: "https://你的公网地址.example", autocomplete: "off" }),
+                el("input", { class: "input", id: "lab-tunnel-url", type: "url", placeholder: "http(s)://你的公网地址.example", autocomplete: "off" }),
               ]),
               el("button", { class: "btn", id: "lab-tunnel-set", type: "button" }, [ic("link"), esc("配置")]),
               el("button", { class: "btn btn-ghost", id: "lab-tunnel-clear", type: "button" }, [ic("x"), esc("清除")]),
@@ -316,7 +316,7 @@ export class LabView {
 
   async setTunnel() {
     const url = ($("#lab-tunnel-url")?.value || "").trim();
-    if (!url) { toast("请输入公网 HTTPS 地址", "err"); return; }
+    if (!url) { toast("请输入公网地址", "err"); return; }
     const btn = $("#lab-tunnel-set");
     if (btn) { btn.disabled = true; }
     try {
