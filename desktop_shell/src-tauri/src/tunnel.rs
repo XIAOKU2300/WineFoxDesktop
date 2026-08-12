@@ -32,10 +32,9 @@ pub fn verify_public_url(url: &str, expected_public_id: Option<&str>) -> Result<
     let info_url = format!("{base}/room/v1/info");
     let body = winhttp::https_get(&info_url, Duration::from_secs(12), None)
         .map_err(|e| format!("无法访问房间信息端点：{e}"))?;
-    let value: serde_json::Value = serde_json::from_slice(&body)
-        .map_err(|e| format!("房间信息端点返回无效 JSON：{e}"))?;
-    let room_id = extract_public_id(&value)
-        .ok_or_else(|| "房间信息缺少 public_id".to_string())?;
+    let value: serde_json::Value =
+        serde_json::from_slice(&body).map_err(|e| format!("房间信息端点返回无效 JSON：{e}"))?;
+    let room_id = extract_public_id(&value).ok_or_else(|| "房间信息缺少 public_id".to_string())?;
     if let Some(expected) = expected_public_id {
         if !expected.is_empty() && room_id != expected {
             return Err("Tunnel 指向的房间与本机房间不一致".into());
@@ -67,7 +66,9 @@ pub(crate) fn parse_public_url(url: &str) -> Result<ParseOutcome, String> {
     if scheme != "https" && scheme != "http" {
         return Err("公开邀请地址必须使用 HTTPS 或 HTTP".into());
     }
-    let host = parsed.host_str().ok_or_else(|| "地址缺少 Host".to_string())?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "地址缺少 Host".to_string())?;
     if host.is_empty() {
         return Err("地址缺少 Host".into());
     }
@@ -259,7 +260,9 @@ impl TunnelProvider for CloudflaredProvider {
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
         cmd.creation_flags(CREATE_NO_WINDOW);
-        let mut child = cmd.spawn().map_err(|e| format!("启动 cloudflared 失败：{e}"))?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("启动 cloudflared 失败：{e}"))?;
 
         let job = JobObject::create().ok();
         if let Some(j) = &job {
@@ -388,7 +391,8 @@ mod tests {
     // ------------------------------------------------------------------
     #[test]
     fn parses_trycloudflare_url_from_log_line() {
-        let line = "2026-08-11T10:00:00Z INF |  https://abc-123-def.trycloudflare.com             |";
+        let line =
+            "2026-08-11T10:00:00Z INF |  https://abc-123-def.trycloudflare.com             |";
         let url = parse_trycloudflare_url(line).expect("URL 应被解析");
         assert_eq!(url, "https://abc-123-def.trycloudflare.com");
     }
@@ -418,7 +422,10 @@ mod tests {
     #[test]
     fn provider_errors_when_cloudflared_missing() {
         // WINEFOX_CLOUDFLARED 指向不存在路径 → 明确报错，而不是 panic。
-        std::env::set_var("WINEFOX_CLOUDFLARED", "Z:\\definitely\\missing\\cloudflared.exe");
+        std::env::set_var(
+            "WINEFOX_CLOUDFLARED",
+            "Z:\\definitely\\missing\\cloudflared.exe",
+        );
         let err = resolve_cloudflared().unwrap_err();
         std::env::remove_var("WINEFOX_CLOUDFLARED");
         assert!(err.contains("WINEFOX_CLOUDFLARED"));

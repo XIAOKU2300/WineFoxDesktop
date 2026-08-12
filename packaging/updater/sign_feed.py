@@ -86,7 +86,7 @@ def main() -> int:
 
     out = pathlib.Path(args.out) if args.out else pathlib.Path(installer).parent / "latest.json"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(feed, ensure_ascii=False, indent=2), encoding="utf-8")
+    out.write_text(json.dumps(feed, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     print(f"signed {installer.name} ({len(body)} bytes) -> {out}")
     print(f"version={args.version} url={args.url}")

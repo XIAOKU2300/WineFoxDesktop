@@ -102,7 +102,9 @@ VIAddVersionKey /LANG=2052 "CompanyName" "${PUBLISHER}"
 ; helpers
 ; ---------------------------------------------------------------------------
 !macro StopRunningApps
-  nsExec::ExecToLog 'taskkill /IM "WineFox.exe" /F /T'
+  ; The silent updater launches this installer as a WineFox child process.
+  ; `/T` would kill the installer together with its parent before extraction.
+  nsExec::ExecToLog 'taskkill /IM "WineFox.exe" /F'
   nsExec::ExecToLog 'taskkill /IM "winefox-sidecar.exe" /F /T'
 !macroend
 

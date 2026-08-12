@@ -3,11 +3,11 @@
 
 use crate::sidecar::{SidecarManager, APP_VERSION};
 use crate::state::AppState;
-use crate::updater::{UpdateManager, UpdatePhase};
+use crate::updater::UpdateManager;
 use serde::Serialize;
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Runtime, State};
+use tauri::{AppHandle, Runtime, State};
 
 /// Result of evaluating an exit request.
 #[derive(Debug, Clone, Serialize)]
@@ -55,7 +55,10 @@ pub fn restart_sidecar(manager: State<'_, Arc<SidecarManager>>) {
 // exit flow (shared with the tray)
 // ---------------------------------------------------------------------
 
-pub fn begin_exit_impl<R: Runtime>(app: &AppHandle<R>, manager: &Arc<SidecarManager>) -> ExitDecision {
+pub fn begin_exit_impl<R: Runtime>(
+    app: &AppHandle<R>,
+    manager: &Arc<SidecarManager>,
+) -> ExitDecision {
     {
         let inner = manager.state.inner.lock().unwrap();
         if inner.quitting {
@@ -73,7 +76,11 @@ pub fn begin_exit_impl<R: Runtime>(app: &AppHandle<R>, manager: &Arc<SidecarMana
     }
 }
 
-pub fn confirm_exit_impl<R: Runtime>(app: &AppHandle<R>, manager: &Arc<SidecarManager>, mode: &str) {
+pub fn confirm_exit_impl<R: Runtime>(
+    app: &AppHandle<R>,
+    manager: &Arc<SidecarManager>,
+    mode: &str,
+) {
     {
         let mut inner = manager.state.inner.lock().unwrap();
         inner.quitting = true;
@@ -99,11 +106,17 @@ pub fn confirm_exit_impl<R: Runtime>(app: &AppHandle<R>, manager: &Arc<SidecarMa
             let exited = me.request_shutdown_and_wait(&mode, timeout);
             if !exited {
                 // Force kill: Job Object + TerminateProcess fallback.
-                me.log("warn", "exit flow: sidecar did not exit in time, force killing");
+                me.log(
+                    "warn",
+                    "exit flow: sidecar did not exit in time, force killing",
+                );
                 me.force_kill();
                 std::thread::sleep(Duration::from_millis(300));
             }
-            me.log("info", &format!("exit flow: done (exited={exited}), exiting shell"));
+            me.log(
+                "info",
+                &format!("exit flow: done (exited={exited}), exiting shell"),
+            );
             app.exit(0);
         })
         .expect("spawn exit flow thread");
@@ -151,10 +164,7 @@ pub fn confirm_exit<R: Runtime>(
 }
 
 #[tauri::command]
-pub fn cancel_exit<R: Runtime>(
-    app: AppHandle<R>,
-    manager: State<'_, Arc<SidecarManager>>,
-) {
+pub fn cancel_exit<R: Runtime>(app: AppHandle<R>, manager: State<'_, Arc<SidecarManager>>) {
     cancel_exit_impl(&app, &manager);
 }
 
@@ -177,7 +187,11 @@ fn decode_data_url(data_url: &str) -> Result<Vec<u8>, String> {
 /// 弹出系统保存对话框并写入图片字节。
 /// 返回保存路径；用户取消时返回 "cancelled"。
 #[tauri::command]
-pub fn save_base64_image(app: AppHandle, data_url: String, filename: String) -> Result<String, String> {
+pub fn save_base64_image(
+    app: AppHandle,
+    data_url: String,
+    filename: String,
+) -> Result<String, String> {
     use tauri_plugin_dialog::DialogExt;
     let bytes = decode_data_url(&data_url)?;
     let file_path = app
@@ -297,31 +311,43 @@ mod tests {
 // ---------------------------------------------------------------------
 
 #[tauri::command]
-pub fn check_update(app: AppHandle, manager: tauri::State<'_, Arc<UpdateManager>>) -> crate::updater::UpdateState {
+pub fn check_update(
+    app: AppHandle,
+    manager: tauri::State<'_, Arc<UpdateManager>>,
+) -> crate::updater::UpdateState {
+    if !manager.begin_check(&app) {
+        return manager.snapshot();
+    }
     let app2 = app.clone();
     let mgr = Arc::clone(manager.inner());
     std::thread::spawn(move || {
-        mgr.check(&app2, true);
+        mgr.finish_check(&app2);
     });
     manager.snapshot()
 }
 
 #[tauri::command]
-pub fn get_update_state(manager: tauri::State<'_, Arc<UpdateManager>>) -> crate::updater::UpdateState {
-    manager.snapshot()
+pub fn get_update_state(
+    manager: tauri::State<'_, Arc<UpdateManager>>,
+    sidecar: tauri::State<'_, Arc<SidecarManager>>,
+) -> crate::updater::UpdateState {
+    let tasks = sidecar.state.inner.lock().unwrap().tasks;
+    manager.sync_tasks(tasks)
 }
 
 #[tauri::command]
-pub fn download_update(app: AppHandle, manager: tauri::State<'_, Arc<UpdateManager>>) -> Result<(), String> {
+pub fn download_update(
+    app: AppHandle,
+    manager: tauri::State<'_, Arc<UpdateManager>>,
+    sidecar: tauri::State<'_, Arc<SidecarManager>>,
+) -> Result<(), String> {
+    let tasks = sidecar.state.inner.lock().unwrap().tasks;
+    manager.begin_download(&app, tasks)?;
     let app2 = app.clone();
     let mgr = Arc::clone(manager.inner());
     std::thread::spawn(move || {
         if let Err(e) = mgr.download_and_install(&app2) {
-            let mut st = mgr.state.lock().unwrap();
-            st.phase = UpdatePhase::Failed;
-            st.error = Some(e.clone());
-            drop(st);
-            let _ = app2.emit("update-status", mgr.snapshot());
+            mgr.fail(&app2, e);
         }
     });
     Ok(())

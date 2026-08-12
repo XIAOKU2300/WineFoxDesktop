@@ -33,14 +33,12 @@ fn redact_regex(input: &str, pattern: &str, keep_group: Option<usize>) -> String
     let Ok(re) = regex_lite::Regex::new(pattern) else {
         return input.to_string();
     };
-    re.replace_all(input, |caps: &regex_lite::Captures<'_>| {
-        match keep_group {
-            Some(g) => match caps.get(g) {
-                Some(m) => format!("{}{}", m.as_str(), REDACTED),
-                None => REDACTED.to_string(),
-            },
+    re.replace_all(input, |caps: &regex_lite::Captures<'_>| match keep_group {
+        Some(g) => match caps.get(g) {
+            Some(m) => format!("{}{}", m.as_str(), REDACTED),
             None => REDACTED.to_string(),
-        }
+        },
+        None => REDACTED.to_string(),
     })
     .into_owned()
 }

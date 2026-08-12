@@ -136,7 +136,11 @@ pub fn set_room_tunnel(
         return Err(crate::debug_mode::DEBUG_MODE_REQUIRED.to_string());
     }
     let parsed = crate::tunnel::parse_public_url(&url)?;
-    send_room_command(&app, &manager, json!({ "cmd": "room_tunnel", "url": parsed.base() }))
+    send_room_command(
+        &app,
+        &manager,
+        json!({ "cmd": "room_tunnel", "url": parsed.base() }),
+    )
 }
 
 /// 清除已配置的公网 Tunnel（退回本地房间）。
@@ -188,7 +192,8 @@ pub fn open_room_chatroom(
              const pw=document.getElementById('join-password'); if(pw) pw.value={p}; \
              f.value={n}; sessionStorage.setItem('wf_autojoin','1'); \
              const b=document.getElementById('join-submit'); if(b) b.click(); }}; w(); }})();",
-            n = n, p = p
+            n = n,
+            p = p
         );
         builder = builder.initialization_script(&script);
     }
@@ -229,28 +234,34 @@ pub async fn provision_room_tunnel(
         }
     }
 
-    let (provider, verified) = tauri::async_runtime::spawn_blocking(move || -> Result<(crate::tunnel::CloudflaredProvider, String), String> {
-        let mut provider = crate::tunnel::CloudflaredProvider::new()?;
-        let url = provider.start(port)?;
-        // 隧道刚注册时可能短暂不可达，做几次带退避的重试。
-        let mut last_err = "隧道尚未就绪".to_string();
-        for attempt in 0..3 {
-            match crate::tunnel::verify_public_url(&url, Some(&public_id)) {
-                Ok(verified) => return Ok((provider, verified)),
-                Err(e) => last_err = e,
+    let (provider, verified) = tauri::async_runtime::spawn_blocking(
+        move || -> Result<(crate::tunnel::CloudflaredProvider, String), String> {
+            let mut provider = crate::tunnel::CloudflaredProvider::new()?;
+            let url = provider.start(port)?;
+            // 隧道刚注册时可能短暂不可达，做几次带退避的重试。
+            let mut last_err = "隧道尚未就绪".to_string();
+            for attempt in 0..3 {
+                match crate::tunnel::verify_public_url(&url, Some(&public_id)) {
+                    Ok(verified) => return Ok((provider, verified)),
+                    Err(e) => last_err = e,
+                }
+                if attempt < 2 {
+                    std::thread::sleep(std::time::Duration::from_secs(3));
+                }
             }
-            if attempt < 2 {
-                std::thread::sleep(std::time::Duration::from_secs(3));
-            }
-        }
-        provider.stop();
-        Err(last_err)
-    })
+            provider.stop();
+            Err(last_err)
+        },
+    )
     .await
     .map_err(|e| format!("自动 Tunnel 任务异常：{e}"))??;
 
     state.inner.lock().unwrap().room_tunnel_provider = Some(Box::new(provider));
-    send_room_command(&app, &manager, json!({ "cmd": "room_tunnel", "url": verified }))
+    send_room_command(
+        &app,
+        &manager,
+        json!({ "cmd": "room_tunnel", "url": verified }),
+    )
 }
 
 /// 停止自动内网穿透并清除公网地址（退回本地房间）。
@@ -286,7 +297,12 @@ pub fn handle_room_status(app: &AppHandle, payload: &serde_json::Value) {
 }
 
 pub fn parse_room_status(value: &serde_json::Value) -> RoomStatus {
-    let get = |key: &str| value.get(key).and_then(|v| v.as_str()).map(|s| s.to_string());
+    let get = |key: &str| {
+        value
+            .get(key)
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    };
     RoomStatus {
         state: get("state").unwrap_or_default(),
         public_id: get("publicId"),
@@ -302,7 +318,10 @@ pub fn parse_room_status(value: &serde_json::Value) -> RoomStatus {
             .unwrap_or(false),
         verify_warning: get("verifyWarning"),
         members: value.get("members").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-        max_members: value.get("maxMembers").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+        max_members: value
+            .get("maxMembers")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32,
         error: get("error"),
         member_limit_reached: value
             .get("memberLimitReached")

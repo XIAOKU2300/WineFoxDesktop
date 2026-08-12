@@ -30,7 +30,6 @@ WEBUI_ASSETS_DIR = PLUGIN_ROOT / "assets"
 POSE_PRESET_MAX_BYTES = 180_000
 GALLERY_IMPORT_MAX_BYTES = 30 * 1024 * 1024
 GALLERY_DEFAULT_ADMIN_USERNAME = "admin"
-GALLERY_DEFAULT_ADMIN_PASSWORD = "REDACTED_LEGACY_PASSWORD"
 GALLERY_PASSWORD_ALGO = "pbkdf2_sha256"
 GALLERY_PASSWORD_ITERATIONS = 210_000
 GALLERY_SESSION_MAX_MS = 24 * 60 * 60 * 1000
@@ -38,7 +37,7 @@ GALLERY_LOGIN_WINDOW_MS = 15 * 60 * 1000
 GALLERY_LOGIN_LOCK_MS = 10 * 60 * 1000
 GALLERY_LOGIN_LOCK_THRESHOLD = 5
 GALLERY_REGISTRATION_TOKEN_TTL_MS = 15 * 60 * 1000
-GALLERY_PUBLIC_URL = "https://frp-own.com:53414/"
+GALLERY_PUBLIC_URL = ""
 
 # 视频额度（钱包）相关常量
 GALLERY_DEFAULT_TRIAL_BALANCE = 5.0          # 新老用户激活后默认试用额度（元）
@@ -182,7 +181,7 @@ def _default_config(schema_conf: dict = None) -> dict:
             "name": str(gallery_conf.get("name", "WineFox") or "WineFox"),
             "public_url": str(gallery_conf.get("public_url", GALLERY_PUBLIC_URL) or GALLERY_PUBLIC_URL),
             "admin_username": str(gallery_conf.get("admin_username", GALLERY_DEFAULT_ADMIN_USERNAME) or GALLERY_DEFAULT_ADMIN_USERNAME),
-            "admin_password": str(gallery_conf.get("admin_password", GALLERY_DEFAULT_ADMIN_PASSWORD) or GALLERY_DEFAULT_ADMIN_PASSWORD),
+            "admin_password": str(gallery_conf.get("admin_password", "") or ""),
             "limit": _safe_int(gallery_conf.get("limit", 900), 900, 1, 3000),
             "draw_history_ttl_hours": _safe_int(gallery_conf.get("draw_history_ttl_hours", 24), 24, 1, 720),
             "video_local_price": _safe_money(gallery_conf.get("video_local_price", 0.5), 0.5, 0.0, GALLERY_BALANCE_MAX),
@@ -792,7 +791,7 @@ class GptMagicStore:
 
     def _gallery_admin_password(self) -> str:
         cfg = self.config().get("gallery", {}) if isinstance(self.config().get("gallery"), dict) else {}
-        return str(cfg.get("admin_password") or GALLERY_DEFAULT_ADMIN_PASSWORD)
+        return str(cfg.get("admin_password") or "")
 
     def _clean_gallery_username(self, username: str) -> str:
         text = re.sub(r"[\x00-\x1f\x7f]+", "", str(username or "")).strip()
@@ -877,12 +876,25 @@ class GptMagicStore:
         key = self._gallery_account_key(username)
         if not key:
             return
-        target_password = self._gallery_admin_password()
-        gallery = self.config().setdefault("gallery", {})
-        if isinstance(gallery, dict) and str(gallery.get("admin_password") or "") in ("", "114514", "admin"):
-            gallery["admin_password"] = GALLERY_DEFAULT_ADMIN_PASSWORD
-            target_password = GALLERY_DEFAULT_ADMIN_PASSWORD
         accounts = self.gallery_accounts()
+        existing = accounts.get(key)
+        gallery = self.config().setdefault("gallery", {})
+        target_password = self._gallery_admin_password()
+        target_password = target_password.strip()
+        insecure_passwords = ("114514", "admin")
+        needs_epoch_rotation = bool(
+            isinstance(existing, dict)
+            and existing.get("builtin")
+            and int(existing.get("credential_epoch") or 0) < 1
+        )
+        generated_password = target_password in ("", *insecure_passwords) or needs_epoch_rotation
+        if generated_password:
+            target_password = self._new_gallery_password()
+            if isinstance(gallery, dict):
+                gallery["admin_password"] = target_password
+            logger.warning(
+                f"[GPT Magic] Gallery 管理员初始密码已随机生成：{target_password}；请登录后立即修改"
+            )
         if key in accounts:
             account = accounts[key]
             account["role"] = "admin"
@@ -896,7 +908,7 @@ class GptMagicStore:
                     account.get("password_algo"),
                     account.get("password_iterations"),
                 )
-                password_was_legacy = any(
+                password_was_insecure = any(
                     self._verify_gallery_password(
                         old_password,
                         account.get("salt"),
@@ -904,16 +916,12 @@ class GptMagicStore:
                         account.get("password_algo"),
                         account.get("password_iterations"),
                     )
-                    for old_password in ("114514", "admin")
+                    for old_password in insecure_passwords
                 )
-                needs_default_migration = (
-                    target_password == GALLERY_DEFAULT_ADMIN_PASSWORD
-                    and str(account.get("default_password_migrated_to") or "") != GALLERY_DEFAULT_ADMIN_PASSWORD
-                )
-                if (password_was_legacy or needs_default_migration) and not password_is_target:
+                if (password_was_insecure or generated_password) and not password_is_target:
                     self._set_gallery_account_password(account, target_password)
-                if target_password == GALLERY_DEFAULT_ADMIN_PASSWORD:
-                    account["default_password_migrated_to"] = GALLERY_DEFAULT_ADMIN_PASSWORD
+                account.pop("default_password_migrated_to", None)
+                account["credential_epoch"] = 1
             return
         now = _now_ms()
         account = {
@@ -933,6 +941,7 @@ class GptMagicStore:
             "last_ip": "",
         }
         self._set_gallery_account_password(account, target_password)
+        account["credential_epoch"] = 1
         accounts[key] = {
             **account,
         }

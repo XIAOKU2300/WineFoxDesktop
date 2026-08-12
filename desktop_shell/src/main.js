@@ -242,6 +242,11 @@ async function boot() {
   await listen("sidecar-status", (event) => {
     current = event.payload;
     renderStatus();
+    if (panel && panel.contentWindow) {
+      invoke("get_update_state")
+        .then((state) => panel.contentWindow.postMessage({ type: "winefox-ui-update-state", state }, "*"))
+        .catch(() => {});
+    }
   });
   await listen("exit-requested", () => beginExit());
   await listen("focus-requested", () => refreshStatus());

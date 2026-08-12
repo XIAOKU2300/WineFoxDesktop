@@ -1,12 +1,12 @@
 {
-  "version": "8.6.3",
-  "notes": "修复开房失败 missing field allowedModelFamilies",
-  "pub_date": "2026-08-11T16:50:07.938866+00:00",
+  "version": "8.6.6",
+  "notes": "WineFox Desktop 首个公开正式版：修复自动更新并发、安装器自终止、任务状态同步与更新清单一致性；简化项目说明，并移除内置公开凭据。",
+  "pub_date": "2026-08-12T04:49:13.692515+00:00",
   "platforms": {
     "windows-x86_64": {
-      "url": "https://github.com/XIAOKU2300/WineFoxDesktop/releases/download/v8.6.3/WineFox-Setup-8.6.3-x64.exe",
-      "signature": "3g+ggez9NjDotQRqLUu3v7Rrpw4bmH+B/JwIPvlFe6/vEnG2BaE50db6T/TteSHlbGhpQIsQVXly26rZn1XqBw==",
-      "size": 19794440
+      "url": "https://github.com/XIAOKU2300/WineFoxDesktop/releases/download/v8.6.6/WineFox-Setup-8.6.6-x64.exe",
+      "signature": "6IjXVKCcOoKSD7yx1L0nZBbzKdoe5BZB7hw26LDSV8ey8sdIhm0H/hjjDUuK2sU8gHzwUlCp8db2Vm3ZXxX0AA==",
+      "size": 19802587
     }
   }
 }
