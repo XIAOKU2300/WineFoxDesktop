@@ -90,33 +90,56 @@
   }
 
   /* ---------------- 启动 ---------------- */
+  // 开房窗口可能在网关就绪/房间转 online 之前打开，此时直接 setClosed 会永久
+  // 停在"已关闭"。故对网关未就绪或 state=starting 做有限次带退避的轮询，
+  // 直到 online 或达到预算（closing/closed/failed 为终态，不轮询）。
   async function boot() {
     showScreen("boot");
-    const info = await api("/room/v1/info");
-    if (!info.ok || info.data.room == null) {
-      // 房间不存在/网关未就绪
-      setClosed("无法连接房间网关。");
-      return;
+    const MAX_WAIT_MS = 30000;
+    const startedAt = Date.now();
+    let delay = 400;
+    let info = null;
+    for (;;) {
+      info = await api("/room/v1/info");
+      if (info.ok && info.data.room != null) {
+        const room = info.data.room;
+        if (room.state === "online") {
+          state.room = { id: room.id, name: room.name, state: room.state };
+          $("join-room-name").textContent = room.name || "WineFox 房间";
+          $("join-room-owner").textContent = room.ownerName ? `由 ${room.ownerName} 创建` : "";
+          // 已有会话（Secure Cookie 或本地 http Cookie）→ 直接进入工作台
+          const sess = await api("/room/v1/session");
+          if (sess.ok && sess.data.member && sess.data.room) {
+            state.member = sess.data.member;
+            state.room.id = sess.data.room.id || state.room.id;
+            await enterWorkspace();
+          } else {
+            showScreen("join");
+            $("join-name").focus();
+          }
+          return;
+        }
+        if (room.state === "closing") {
+          setClosed("房间正在关闭…");
+          return;
+        }
+        if (room.state === "closed" || room.state === "failed") {
+          setClosed("房间当前不可用。");
+          return;
+        }
+        // starting 等启动中状态：继续轮询等待 online
+      }
+      // 网关未就绪（连接失败/房间不存在）或仍在启动：达到预算才报终态
+      if (Date.now() - startedAt >= MAX_WAIT_MS) {
+        setClosed(info.ok && info.data.room == null ? "房间当前不可用。" : "无法连接房间网关。");
+        return;
+      }
+      const bootStatus = $("boot-status");
+      if (bootStatus) bootStatus.textContent = "正在连接房间…";
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      delay = Math.min(Math.round(delay * 1.7), 3000);
+      if (bootStatus) bootStatus.textContent = "正在等待房间就绪…";
     }
-    const room = info.data.room;
-    if (room.state !== "online") {
-      setClosed(room.state === "closing" ? "房间正在关闭…" : "房间当前不可用。");
-      return;
-    }
-    state.room = { id: room.id, name: room.name, state: room.state };
-    $("join-room-name").textContent = room.name || "WineFox 房间";
-    $("join-room-owner").textContent = room.ownerName ? `由 ${room.ownerName} 创建` : "";
-
-    // 已有会话（Secure Cookie 或本地 http Cookie）→ 直接进入工作台
-    const sess = await api("/room/v1/session");
-    if (sess.ok && sess.data.member && sess.data.room) {
-      state.member = sess.data.member;
-      state.room.id = sess.data.room.id || state.room.id;
-      await enterWorkspace();
-      return;
-    }
-    showScreen("join");
-    $("join-name").focus();
   }
 
   /* ---------------- 加入 ---------------- */

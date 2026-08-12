@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
 from pathlib import Path
@@ -108,6 +109,8 @@ class RoomManager:
             "generationPaused": False,
             "membersJoinPaused": False,
             "failedLoginAttempts": 0,
+            "progress": 0,
+            "stage": None,
         }
 
     def get_status(self) -> dict[str, Any]:
@@ -124,6 +127,20 @@ class RoomManager:
             self._emit(payload)
         except Exception:  # pragma: no cover - 上报失败不应影响主流程
             log.warning("emit room_status failed", exc_info=True)
+
+    def _publish_progress(self, percent: int, stage: str) -> None:
+        """上报开房阶段进度（state=starting）。前端据此显示加载动效与真实进度。"""
+        with self._lock:
+            status = dict(self._status)
+            status["state"] = protocol.ROOM_STATE_STARTING
+            status["progress"] = int(percent)
+            status["stage"] = stage
+            payload: dict[str, Any] = {"type": "room_status"}
+            payload.update(status)
+        try:
+            self._emit(payload)
+        except Exception:  # pragma: no cover - 上报失败不应影响主流程
+            log.warning("emit room_status progress failed", exc_info=True)
 
     # ------------------------------------------------------------------
     # 生命周期
@@ -156,7 +173,14 @@ class RoomManager:
             raise RoomStartError("绑定地址无效", "INVALID_BIND_HOST")
 
         public_id = new_public_id()
-        algorithm, params_json, salt_b64, hash_b64 = hash_password(password)
+        # 先把已知字段写入状态，让 starting 进度事件也能显示房间名/成员上限。
+        with self._lock:
+            self._status["name"] = name
+            self._status["ownerName"] = owner_name
+            self._status["maxMembers"] = int(settings.get("maxMembers", 8))
+        self._publish_progress(10, "校验房间设置")
+        algorithm, params_json, salt_b64, hash_b64 = await asyncio.to_thread(hash_password, password)
+        self._publish_progress(30, "加密房间密码")
         host_token = new_host_token()
 
         self._loop = asyncio_get_running_loop()
@@ -176,6 +200,7 @@ class RoomManager:
         )
         data_dir = rooms_root / public_id
         data_dir.mkdir(parents=True, exist_ok=True)
+        self._publish_progress(50, "创建房间数据")
 
         app = create_room_app(
             storage=storage, room_id=room_id, host_token=host_token,
@@ -187,6 +212,7 @@ class RoomManager:
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, host=bind_host, port=(port or 0))
+        self._publish_progress(70, "初始化房间网关")
         try:
             await site.start()
         except OSError as exc:
@@ -200,6 +226,7 @@ class RoomManager:
             port = int(site._server.sockets[0].getsockname()[1])
         except (AttributeError, IndexError, TypeError):  # pragma: no cover - 防御
             raise RoomStartError("无法获取房间端口", "PORT_BIND_FAILED")
+        self._publish_progress(85, "启动房间网关")
 
         # 房主以 role=owner 自动入房（首名成员）。
         owner_token, owner_hash = new_session_token()
@@ -211,6 +238,7 @@ class RoomManager:
             session_hash=owner_hash,
         )
         storage.set_room_state(room_id, protocol.ROOM_STATE_ONLINE)
+        self._publish_progress(95, "房主入房")
 
         with self._lock:
             self._storage = storage
@@ -240,6 +268,8 @@ class RoomManager:
                 "generationPaused": False,
                 "membersJoinPaused": False,
                 "failedLoginAttempts": 0,
+                "progress": 100,
+                "stage": None,
             }
             self._owner_token = owner_token  # 房主会话令牌（后续注入房主登录）
         self._publish(host_token=host_token)
