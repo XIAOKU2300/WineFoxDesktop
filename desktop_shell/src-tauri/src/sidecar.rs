@@ -261,7 +261,7 @@ impl SidecarManager {
         let mut guard = self.stdin.lock().unwrap();
         match guard.as_mut() {
             Some(stdin) => {
-                let line = serde_json::to_string(&obj).unwrap_or_default();
+                let line = ensure_ascii_json(serde_json::to_string(&obj).unwrap_or_default());
                 let ok = stdin
                     .write_all(line.as_bytes())
                     .and_then(|_| stdin.write_all(b"\n"))
@@ -663,4 +663,31 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
     let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
     (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// Escape every non-ASCII char in a serialized JSON string as \uXXXX.
+/// Keeps the stdin line pure ASCII so the Python sidecar decodes UTF-8
+/// identically regardless of the console/locale code page (GBK + surrogateescape
+/// would otherwise turn valid CJK into lone surrogates and trip the
+/// contains_lone_surrogate guard in desktop_room/manager.py).
+fn ensure_ascii_json(json: String) -> String {
+    let mut out = String::with_capacity(json.len());
+    for c in json.chars() {
+        if c.is_ascii() {
+            out.push(c);
+        } else {
+            let cp = c as u32;
+            if cp <= 0xFFFF {
+                out.push_str(&format!("\\u{:04x}", cp));
+            } else {
+                let v = cp - 0x10000;
+                out.push_str(&format!(
+                    "\\u{:04x}\\u{:04x}",
+                    0xD800 + (v >> 10),
+                    0xDC00 + (v & 0x3FF)
+                ));
+            }
+        }
+    }
+    out
 }
