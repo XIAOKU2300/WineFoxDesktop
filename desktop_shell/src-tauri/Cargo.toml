@@ -1,6 +1,6 @@
 [package]
 name = "winefox-desktop"
-version = "8.6.4"
+version = "8.6.5"
 description = "WineFox Desktop shell (Tauri 2, Windows x64)"
 authors = ["WineFox Agent 09 <agent09@local.invalid>"]
 edition = "2021"
