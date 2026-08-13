@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import difflib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -392,6 +393,425 @@ def _fuzzy_hits(term: str, raw_text: str) -> list[tuple[int, int, str]]:
 
 
 # ---------------------------------------------------------------------------
+# 多角色意图判定（移植插件 intent_utils.py）
+# ---------------------------------------------------------------------------
+
+_MCI_CJK_NAME_TOKEN = r"[㐀-鿿]{2,8}"
+_MCI_LATIN_NAME_TOKEN = r"[A-Z][A-Za-z0-9_.-]{1,40}(?:\s+[A-Z][A-Za-z0-9_.-]{1,40}){0,2}"
+_MCI_NAME_TOKEN = rf"(?:{_MCI_CJK_NAME_TOKEN}|{_MCI_LATIN_NAME_TOKEN})"
+_MCI_PAIR_CONNECTOR = r"(?:还有|還有|以及|并|並|和|跟|与|與|及|同|、|，|,|&|\+|/|[Vv][Ss]\.?|[Aa][Nn][Dd]|[Ww][Ii][Tt][Hh])"
+
+_MCI_CJK_NON_NAME_FRAGMENT = re.compile(
+    r"(自己|自身|本人|一只|一隻|另一|另只|另隻|两只|兩隻|双|雙|"
+    r"手|手臂|胳膊|手指|指尖|胸|乳|奶|嘴|口|头|頭|发|髮|腿|脚|腳|足|腰|臀|腹|"
+    r"抱|抬|举|舉|咬|送|拿|扶|托|摸|抓|握|用力|亲|親|吻|贴|貼|靠|"
+    r"的|了|着|著|把|被|给|給|到|在|向|从|從|下|上|边|邊|一边|一邊)"
+)
+
+_MCI_CJK_LITERAL_NON_NAME_FRAGMENT = re.compile(
+    "(?:"
+    "自己|自身|本人|单人|單人|"
+    "独自|獨自|全身|半身|正面|"
+    "背面|侧面|展示|完整|足底|"
+    "脚底|脚掌|手|手指|手臂|"
+    "胳膊|腿|小腿|大腿|胸|乳|"
+    "头发|頭髮|帽子|海边|海邊|"
+    "沙滩|沙灘|地牢|泳装|泳裝|"
+    "比基尼|一只|一隻|另一只|"
+    "另一隻|左手|右手|身体|身體"
+    ")"
+)
+
+_MCI_LATIN_NON_NAME_WORDS = {
+    "a", "an", "and", "another", "arm", "arms", "breast", "breasts", "body",
+    "boy", "character", "characters", "face", "finger", "fingers", "foot",
+    "girl", "girls", "hand", "hands", "hair", "head", "her", "herself", "him",
+    "himself", "holding", "hugging", "left", "leg", "legs", "mouth", "nipple",
+    "one", "other", "own", "person", "right", "self", "side", "the", "their",
+    "them", "toward", "two", "with",
+}
+
+_MCI_EXPLICIT_MULTI_COUNT_RE = re.compile(
+    r"\b(?:[2-9]\s*(?:girls?|boys?|people|persons?|characters?)|"
+    r"(?:two|three|four|five|six|seven|eight|nine)\s+(?:girls?|boys?|people|persons?|characters?)|"
+    r"(?:one|a)\s+(?:girl|boy|woman|man|person|character)\s+(?:and|with)\s+(?:one|a)\s+(?:girl|boy|woman|man|person|character)|"
+    r"(?:girl|boy|woman|man|person|character)\s+(?:and|with)\s+(?:girl|boy|woman|man|person|character)|"
+    r"multiple\s+(?:girls?|boys?|people|characters?)|group|crowd|duo|pair|couple|twins?)\b",
+    re.I,
+)
+
+_MCI_CJK_EXPLICIT_MULTI_RE = re.compile(
+    r"(多人|双人|雙人|俩人|倆人|俩个人|倆個人|仨人|仨个人|兩人|两人|三人|四人|五人|"
+    r"多个角色|多個角色|多角色|双角色|雙角色|双女主|雙女主|双男主|雙男主|两女|兩女|二女|两男|兩男|二男|"
+    r"群像|一群|同框|同屏|同画面|同畫面|合照|合影|双胞胎|雙胞胎|姐妹|兄弟|情侣|情侶|搭档|搭檔|二人组|二人組)"
+)
+
+_MCI_CJK_MULTI_COUNT_RE = re.compile(
+    r"(?:"
+    r"(?:2|3|4|5|6|7|8|9)\s*(?:个|個|位|名|只)?|"
+    r"俩|倆|仨|两|兩|二|三|四|五|六|七|八|九|两个|兩個|二个|二個|两位|兩位|二位|两名|兩名|二名|"
+    r"三个|三個|三位|三名|四个|四個|四位|四名"
+    r").{0,4}(人|角色|人物|女孩|少女|男孩|女生|男生|女人|男人|女孩子|男孩子|girl|girls|boy|boys)"
+)
+
+_MCI_CJK_MIXED_GENDER_PAIR_RE = re.compile(
+    r"(一男一女|一女一男|一男和一女|一女和一男|男生女生|女生男生|男女二人|男女两人|男女兩人|一对男女|一對男女)"
+)
+
+_MCI_CJK_PLURAL_ACTION_RE = re.compile(
+    r"(她们|她們|他们|他們|TA们|ta们|两人|兩人|二人|双方|雙方|两位|兩位).{0,18}"
+    r"(互动|互動|对视|對視|牵手|牽手|拥抱|擁抱|贴贴|貼貼|亲吻|親吻|接吻|靠在一起|抱在一起|并肩|並肩|背靠背|面对面|面對面)"
+)
+
+_MCI_ROLE_SLOT_RE = re.compile(
+    r"(?:(?:角色|人物|人设|人設|role|character|char)\s*([A-Ca-c1-3一二三①②③])|"
+    r"\b([A-Ca-c])\s*(?:角色|人物|role|character|char)\b|"
+    r"(?:^|[\n,，;；])\s*(?:角色\s*)?([A-Ca-c1-3一二三①②③])\s*[:：])",
+    re.I,
+)
+
+_MCI_SIDE_ROLE_RE = re.compile(
+    r"("
+    r"(?:左边|左側|左侧|左邊|left).{0,10}(?:角色|人物|女孩|少女|男孩|女生|男生|girl|boy|character|person)"
+    r".{0,80}"
+    r"(?:右边|右側|右侧|右邊|right).{0,10}(?:角色|人物|女孩|少女|男孩|女生|男生|girl|boy|character|person)"
+    r"|"
+    r"(?:右边|右側|右侧|右邊|right).{0,10}(?:角色|人物|女孩|少女|男孩|女生|男生|girl|boy|character|person)"
+    r".{0,80}"
+    r"(?:左边|左側|左侧|左邊|left).{0,10}(?:角色|人物|女孩|少女|男孩|女生|男生|girl|boy|character|person)"
+    r")",
+    re.I,
+)
+
+_MCI_SELF_SUBJECT_RE = re.compile(
+    r"(自己|自身|本人|自分|\bown\b|\boneself\b|\bmyself\b|\bherself\b|\bhimself\b|\bitself\b|\bself[-\s])",
+    re.I,
+)
+
+_MCI_EXPLICIT_OTHER_SUBJECT_RE = re.compile(
+    r"(别人|別人|他人|另一(?:个|個|位)?(?:人|角色|女孩|少女|男孩|女生|男生)|"
+    r"\b(?:another|other|second|third)\s+(?:girl|boy|person|character|woman|man)\b)",
+    re.I,
+)
+
+_MCI_BODY_PART_PAIR_RE = re.compile(
+    r"(?:一只|一隻|另一只|另一隻|左|右|left|right|one|other)?\s*"
+    r"(?:手|手臂|胳膊|腿|脚|腳|眼|胸|乳|奶|hand|arm|leg|foot|eye|breast)\s*"
+    rf"{_MCI_PAIR_CONNECTOR}\s*"
+    r"(?:一只|一隻|另一只|另一隻|左|右|left|right|one|other)?\s*"
+    r"(?:手|手臂|胳膊|腿|脚|腳|眼|胸|乳|奶|hand|arm|leg|foot|eye|breast)",
+    re.I,
+)
+
+_MCI_RELATIONAL_MULTI_RE = re.compile(
+    r"(和|跟|与|與|同).{1,24}(一起|同框|合照|并排|並排|互动|互動|拥抱|擁抱|牵手|牽手|聚餐|吃饭|吃飯|聊天|约会|約會)|"
+    r"(一起|同框|合照|并排|並排|互动|互動|拥抱|擁抱|牵手|牽手|聚餐|吃饭|吃飯|聊天|约会|約會).{0,24}(和|跟|与|與|同)"
+)
+
+_MCI_GENERIC_PAIR_CONNECTOR_RE = re.compile(
+    r"(?:\b(?:and|with|plus|vs\.?|versus|x)\b|[&+/,;]|"
+    "，|、|；|和|跟|与|與|同|及|"
+    "以及|还有|還有|并|並)",
+    re.I,
+)
+
+_MCI_SUBJECT_NOUN_RE = re.compile(
+    r"\b(?:girl|girls|boy|boys|woman|women|man|men|person|people|character|"
+    r"characters|oc|ocs|role|roles|maid|idol|student|sister|brother|friend|"
+    r"partner|companion|teammate|knight|princess|witch|angel|demon)\b|"
+    "(?:女孩|少女|女生|男孩|少年|"
+    "男生|女人|男人|人物|角色|"
+    "人设|女仆|偶像|学生|姐姐|"
+    "妹妹|哥哥|弟弟|朋友|伙伴|"
+    "队友|骑士|公主|魔女|天使|"
+    "恶魔|OC|oc)",
+    re.I,
+)
+
+_MCI_APPEARANCE_WORD_RE = (
+    r"(?:white[-\s]*hair(?:ed)?|black[-\s]*hair(?:ed)?|blonde|silver[-\s]*hair(?:ed)?|red[-\s]*hair(?:ed)?|"
+    r"blue[-\s]*hair(?:ed)?|green[-\s]*hair(?:ed)?|pink[-\s]*hair(?:ed)?|purple[-\s]*hair(?:ed)?|long[-\s]*hair(?:ed)?|"
+    r"short[-\s]*hair(?:ed)?|twintails?|braid|cat\s*ears?|rabbit\s*ears?|bunny\s*ears?|"
+    r"fox\s*ears?|horns?|halo|wings?|tail|glasses|hat|ribbon|dress|uniform|"
+    r"school\s*uniform|maid|armor|cloak)"
+)
+_MCI_CJK_APPEARANCE_WORD_RE = (
+    "白发|黑发|金发|银发|红发|"
+    "蓝发|绿发|粉发|紫发|长发|"
+    "短发|双马尾|辫子|猫耳|"
+    "兔耳|狐耳|角|光环|翅膀|"
+    "尾巴|眼镜|帽|丝带|蝜蝶结|"
+    "裙|制服|校服|女仆|盔甲|披风|"
+    "左边|右边|左侧|右侧|另一个|"
+    "第二个|前面|后面"
+)
+_MCI_APPEARANCE_SUBJECT_RE = re.compile(
+    rf"(?:{_MCI_APPEARANCE_WORD_RE}[^\n\r,;\+&/，、；]{{0,32}}(?:girl|boy|woman|man|person|character|oc|role|maid|idol|student|friend|partner))|"
+    f"(?:(?:{_MCI_CJK_APPEARANCE_WORD_RE})[^\n\r,;\\+&/，、；]{{0,18}}(?:女孩|少女|女生|男孩|少年|男生|人物|角色|人设|朋友|伙伴|OC|oc))",
+    re.I,
+)
+
+_MCI_SPATIAL_ROLE_MARKER_RE = re.compile(
+    r"\b(?:left|right|front|back|behind|beside|next\s+to|foreground|background|middle|center)\b|"
+    "(?:左边|右边|左侧|右侧|左面|"
+    "右面|前面|后面|旁边|身边|"
+    "前景|背景|中间|中央|另一边)",
+    re.I,
+)
+
+_MCI_SHARED_ACTION_RE = re.compile(
+    r"\b(?:together|interacting|interaction|facing\s+each\s+other|looking\s+at\s+each\s+other|"
+    r"holding\s+hands|hugging|embracing|cuddling|kissing|talking|chatting|sitting\s+together|"
+    r"standing\s+together|posing\s+together|fighting|dancing|sharing|beside\s+each\s+other)\b|"
+    "(?:一起|同框|同屏|合照|互动|"
+    "互動|对视|對視|牵手|擁抱|"
+    "拥抱|搂|贴贴|亲吻|接吻|"
+    "并肩|並肩|面对面|面對面|"
+    "聊天|聚餐|聚餐|约会|約會|"
+    "打架|跳舞|对打|對打)",
+    re.I,
+)
+
+_MCI_PLURAL_REFERENCE_RE = re.compile(
+    r"\b(?:they|them|their|both|each\s+other|two\s+of\s+them|all\s+of\s+them)\b|"
+    "(?:她们|她們|他们|他們|TA们|ta们|"
+    "两人|兩人|二人|俩人|两位|"
+    "兩位|双方|雙方|彼此)",
+    re.I,
+)
+
+_MCI_SINGLE_SUBJECT_STRONG_RE = re.compile(
+    r"\b(?:solo|alone|single\s+(?:person|character|subject)|one\s+(?:girl|boy|person|character)\s+only|1girl|1boy)\b|"
+    "(?:单人|單人|独自|獨自|一个人|"
+    "一個人|一人|单独|單獨)",
+    re.I,
+)
+
+_MCI_LATIN_NAME_PAIR_RE = re.compile(
+    r"\b(?P<left>[A-Za-z][A-Za-z0-9_.-]{2,40})\s+"
+    r"(?:and|with|plus|vs\.?|versus|x|/|&|\+)\s+"
+    r"(?P<right>[A-Za-z][A-Za-z0-9_.-]{2,40})\b",
+    re.I,
+)
+
+_MCI_PROBABLE_NAME_STOP_WORDS = _MCI_LATIN_NON_NAME_WORDS | {
+    "best", "quality", "masterpiece", "solo", "alone", "white", "black", "blue",
+    "green", "red", "pink", "purple", "silver", "gold", "golden", "hair", "eyes",
+    "dress", "skirt", "shirt", "uniform", "background", "foreground", "standing",
+    "sitting", "lying", "smiling", "looking", "wearing", "holding", "hugging",
+}
+
+
+def _mci_is_cjk_character_name_candidate(token: str) -> bool:
+    token = str(token or "").strip()
+    return bool(
+        re.fullmatch(_MCI_CJK_NAME_TOKEN, token)
+        and not _MCI_CJK_NON_NAME_FRAGMENT.search(token)
+        and not _MCI_CJK_LITERAL_NON_NAME_FRAGMENT.search(token)
+    )
+
+
+def _mci_is_latin_character_name_candidate(token: str) -> bool:
+    token = str(token or "").strip()
+    if not re.fullmatch(_MCI_LATIN_NAME_TOKEN, token):
+        return False
+    words = re.findall(r"[A-Za-z]+", token.lower())
+    return bool(words) and not any(word in _MCI_LATIN_NON_NAME_WORDS for word in words)
+
+
+def _mci_is_character_name_candidate(token: str) -> bool:
+    return _mci_is_cjk_character_name_candidate(token) or _mci_is_latin_character_name_candidate(token)
+
+
+def _mci_has_explicit_character_name_pair(text: str) -> bool:
+    text = str(text or "")
+    for match in re.finditer(rf"(?P<left>{_MCI_NAME_TOKEN})\s*{_MCI_PAIR_CONNECTOR}\s*(?P<right>{_MCI_NAME_TOKEN})", text):
+        if _mci_is_character_name_candidate(match.group("left")) and _mci_is_character_name_candidate(match.group("right")):
+            return True
+    return False
+
+
+def _mci_has_multi_role_slots(text: str) -> bool:
+    labels = set()
+    for match in _MCI_ROLE_SLOT_RE.finditer(str(text or "")):
+        label = next((item for item in match.groups() if item), "")
+        label = str(label or "").strip().lower()
+        if label:
+            labels.add(label)
+    return len(labels) >= 2
+
+
+def _mci_merged_spans(spans: list) -> list:
+    spans = sorted((int(start), int(end)) for start, end in spans if int(end) > int(start))
+    merged = []
+    for start, end in spans:
+        if not merged or start > merged[-1][1]:
+            merged.append([start, end])
+        else:
+            merged[-1][1] = max(merged[-1][1], end)
+    return [(start, end) for start, end in merged]
+
+
+def _mci_is_embedded_ascii_subject_span(text: str, start: int, end: int) -> bool:
+    text = str(text or "")
+    token = text[start:end]
+    if not token or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_\s-]*", token):
+        return False
+    before = text[start - 1] if start > 0 else ""
+    after = text[end] if end < len(text) else ""
+    return bool(
+        (before and re.match(r"[A-Za-z0-9_]", before))
+        or (after and re.match(r"[A-Za-z0-9_]", after))
+    )
+
+
+def _mci_subject_spans(text: str) -> list:
+    text = str(text or "")
+    spans = [
+        (m.start(), m.end())
+        for m in _MCI_SUBJECT_NOUN_RE.finditer(text)
+        if not _mci_is_embedded_ascii_subject_span(text, m.start(), m.end())
+    ]
+    spans.extend(
+        (m.start(), m.end())
+        for m in _MCI_APPEARANCE_SUBJECT_RE.finditer(text)
+        if not _mci_is_embedded_ascii_subject_span(text, m.start(), m.end())
+    )
+    return _mci_merged_spans(spans)
+
+
+def _mci_subject_mention_count(text: str) -> int:
+    return len(_mci_subject_spans(text))
+
+
+def _mci_appearance_subject_count(text: str) -> int:
+    text = str(text or "")
+    return len(_mci_merged_spans([
+        (m.start(), m.end())
+        for m in _MCI_APPEARANCE_SUBJECT_RE.finditer(text)
+        if not _mci_is_embedded_ascii_subject_span(text, m.start(), m.end())
+    ]))
+
+
+def _mci_has_subject_listing(text: str) -> bool:
+    text = str(text or "")
+    spans = _mci_subject_spans(text)
+    if len(spans) < 2:
+        return False
+    for left, right in zip(spans, spans[1:]):
+        between = text[left[1]:right[0]]
+        if len(between) <= 64 and _MCI_GENERIC_PAIR_CONNECTOR_RE.search(between):
+            return True
+    return False
+
+
+def _mci_has_probable_latin_name_pair(text: str) -> bool:
+    text = str(text or "")
+    for match in _MCI_LATIN_NAME_PAIR_RE.finditer(text):
+        left = str(match.group("left") or "").lower()
+        right = str(match.group("right") or "").lower()
+        if left in _MCI_PROBABLE_NAME_STOP_WORDS or right in _MCI_PROBABLE_NAME_STOP_WORDS:
+            continue
+        if left == right:
+            continue
+        return True
+    return False
+
+
+def _mci_spatial_marker_count(text: str) -> int:
+    markers = []
+    for match in _MCI_SPATIAL_ROLE_MARKER_RE.finditer(str(text or "")):
+        token = match.group(0).lower()
+        if token in {"left", "左边", "左侧", "左面"}:
+            token = "left"
+        elif token in {"right", "右边", "右侧", "右面"}:
+            token = "right"
+        elif token in {"front", "foreground", "前面", "前景"}:
+            token = "front"
+        elif token in {"back", "behind", "background", "后面", "背景"}:
+            token = "back"
+        markers.append(token)
+    return len(set(markers))
+
+
+def _mci_multi_character_evidence_score(text: str) -> int:
+    text = str(text or "")
+    if not text:
+        return 0
+    score = 0
+    subject_count = _mci_subject_mention_count(text)
+    appearance_count = _mci_appearance_subject_count(text)
+    has_shared_action = bool(_MCI_SHARED_ACTION_RE.search(text))
+    has_plural_reference = bool(_MCI_PLURAL_REFERENCE_RE.search(text))
+
+    if _mci_has_subject_listing(text):
+        score += 3
+    elif subject_count >= 2:
+        score += 2
+
+    if appearance_count >= 2:
+        score += 2
+    if _mci_spatial_marker_count(text) >= 2 and subject_count >= 1:
+        score += 2
+    if has_shared_action and subject_count >= 2:
+        score += 2
+    elif has_shared_action and (_mci_has_probable_latin_name_pair(text) or has_plural_reference):
+        score += 2
+    if has_plural_reference and (subject_count >= 1 or has_shared_action):
+        score += 2
+    if _mci_has_probable_latin_name_pair(text):
+        score += 2 if has_shared_action else 1
+    if _MCI_SINGLE_SUBJECT_STRONG_RE.search(text) and subject_count < 2 and not has_plural_reference:
+        score -= 3
+    return score
+
+
+def _mci_looks_like_single_self_subject(text: str) -> bool:
+    text = str(text or "")
+    if not (_MCI_SELF_SUBJECT_RE.search(text) or _MCI_BODY_PART_PAIR_RE.search(text)):
+        return False
+    return not (
+        _MCI_EXPLICIT_MULTI_COUNT_RE.search(text)
+        or _MCI_CJK_EXPLICIT_MULTI_RE.search(text)
+        or _MCI_CJK_MULTI_COUNT_RE.search(text)
+        or _MCI_CJK_MIXED_GENDER_PAIR_RE.search(text)
+        or _MCI_CJK_PLURAL_ACTION_RE.search(text)
+        or _MCI_EXPLICIT_OTHER_SUBJECT_RE.search(text)
+        or _mci_has_explicit_character_name_pair(text)
+        or _mci_has_multi_role_slots(text)
+        or _MCI_SIDE_ROLE_RE.search(text)
+    )
+
+
+def has_multi_character_intent(raw_prompt: str, prompt: str = "") -> bool:
+    """多角色意图判定（移植插件 intent_utils.illustrious_has_multi_character_intent）。"""
+    raw_text = str(raw_prompt or "").strip()
+    prompt_text = str(prompt or "").strip()
+    combined = raw_text if not prompt_text or prompt_text == raw_text else f"{raw_text}\n{prompt_text}".strip()
+    if not combined:
+        return False
+    if (
+        _MCI_EXPLICIT_MULTI_COUNT_RE.search(combined)
+        or _MCI_CJK_EXPLICIT_MULTI_RE.search(combined)
+        or _MCI_CJK_MULTI_COUNT_RE.search(combined)
+        or _MCI_CJK_MIXED_GENDER_PAIR_RE.search(combined)
+        or _MCI_CJK_PLURAL_ACTION_RE.search(combined)
+        or _MCI_EXPLICIT_OTHER_SUBJECT_RE.search(combined)
+        or _mci_has_explicit_character_name_pair(combined)
+        or _mci_has_multi_role_slots(combined)
+        or _MCI_SIDE_ROLE_RE.search(combined)
+    ):
+        return True
+    if _mci_looks_like_single_self_subject(combined):
+        return False
+    if _mci_multi_character_evidence_score(combined) >= 3:
+        return True
+    if _MCI_SINGLE_SUBJECT_STRONG_RE.search(combined):
+        return False
+    return bool(_MCI_RELATIONAL_MULTI_RE.search(combined))
+
+
+# ---------------------------------------------------------------------------
 # LoraService
 # ---------------------------------------------------------------------------
 
@@ -497,7 +917,7 @@ class LoraService:
         limit: int = 3,
         include_fuzzy: bool = True,
     ) -> LoraMatchResult:
-        """在指定模型族内匹配。只有明确证据才返回。"""
+        """在指定模型族内匹配（移植原插件评分：exact>=58 / fuzzy>=78）。"""
         family = str(family or "").strip().lower() or self.default_family
         raw_text = str(text or "").strip()
         text_norm = normalize_match_key(raw_text)
@@ -505,58 +925,51 @@ class LoraService:
         if not raw_text or not text_norm:
             return result
 
+        profiles = self.profiles_for(family)
+        blocked = self._blocked_markers(profiles)
         scored: list[dict[str, Any]] = []
-        used_terms: set[str] = set()
-        for key, profile in self.profiles_for(family).items():
-            for term in self.profile_terms(profile):
-                norm = normalize_match_key(term)
-                if not norm or norm in used_terms:
-                    continue
-                hits = _term_hits_in_text(term, text_norm, raw_text)
-                kind = None
-                span = None
-                if hits:
-                    kind, span = "exact", hits[0]
-                elif include_fuzzy:
-                    fuzzy = _fuzzy_hits(term, raw_text)
-                    if fuzzy:
-                        kind, span = "fuzzy", fuzzy[0]
-                if kind is None:
-                    continue
-                score = 100.0 if kind == "exact" else 70.0
-                # 术语越长证据越强
-                score = min(100.0, score + min(6.0, len(norm) * 1.5))
-                if kind == "fuzzy" and score < 75.0:
-                    continue
-                used_terms.add(norm)
-                scored.append(
-                    {
-                        "profile": profile,
-                        "term": term,
-                        "kind": kind,
-                        "score": score,
-                        "span": span,
-                    }
-                )
-                break  # 每个档案只取最强术语
+        for key, profile in profiles.items():
+            match = self._score_lora_profile_match(raw_text, key, profile, blocked_markers=blocked)
+            if not match:
+                continue
+            score = float(match.get("score") or 0)
+            kind = str(match.get("match_kind") or "")
+            term = str(match.get("term") or "")
+            if kind == "exact":
+                min_score = 58.0
+            elif kind == "fuzzy":
+                min_score = 78.0
+            else:
+                continue
+            if not include_fuzzy and kind == "fuzzy":
+                continue
+            if score < min_score or is_generic_term(term) or self._is_bad_match_term(term):
+                continue
+            scored.append(match)
 
-        scored.sort(key=lambda item: (-item["score"], -len(normalize_match_key(item["term"])), item["profile"].key))
+        scored.sort(key=self._lora_profile_match_sort_key, reverse=True)
         used_lora: set[str] = set()
-        spans: list[tuple[int, int]] = []
-        for item in scored:
-            lora_key = normalize_lora_key(item["profile"].lora_name)
-            if not lora_key or lora_key in used_lora:
+        used_markers: set[str] = set()
+        selected: list[dict[str, Any]] = []
+        for match in scored:
+            profile = match.get("profile")
+            lora_key = normalize_lora_key(profile.lora_name)
+            term_marker = normalize_match_key(match.get("term") or "")
+            if not lora_key or lora_key in used_lora or (term_marker and term_marker in used_markers):
                 continue
             used_lora.add(lora_key)
-            selection = self._build_selection(item["profile"], item["term"], item["kind"], item["score"])
-            result.matches.append(selection)
-            spans.append((item["span"][0], item["span"][1]))
+            if term_marker:
+                used_markers.add(term_marker)
+            selected.append(match)
+            result.matches.append(self._build_selection_from_match(profile, match))
             if len(result.matches) >= max(1, int(limit or 3)):
                 break
 
-        # 多角色判定：>=2 个命中且存在连接词证据
-        result.multi = self._has_connector_between(raw_text, spans) and len(result.matches) >= 2
-        result.connector_found = result.multi
+        # 多角色判定：>=2 命中且存在连接词证据或显式多角色意图
+        connector_found = self._multi_lora_matches_have_connector(raw_text, selected)
+        multi_intent = self.has_multi_character_intent(raw_text)
+        result.multi = len(result.matches) >= 2 and (connector_found or multi_intent)
+        result.connector_found = connector_found
         return result
 
     def single_match(self, text: str, family: Optional[str] = None, min_score: float = 75.0) -> Optional[LoraSelection]:
@@ -570,9 +983,14 @@ class LoraService:
     # -- 跨模型族临时建议 -----------------------------------------------------------
 
     def suggest_cross_family(self, text: str, current_family: Optional[str] = None) -> Optional[LoraSelection]:
-        """当前族无明确命中时，尝试其它族的档案。
+        """当前族无明确命中时，返回其它族的临时建议（suggestion_only=True，不持久修改）。"""
+        info = self.suggest_cross_family_switch(text, current_family=current_family)
+        return info.get("selection") if info else None
 
-        只返回 ``suggestion_only=True`` 的临时建议，绝不持久修改模型族状态。
+    def suggest_cross_family_switch(self, text: str, current_family: Optional[str] = None) -> Optional[dict]:
+        """跨族切换建议：返回切换目标族 + 涉及 profile + 恢复所需信息。
+
+        只做建议，不实际修改任何 workflow/作业（编排由 API 层负责）。
         """
         current_family = str(current_family or "").strip().lower() or self.default_family
         raw_text = str(text or "").strip()
@@ -583,13 +1001,22 @@ class LoraService:
         for family in SUPPORTED_MODEL_FAMILIES:
             if family == current_family:
                 continue
-            selection = self.single_match(raw_text, family=family, min_score=80.0)
-            if selection:
-                selection.suggestion_only = True
-                selection.notice = (
-                    f"跨模型族临时建议（{family}）：仅本次建议，不持久修改当前模型族设置"
-                )
-                return selection
+            result = self.match(raw_text, family=family, limit=3)
+            if not result.matches:
+                continue
+            best = result.matches[0]
+            best.suggestion_only = True
+            best.notice = f"跨模型族临时建议（{family}）：仅本次建议，不持久修改当前模型族设置"
+            return {
+                "from_family": current_family,
+                "family": family,
+                "key": best.key,
+                "character": best.character or best.key,
+                "lora": best.lora_name,
+                "selection": best,
+                "restore_family": current_family,
+                "notice": f"本次临时用 {family} 族：{best.character or best.key or '命中角色 LoRA'}",
+            }
         return None
 
     # -- 强度解析 -----------------------------------------------------------------
@@ -616,9 +1043,89 @@ class LoraService:
         selection.strength_clip = round(float(clip), 4)
         return selection
 
+    # -- 多角色 prompt 组装 ---------------------------------------------------------
+
+    def resolve_multi_loras(
+        self,
+        selections: list[LoraSelection],
+        family: Optional[str] = None,
+        mode: str = "safe_chain",
+    ) -> list[LoraSelection]:
+        """组装多角色 LoRA：每个角色的有效触发词 + 多 LoRA 强度钳制。
+
+        移植原插件 _prepare_multi_lora_profiles_prompt 的触发词/强度逻辑：
+        按 count 应用 mode 对应的强度上限（safe_chain 默认 0.65/0.72，>2 时 0.58/0.64）。
+        """
+        results: list[LoraSelection] = []
+        for selection in selections or []:
+            profile = self._profiles.get(selection.family or family or self.default_family, {}).get(selection.key)
+            if profile is not None:
+                tags, _used_fallback = self._profile_effective_trigger_words(profile)
+                routed = self._route_multi_character_trigger(tags, profile, selection.matched_term)
+                selection.trigger_words = list(routed) or list(tags)
+                if not selection.roles:
+                    selection.roles = list(profile.role_terms)
+            self.resolve_strengths(selection, family=selection.family or family)
+            results.append(selection)
+        count = len(results)
+        if count >= 2:
+            if mode == "staged_multi_lora":
+                model_cap, clip_cap = (0.86, 0.86) if count == 2 else (0.82, 0.82)
+            elif mode == "densediffusion":
+                model_cap, clip_cap = (0.82, 0.82) if count == 2 else (0.75, 0.75)
+            else:
+                model_cap, clip_cap = (0.65, 0.72) if count == 2 else (0.58, 0.64)
+            for selection in results:
+                selection.strength_model = round(min(float(selection.strength_model or 0), model_cap), 4)
+                selection.strength_clip = round(min(float(selection.strength_clip or 0), clip_cap), 4)
+        return results
+
+    # -- 本地文件同步 ---------------------------------------------------------------
+
+    def sync_local_files(self, local_dir: str, family: Optional[str] = None) -> list[dict]:
+        """扫描本地目录，返回每个 profile 的本地文件存在/匹配/缺失信息。
+
+        local_dir 为空或不可用（不存在/不可读）时返回空列表，不抛错。
+        """
+        if not str(local_dir or "").strip():
+            return []
+        base_dir = Path(str(local_dir).strip())
+        try:
+            if not base_dir.exists() or not base_dir.is_dir():
+                return []
+        except Exception:
+            return []
+        result: list[dict[str, Any]] = []
+        families = [family] if str(family or "").strip() else list(SUPPORTED_MODEL_FAMILIES)
+        for fam in families:
+            fam = str(fam or "").strip().lower()
+            for key, profile in self.profiles_for(fam).items():
+                if not str(profile.lora_name or "").strip():
+                    continue
+                found = self._find_local_lora_file(base_dir, profile.lora_name)
+                result.append({
+                    "key": key,
+                    "character": profile.character,
+                    "family": profile.family,
+                    "lora_name": profile.lora_name,
+                    "exists": found is not None,
+                    "matched": str(found) if found else "",
+                    "status": "present" if found else "missing",
+                })
+        return result
+
+    # -- 多角色意图判定 -------------------------------------------------------------
+
+    def has_multi_character_intent(self, raw_prompt: str, prompt: str = "") -> bool:
+        """多角色意图判定（移植原插件 _default_illustrious_has_multi_character_intent）。"""
+        return has_multi_character_intent(raw_prompt, prompt)
+
     # -- 内部 ---------------------------------------------------------------------
 
-    def _build_selection(self, profile: LoraProfile, term: str, kind: str, score: float) -> LoraSelection:
+    def _build_selection_from_match(self, profile: LoraProfile, match: dict[str, Any]) -> LoraSelection:
+        kind = str(match.get("match_kind") or "exact")
+        term = str(match.get("term") or "")
+        score = float(match.get("score") or 0)
         selection = LoraSelection(
             key=profile.key,
             lora_name=profile.lora_name,
@@ -626,11 +1133,374 @@ class LoraService:
             character=profile.character or profile.key,
             matched_term=term,
             match_kind=kind,
-            score=round(float(score), 2),
+            score=round(score, 2),
             trigger_words=list(profile.trigger_words),
             roles=list(profile.role_terms),
         )
         return self.resolve_strengths(selection, family=profile.family)
+
+    # -- 匹配评分（移植原插件 _score_lora_profile_match / _best_lora_profile_match）--
+
+    @staticmethod
+    def _lora_profile_match_sort_key(match: dict[str, Any]) -> tuple:
+        return (
+            float(match.get("score") or 0),
+            int(match.get("source_rank") or 0),
+            int(match.get("marker_len") or 0),
+            len(str(match.get("term") or "")),
+        )
+
+    @staticmethod
+    def _profile_match_term_is_strong(term: str) -> bool:
+        text = str(term or "").strip()
+        marker = normalize_match_key(text)
+        if not marker or is_generic_term(text):
+            return False
+        if re.fullmatch(r"\d+", marker):
+            return False
+        if re.fullmatch(r"v\d+(?:\d+)?", marker):
+            return False
+        if marker in {"il", "ixl", "xl", "sdxl", "ww", "wwil"}:
+            return False
+        if re.search(r"[㐀-鿿]", text):
+            return len(marker) >= 2
+        if re.search(r"[A-Za-z]", text):
+            return len(marker) >= 4
+        return len(marker) >= 4
+
+    def _blocked_markers(self, profiles: dict[str, LoraProfile]) -> frozenset:
+        """多个档案共享的非身份标记 → 屏蔽（避免别名歧义）。"""
+        if not isinstance(profiles, dict) or not profiles:
+            return frozenset()
+        protected: set[str] = set()
+        for key, profile in profiles.items():
+            for value in (str(key), str(profile.character or "")):
+                marker = normalize_match_key(value)
+                if marker:
+                    protected.add(marker)
+        counts: dict[str, int] = {}
+        for _key, profile in profiles.items():
+            seen: set[str] = set()
+            for term in self.profile_terms(profile, include_triggers=False):
+                marker = normalize_match_key(term)
+                if marker and marker not in seen:
+                    seen.add(marker)
+                    counts[marker] = counts.get(marker, 0) + 1
+        return frozenset(marker for marker, count in counts.items() if count > 1 and marker not in protected)
+
+    def _profile_match_candidate_entries(
+        self,
+        key: str,
+        profile: LoraProfile,
+        blocked_markers: Optional[frozenset] = None,
+    ) -> list[dict[str, Any]]:
+        blocked_markers = blocked_markers or frozenset()
+        identity_markers = {normalize_match_key(key), normalize_match_key(profile.character)}
+        entries: dict[str, dict[str, Any]] = {}
+        for term in self.profile_terms(profile, include_triggers=False):
+            term = str(term or "").strip()
+            marker = normalize_match_key(term)
+            if not marker or marker in blocked_markers:
+                continue
+            if not self._profile_match_term_is_strong(term):
+                continue
+            source = "identity" if marker in identity_markers else "profile"
+            source_rank = 4 if source == "identity" else 3
+            current = entries.get(marker)
+            if current and int(current.get("source_rank") or 0) >= source_rank:
+                continue
+            entries[marker] = {"term": term, "marker": marker, "source": source, "source_rank": source_rank}
+        return list(entries.values())
+
+    def _profile_match_marker_hits_text(self, marker: str, text_norm: str, raw_text: str, term: str) -> bool:
+        if not marker or marker not in text_norm:
+            return False
+        if re.search(r"[㐀-鿿぀-ヿ]", str(term or "")):
+            if len(marker) <= 2:
+                return _short_cjk_marker_has_safe_boundary(marker, raw_text)
+            return True
+        term_ascii = re.sub(r"[^0-9a-z]+", " ", str(term or "").lower()).strip()
+        raw_ascii = re.sub(r"[^0-9a-z]+", " ", str(raw_text or "").lower())
+        if term_ascii and re.search(rf"(?<![0-9a-z]){re.escape(term_ascii)}(?![0-9a-z])", raw_ascii):
+            return True
+        return len(marker) >= 6
+
+    @staticmethod
+    def _profile_ascii_prompt_fragments(text: str) -> set:
+        ascii_text = re.sub(r"[^0-9a-z]+", " ", str(text or "").lower()).strip()
+        tokens = [token for token in ascii_text.split() if len(token) >= 3]
+        fragments = set(tokens)
+        for size in (2, 3):
+            if len(tokens) < size:
+                continue
+            for index in range(0, len(tokens) - size + 1):
+                compact = "".join(tokens[index:index + size])
+                spaced = " ".join(tokens[index:index + size])
+                if 5 <= len(compact) <= 48:
+                    fragments.add(compact)
+                if 5 <= len(spaced) <= 56:
+                    fragments.add(spaced.replace(" ", ""))
+        return fragments
+
+    def _profile_best_fuzzy_prompt_fragment(self, text: str, marker: str, term: str) -> tuple:
+        marker = normalize_match_key(marker)
+        if not marker:
+            return 0.0, ""
+        best_ratio = 0.0
+        best_fragment = ""
+        term_has_cjk = bool(re.search(r"[㐀-鿿぀-ヿ]", str(term or "")))
+        if term_has_cjk:
+            if len(marker) < 4:
+                return 0.0, ""
+            threshold = 0.74 if len(marker) <= 4 else 0.80
+            for chunk in re.findall(r"[㐀-鿿぀-ヿ]+", str(text or "")):
+                chunk_norm = normalize_match_key(chunk)
+                if len(chunk_norm) < max(4, len(marker) - 1):
+                    continue
+                min_size = max(4, len(marker) - 1)
+                max_size = min(len(chunk_norm), len(marker) + 1)
+                for size in range(min_size, max_size + 1):
+                    for index in range(0, len(chunk_norm) - size + 1):
+                        fragment = chunk_norm[index:index + size]
+                        ratio = difflib.SequenceMatcher(None, marker, fragment).ratio()
+                        if ratio > best_ratio:
+                            best_ratio = ratio
+                            best_fragment = fragment
+            return (best_ratio, best_fragment) if best_ratio >= threshold else (0.0, "")
+        if len(marker) < 5:
+            return 0.0, ""
+        threshold = 0.88 if len(marker) >= 7 else 0.92
+        max_len_delta = max(2, len(marker) // 4)
+        for fragment in self._profile_ascii_prompt_fragments(text):
+            if abs(len(fragment) - len(marker)) > max_len_delta:
+                continue
+            ratio = difflib.SequenceMatcher(None, marker, fragment).ratio()
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_fragment = fragment
+        return (best_ratio, best_fragment) if best_ratio >= threshold else (0.0, "")
+
+    def _score_lora_profile_match_candidate(self, text: str, candidate: dict[str, Any]) -> dict[str, Any]:
+        marker = str(candidate.get("marker") or "")
+        term = str(candidate.get("term") or "")
+        source = str(candidate.get("source") or "")
+        source_rank = int(candidate.get("source_rank") or 0)
+        text_norm = normalize_match_key(text)
+        if not marker or not text_norm:
+            return {}
+        if self._profile_match_marker_hits_text(marker, text_norm, str(text or ""), term):
+            return {
+                "term": term,
+                "source": source,
+                "source_rank": source_rank,
+                "match_kind": "exact",
+                "score": float(100 + min(len(marker), 24) + source_rank),
+                "marker_len": len(marker),
+                "matched_fragment": term,
+                "ratio": 1.0,
+            }
+        ratio, fragment = self._profile_best_fuzzy_prompt_fragment(str(text or ""), marker, term)
+        if not ratio:
+            return {}
+        return {
+            "term": term,
+            "source": source,
+            "source_rank": source_rank,
+            "match_kind": "fuzzy",
+            "score": float(76 + ratio * 12 + min(len(marker), 16) / 4 + source_rank),
+            "marker_len": len(marker),
+            "matched_fragment": fragment,
+            "ratio": ratio,
+        }
+
+    def _score_lora_profile_match(
+        self,
+        text: str,
+        key: str,
+        profile: LoraProfile,
+        blocked_markers: Optional[frozenset] = None,
+    ) -> dict[str, Any]:
+        best: dict[str, Any] = {}
+        for candidate in self._profile_match_candidate_entries(key, profile, blocked_markers=blocked_markers):
+            scored = self._score_lora_profile_match_candidate(text, candidate)
+            if scored and (not best or self._lora_profile_match_sort_key(scored) > self._lora_profile_match_sort_key(best)):
+                best = scored
+        if best:
+            best.update({"key": key, "profile": profile})
+        return best
+
+    # -- 坏词过滤（移植原插件 _is_lora_profile_bad_match_term 的轻量版）------------
+
+    @staticmethod
+    def _is_lora_quality_or_scene_tag(tag: str) -> bool:
+        text = str(tag or "").strip().lower()
+        words = {
+            "masterpiece", "best quality", "ultra-detailed", "ultra detailed", "highres",
+            "8k", "4k", "sharp focus", "anime style", "cinematic composition",
+            "detailed shading", "vibrant colors", "soft lighting", "warm lighting",
+            "atmospheric", "atmospheric depth", "background", "cafe", "wooden tables",
+            "coffee cups", "standing", "sitting", "looking at viewer", "smile",
+        }
+        return any(word in text for word in words)
+
+    @staticmethod
+    def _is_lora_outfit_tag(tag: str) -> bool:
+        text = str(tag or "").strip().lower()
+        words = {
+            "outfit", "clothes", "costume", "alternate costume", "official alternate costume",
+            "dress", "robe", "uniform", "maid", "apron", "skirt",
+            "shirt", "jacket", "coat", "pants", "shorts", "sleeves", "sleeve", "gloves",
+            "boots", "shoes", "sandals", "stockings", "thighhighs", "pantyhose",
+            "socks", "sash", "sashes", "belt", "top", "crop top", "midriff", "navel",
+            "bare shoulders", "open jacket", "open clothes", "bra", "bikini",
+            "swimsuit", "kimono", "armor", "hood", "animal hood", "hoodie", "sweater", "neckwear",
+            "ascot", "necktie", "tie", "collar", "cape", "capelet", "cloak",
+            "scarf", "shawl", "detached sleeves", "wide sleeves", "puffy sleeves",
+            "sleeveless", "frilled sleeves", "ribbon-trimmed sleeves", "trimmed sleeves",
+            "mary janes", "loafers", "heels", "pumps", "sneakers", "legwear",
+        }
+        return any(word in text for word in words)
+
+    @staticmethod
+    def _is_lora_appearance_tag(tag: str) -> bool:
+        text = str(tag or "").strip().lower()
+        words = {
+            "hair", "eyes", "eye", "face", "features", "skin", "mole", "eyelashes",
+            "horns", "ears", "tail", "wings", "ahoge", "ponytail", "twintails",
+            "braid", "bangs", "sidelocks", "ribbons", "ribbon", "accessories",
+            "accessory", "ornament", "earrings", "earring", "jewelry", "necklace",
+            "flower-shaped", "flowers", "flower", "tassels", "tassel",
+        }
+        return any(word in text for word in words)
+
+    def _is_bad_match_term(self, term: str) -> bool:
+        text = str(term or "").strip()
+        if not text:
+            return True
+        lowered = text.lower()
+        compact = normalize_match_key(text)
+        if re.search(r"(?:^|[\s_\-])(?:illu|illuxl|ixl|sdxl|xl|pony|noob|lora|locon|lycoris)(?:$|[\s_\-])", lowered):
+            return True
+        if re.search(r"(?:illu|illuxl|ixl|sdxl|pony|noob|lora)$", compact):
+            return True
+        if self._is_lora_quality_or_scene_tag(text) or self._is_lora_outfit_tag(text) or self._is_lora_appearance_tag(text):
+            return True
+        return False
+
+    # -- 多角色连接符（移植原插件 _multi_lora_matches_have_connector）---------------
+
+    @staticmethod
+    def _multi_lora_matches_have_connector(text: str, matches: list) -> bool:
+        if len(matches or []) < 2:
+            return False
+        raw = str(text or "")
+        if not raw or not _CONNECTOR_RE.search(raw):
+            return False
+        spans = []
+        for match in matches or []:
+            profile = match.get("profile")
+            candidates = [
+                match.get("term"),
+                profile.character if profile else "",
+                match.get("key"),
+            ]
+            for candidate in candidates:
+                term = str(candidate or "").strip()
+                if not term:
+                    continue
+                found = re.search(re.escape(term), raw, re.I)
+                if found:
+                    spans.append((found.start(), found.end(), term))
+                    break
+        spans.sort(key=lambda item: item[0])
+        for left, right in zip(spans, spans[1:]):
+            between = raw[left[1]:right[0]]
+            if _CONNECTOR_RE.search(between):
+                return True
+        return False
+
+    # -- 多角色触发词（移植原插件 _profile_effective_trigger_prompt / 路由）--------
+
+    def _profile_effective_trigger_words(self, profile: LoraProfile) -> tuple:
+        base = [str(x).strip() for x in profile.trigger_words if str(x or "").strip()]
+        kept = [tag for tag in base if not is_generic_term(tag) and not self._is_bad_match_term(tag)]
+        if kept:
+            return kept, False
+        fallback = [
+            str(x).strip()
+            for x in (profile.character, profile.key)
+            if str(x or "").strip() and not is_generic_term(str(x or ""))
+        ]
+        return fallback, True
+
+    def _profile_is_multi_character_pack(self, profile: LoraProfile) -> bool:
+        extra = profile.extra or {}
+        text = " ".join([
+            str(profile.character or ""),
+            str(extra.get("source_title") or ""),
+            str(extra.get("source_version_title") or ""),
+            str(extra.get("model_name") or ""),
+            str(extra.get("version_name") or ""),
+            Path(str(profile.lora_name or "")).stem,
+        ])
+        return bool(re.search(
+            r"\b\d+\s*(?:in|x)\s*1\b|multi[-\s]*(?:character|char)|character\s*pack|"
+            r"(?:character|char|lora)\s*collection|合集|多角色|角色包",
+            text,
+            flags=re.I,
+        ))
+
+    def _route_multi_character_trigger(self, trigger_tags: list, profile: LoraProfile, match_text: str = "") -> list:
+        if not trigger_tags or not self._profile_is_multi_character_pack(profile):
+            return trigger_tags
+        tags = [t for t in trigger_tags if not is_generic_term(t) and not self._is_bad_match_term(t)]
+        if len(tags) <= 1:
+            return tags
+        match_norm = normalize_match_key(match_text or "")
+        best = None
+        for tag in tags:
+            marker = normalize_match_key(tag)
+            if not marker or marker not in match_norm:
+                continue
+            if best is None or (len(marker), tag) > best:
+                best = (len(marker), tag)
+        return [best[1]] if best else tags
+
+    # -- 本地文件搜索（移植原插件 _find_local_lora_file）---------------------------
+
+    @staticmethod
+    def _find_local_lora_file(base_dir: Path, lora_name: str) -> Optional[Path]:
+        lora_name = str(lora_name or "").strip()
+        if not lora_name:
+            return None
+        for candidate in (base_dir / lora_name, base_dir / Path(lora_name).name):
+            try:
+                if candidate.exists() and candidate.is_file() and candidate.stat().st_size > 0:
+                    return candidate
+            except Exception:
+                continue
+        filename = Path(lora_name).name
+        try:
+            for item in base_dir.rglob(filename):
+                try:
+                    if item.is_file() and item.stat().st_size > 0:
+                        return item
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        wanted = normalize_lora_key(lora_name)
+        if wanted:
+            try:
+                for item in base_dir.rglob("*.safetensors"):
+                    try:
+                        if item.is_file() and item.stat().st_size > 0 and wanted in normalize_lora_key(item.name):
+                            return item
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+        return None
 
     @staticmethod
     def _has_connector_between(text: str, spans: list[tuple[int, int]]) -> bool:

@@ -89,7 +89,10 @@ class TestDatabaseInit(StorageBase):
     def test_create_and_repeat_initialize(self):
         """建库 + 重复初始化必须幂等。"""
         applied1 = self.db.list_applied_migrations()
-        self.assertEqual(applied1, ["0001_initial", "0002_history_favorite_indexes"])
+        self.assertEqual(
+            applied1,
+            ["0001_initial", "0002_history_favorite_indexes", "0003_lora_library"],
+        )
         # 重复初始化
         applied2 = self.db.initialize()
         self.assertEqual(applied2, applied1)
@@ -109,6 +112,8 @@ class TestDatabaseInit(StorageBase):
             "history",
             "favorites",
             "lora_profiles",
+            "lora_assets",
+            "lora_download_jobs",
             "workflow_registry",
             "app_events",
         ):
@@ -699,7 +704,10 @@ class TestMigrations(StorageBase):
         # 用正确迁移目录重试成功（文件未被破坏）
         good = Database(self.tmp / "rollback.db")
         applied = good.initialize()
-        self.assertEqual(applied, ["0001_initial", "0002_history_favorite_indexes"])
+        self.assertEqual(
+            applied,
+            ["0001_initial", "0002_history_favorite_indexes", "0003_lora_library"],
+        )
         good.close()
 
     def test_migration_failure_preserves_existing_data(self):
@@ -725,7 +733,10 @@ class TestMigrations(StorageBase):
         self.assertEqual(kept.request_json, {"p": 1})
         applied = db3.list_applied_migrations()
         self.assertNotIn("0003_bad", applied)
-        self.assertEqual(applied, ["0001_initial", "0002_history_favorite_indexes"])
+        self.assertEqual(
+            applied,
+            ["0001_initial", "0002_history_favorite_indexes", "0003_lora_library"],
+        )
         db3.close()
 
     def test_unknown_migration_dir(self):

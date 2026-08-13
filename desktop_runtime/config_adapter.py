@@ -22,6 +22,7 @@ SECRET_NAMES = (
     "civitai_api_token",
     "civitai_cookie",
     "comfyui_bridge_token",
+    "huggingface_api_token",
 )
 
 _PROVIDER_FIELDS = {

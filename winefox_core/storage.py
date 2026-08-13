@@ -31,21 +31,29 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 from .storage_models import (
     AppEventRecord,
     CorruptDatabaseError,
+    DOWNLOAD_ACTIVE_STATES,
+    DOWNLOAD_TERMINAL_STATES,
     FavoriteRecord,
     HistoryRecord,
     InvalidStateTransitionError,
     JobRecord,
     JobState,
+    LoraAssetRecord,
+    LoraAssetState,
+    LoraDownloadJobRecord,
+    LoraDownloadState,
     LoraProfileRecord,
     MigrationError,
     ValidationError,
     WorkflowRecord,
+    assert_download_transition,
     assert_transition,
     json_dumps,
     json_loads,
     normalize_relative_path,
     utcnow_iso,
     validate_json,
+    validate_public_json,
 )
 
 logger = logging.getLogger(__name__)
@@ -74,6 +82,8 @@ __all__ = [
     "HistoryStore",
     "FavoriteStore",
     "LoraProfileStore",
+    "LoraAssetStore",
+    "LoraDownloadJobStore",
     "WorkflowRegistry",
     "AppEventStore",
     "run_migrations",
@@ -389,6 +399,48 @@ def _row_to_lora_profile(row: sqlite3.Row) -> LoraProfileRecord:
         display_key=row["display_key"],
         profile=json_loads(row["profile"], {}),
         updated_at=row["updated_at"],
+    )
+
+
+def _row_to_lora_asset(row: sqlite3.Row) -> LoraAssetRecord:
+    return LoraAssetRecord(
+        id=row["id"],
+        model_family=row["model_family"],
+        filename=row["filename"],
+        comfy_key=row["comfy_key"] or "",
+        display_name=row["display_name"] or "",
+        source=row["source"] or "local",
+        model_id=row["model_id"],
+        version_id=row["version_id"],
+        preview_key=row["preview_key"],
+        state=row["state"] or "installed",
+        quarantine_relpath=row["quarantine_relpath"],
+        disabled=bool(row["disabled"]),
+        disable_reason=row["disable_reason"],
+        info=json_loads(row["info"], {}),
+        installed_at=row["installed_at"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _row_to_lora_download_job(row: sqlite3.Row) -> LoraDownloadJobRecord:
+    return LoraDownloadJobRecord(
+        result_id=row["result_id"],
+        state=row["state"] or "queued",
+        family=row["family"] or "illustrious",
+        alias=row["alias"] or "",
+        source=row["source"] or "civitai",
+        source_ref=json_loads(row["source_ref"], {}),
+        progress=json_loads(row["progress"], {}),
+        result=json_loads(row["result"], {}),
+        part_files=json_loads(row["part_files"], []),
+        error=row["error"],
+        request_timeout=int(row["request_timeout"] or 60),
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+        started_at=row["started_at"],
+        finished_at=row["finished_at"],
     )
 
 
@@ -894,6 +946,508 @@ class LoraProfileStore:
             cur = conn.execute(
                 "DELETE FROM lora_profiles WHERE model_family = ? AND normalized_key = ?",
                 (str(model_family or "").strip(), normalize_lora_key(key)),
+            )
+            return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# LoraAssetStore
+# ---------------------------------------------------------------------------
+
+def _clean_plain_filename(filename: str) -> str:
+    """文件名只允许纯文件名（无分隔符/无 .. 越界）。"""
+    text = str(filename or "").strip()
+    if not text:
+        raise ValidationError("filename 不能为空")
+    if "/" in text or "\\" in text or ".." in text:
+        raise ValidationError(f"filename 必须是纯文件名（不允许路径分隔符）: {text!r}")
+    return text
+
+
+class LoraAssetStore:
+    """本地库资产索引。只记录索引与相对路径；权重文件不由此层删除/改写。
+
+    - 删除只删索引（delete）。
+    - 隔离（quarantine）只把 state 置为 quarantined 并记录隔离后相对路径，
+      恢复（restore）只能回原位（清空隔离路径）。
+    - info / preview_key 为公开 JSON，禁止携带 token URL / Cookie / 绝对路径。
+    """
+
+    def __init__(self, db: Database):
+        self.db = db
+
+    def register(
+        self,
+        model_family: str,
+        filename: str,
+        *,
+        comfy_key: str = "",
+        display_name: str = "",
+        source: str = "local",
+        model_id: Optional[int] = None,
+        version_id: Optional[int] = None,
+        preview_key: Optional[str] = None,
+        info: Optional[Dict[str, Any]] = None,
+        installed_at: Optional[str] = None,
+    ) -> LoraAssetRecord:
+        family = str(model_family or "").strip().lower()
+        if not family:
+            raise _raise_key_error("model_family")
+        name = _clean_plain_filename(filename)
+        data = dict(info or {})
+        validate_public_json(data, name="info")
+        if preview_key is not None:
+            preview_key = normalize_relative_path(preview_key, name="preview_key")
+        now = utcnow_iso()
+        conn = self.db.connection
+        with self.db.transaction():
+            conn.execute(
+                "INSERT INTO lora_assets (model_family, filename, comfy_key, display_name,"
+                " source, model_id, version_id, preview_key, info, installed_at,"
+                " created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT(model_family, filename) DO UPDATE SET"
+                " comfy_key=excluded.comfy_key, display_name=excluded.display_name,"
+                " source=excluded.source, model_id=excluded.model_id,"
+                " version_id=excluded.version_id, preview_key=excluded.preview_key,"
+                " info=excluded.info, installed_at=excluded.installed_at,"
+                " updated_at=excluded.updated_at",
+                (
+                    family, name, str(comfy_key or "").strip(),
+                    str(display_name or "").strip(), str(source or "local").strip(),
+                    model_id, version_id, preview_key, json_dumps(data), installed_at,
+                    now, now,
+                ),
+            )
+            row = _fetch_one(
+                conn,
+                "SELECT * FROM lora_assets WHERE model_family = ? AND filename = ?",
+                (family, name),
+            )
+            return _row_to_lora_asset(row)  # type: ignore[arg-type]
+
+    def get(self, model_family: str, filename: str) -> Optional[LoraAssetRecord]:
+        row = _fetch_one(
+            self.db.connection,
+            "SELECT * FROM lora_assets WHERE model_family = ? AND filename = ?",
+            (str(model_family or "").strip(), _clean_plain_filename(filename)),
+        )
+        return _row_to_lora_asset(row) if row else None
+
+    def get_by_id(self, asset_id: int) -> Optional[LoraAssetRecord]:
+        row = _fetch_one(
+            self.db.connection, "SELECT * FROM lora_assets WHERE id = ?", (int(asset_id),)
+        )
+        return _row_to_lora_asset(row) if row else None
+
+    def list(
+        self,
+        model_family: Optional[str] = None,
+        state: Optional[str] = None,
+        include_disabled: bool = True,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> List[LoraAssetRecord]:
+        sql = "SELECT * FROM lora_assets"
+        where: list[str] = []
+        params: list = []
+        if model_family is not None:
+            where.append("model_family = ?")
+            params.append(str(model_family).strip().lower())
+        if state is not None:
+            where.append("state = ?")
+            params.append(LoraAssetState(state).value)
+        if not include_disabled:
+            where.append("disabled = 0")
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY filename LIMIT ? OFFSET ?"
+        params += [max(1, min(2000, int(limit))), max(0, int(offset))]
+        return [_row_to_lora_asset(r) for r in self.db.connection.execute(sql, params).fetchall()]
+
+    def filenames(self, model_family: Optional[str] = None, state: Optional[str] = None) -> List[str]:
+        """返回可安装文件名列表（供与 ComfyUI 实际 inventory 比对）。"""
+        sql = "SELECT filename FROM lora_assets"
+        where: list[str] = []
+        params: list = []
+        if model_family is not None:
+            where.append("model_family = ?")
+            params.append(str(model_family).strip().lower())
+        if state is not None:
+            where.append("state = ?")
+            params.append(LoraAssetState(state).value)
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY filename"
+        return [str(r[0]) for r in self.db.connection.execute(sql, params).fetchall()]
+
+    def count(self, model_family: Optional[str] = None, state: Optional[str] = None) -> int:
+        sql = "SELECT COUNT(*) AS c FROM lora_assets"
+        where: list[str] = []
+        params: list = []
+        if model_family is not None:
+            where.append("model_family = ?")
+            params.append(str(model_family).strip().lower())
+        if state is not None:
+            where.append("state = ?")
+            params.append(LoraAssetState(state).value)
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        return int(self.db.connection.execute(sql, params).fetchone()["c"])
+
+    def find_by_model_id(self, model_id: int, model_family: Optional[str] = None) -> List[LoraAssetRecord]:
+        sql = "SELECT * FROM lora_assets WHERE model_id = ?"
+        params: list = [int(model_id)]
+        if model_family is not None:
+            sql += " AND model_family = ?"
+            params.append(str(model_family).strip().lower())
+        sql += " ORDER BY id"
+        return [_row_to_lora_asset(r) for r in self.db.connection.execute(sql, params).fetchall()]
+
+    def set_preview(self, asset_id: int, preview_key: Optional[str]) -> bool:
+        if preview_key is not None:
+            preview_key = normalize_relative_path(preview_key, name="preview_key")
+        conn = self.db.connection
+        with self.db.transaction():
+            cur = conn.execute(
+                "UPDATE lora_assets SET preview_key = ?, updated_at = ? WHERE id = ?",
+                (preview_key, utcnow_iso(), int(asset_id)),
+            )
+            return cur.rowcount > 0
+
+    def set_disabled(self, asset_id: int, reason: Optional[str] = None) -> bool:
+        conn = self.db.connection
+        with self.db.transaction():
+            cur = conn.execute(
+                "UPDATE lora_assets SET disabled = 1, disable_reason = ?, updated_at = ?"
+                " WHERE id = ?",
+                (str(reason or "").strip()[:512] or None, utcnow_iso(), int(asset_id)),
+            )
+            return cur.rowcount > 0
+
+    def clear_disabled(self, asset_id: int) -> bool:
+        conn = self.db.connection
+        with self.db.transaction():
+            cur = conn.execute(
+                "UPDATE lora_assets SET disabled = 0, disable_reason = NULL, updated_at = ?"
+                " WHERE id = ?",
+                (utcnow_iso(), int(asset_id)),
+            )
+            return cur.rowcount > 0
+
+    def quarantine(self, asset_id: int, quarantine_relpath: str) -> LoraAssetRecord:
+        """隔离：installed -> quarantined。隔离路径必须是相对路径。"""
+        relpath = normalize_relative_path(quarantine_relpath, name="quarantine_relpath")
+        conn = self.db.connection
+        with self.db.transaction():
+            row = _fetch_one(conn, "SELECT * FROM lora_assets WHERE id = ?", (int(asset_id),))
+            if row is None:
+                raise InvalidStateTransitionError(f"资产不存在: {asset_id}")
+            old = LoraAssetState(row["state"])
+            if old is LoraAssetState.QUARANTINED:
+                raise InvalidStateTransitionError(
+                    f"资产已处于隔离状态: {asset_id}"
+                )
+            conn.execute(
+                "UPDATE lora_assets SET state = 'quarantined', quarantine_relpath = ?,"
+                " updated_at = ? WHERE id = ?",
+                (relpath, utcnow_iso(), int(asset_id)),
+            )
+            updated = _fetch_one(conn, "SELECT * FROM lora_assets WHERE id = ?", (int(asset_id),))
+            return _row_to_lora_asset(updated)  # type: ignore[arg-type]
+
+    def restore(self, asset_id: int) -> LoraAssetRecord:
+        """恢复：quarantined -> installed，仅回原位（清空隔离路径）。"""
+        conn = self.db.connection
+        with self.db.transaction():
+            row = _fetch_one(conn, "SELECT * FROM lora_assets WHERE id = ?", (int(asset_id),))
+            if row is None:
+                raise InvalidStateTransitionError(f"资产不存在: {asset_id}")
+            if LoraAssetState(row["state"]) is not LoraAssetState.QUARANTINED:
+                raise InvalidStateTransitionError(
+                    f"资产不在隔离状态，无法恢复: {asset_id}"
+                )
+            conn.execute(
+                "UPDATE lora_assets SET state = 'installed', quarantine_relpath = NULL,"
+                " updated_at = ? WHERE id = ?",
+                (utcnow_iso(), int(asset_id)),
+            )
+            updated = _fetch_one(conn, "SELECT * FROM lora_assets WHERE id = ?", (int(asset_id),))
+            return _row_to_lora_asset(updated)  # type: ignore[arg-type]
+
+    def delete(self, asset_id: int) -> bool:
+        """只删除索引，不触碰权重文件。"""
+        conn = self.db.connection
+        with self.db.transaction():
+            cur = conn.execute("DELETE FROM lora_assets WHERE id = ?", (int(asset_id),))
+            return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# LoraDownloadJobStore
+# ---------------------------------------------------------------------------
+
+class LoraDownloadJobStore:
+    """下载任务持久化。result_id 主键；状态迁移受状态机约束。
+
+    非终态（queued/resolving/downloading/profiling/refreshing）在应用重启时
+    通过 :meth:`mark_interrupted` 原子置为 interrupted。source_ref / result /
+    progress / part_files 均为公开 JSON（不含 token URL / Cookie / 绝对路径）。
+    """
+
+    def __init__(self, db: Database):
+        self.db = db
+
+    def enqueue(
+        self,
+        result_id: str,
+        *,
+        family: str = "illustrious",
+        alias: str = "",
+        source: str = "civitai",
+        source_ref: Optional[Dict[str, Any]] = None,
+        request_timeout: int = 60,
+    ) -> LoraDownloadJobRecord:
+        """创建任务。result_id 已存在时原样返回既有记录（幂等，不重置状态）。"""
+        rid = str(result_id or "").strip()
+        if not rid:
+            raise InvalidStateTransitionError("result_id 不能为空")
+        ref = dict(source_ref or {})
+        validate_public_json(ref, name="source_ref")
+        now = utcnow_iso()
+        conn = self.db.connection
+        with self.db.transaction():
+            conn.execute(
+                "INSERT OR IGNORE INTO lora_download_jobs (result_id, state, family, alias,"
+                " source, source_ref, request_timeout, created_at, updated_at)"
+                " VALUES (?, 'queued', ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    rid, str(family or "illustrious").strip().lower(),
+                    str(alias or "").strip(), str(source or "civitai").strip(),
+                    json_dumps(ref), max(10, min(180, int(request_timeout or 60))), now, now,
+                ),
+            )
+            row = _fetch_one(conn, "SELECT * FROM lora_download_jobs WHERE result_id = ?", (rid,))
+            return _row_to_lora_download_job(row)  # type: ignore[arg-type]
+
+    def get(self, result_id: str) -> Optional[LoraDownloadJobRecord]:
+        row = _fetch_one(
+            self.db.connection,
+            "SELECT * FROM lora_download_jobs WHERE result_id = ?",
+            (str(result_id or "").strip(),),
+        )
+        return _row_to_lora_download_job(row) if row else None
+
+    def list(
+        self,
+        state: Optional[LoraDownloadState] = None,
+        family: Optional[str] = None,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> List[LoraDownloadJobRecord]:
+        sql = "SELECT * FROM lora_download_jobs"
+        where: list[str] = []
+        params: list = []
+        if state is not None:
+            where.append("state = ?")
+            params.append(LoraDownloadState(state).value)
+        if family is not None:
+            where.append("family = ?")
+            params.append(str(family).strip().lower())
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY created_at DESC, result_id LIMIT ? OFFSET ?"
+        params += [max(1, min(2000, int(limit))), max(0, int(offset))]
+        return [_row_to_lora_download_job(r) for r in self.db.connection.execute(sql, params).fetchall()]
+
+    def active_count(self) -> int:
+        marks = ", ".join("?" for _ in DOWNLOAD_ACTIVE_STATES)
+        row = self.db.connection.execute(
+            f"SELECT COUNT(*) AS c FROM lora_download_jobs WHERE state IN ({marks})",
+            [s.value for s in DOWNLOAD_ACTIVE_STATES],
+        ).fetchone()
+        return int(row["c"])
+
+    def update_state(
+        self,
+        result_id: str,
+        new_state: LoraDownloadState,
+        *,
+        progress: Optional[Dict[str, Any]] = None,
+        result: Optional[Dict[str, Any]] = None,
+        error: Optional[str] = None,
+        part_files: Optional[List[str]] = None,
+    ) -> LoraDownloadJobRecord:
+        """更新状态。非法迁移抛错且事务回滚（无部分写入）。"""
+        new_state = LoraDownloadState(new_state)
+        conn = self.db.connection
+        with self.db.transaction():
+            row = _fetch_one(
+                conn, "SELECT * FROM lora_download_jobs WHERE result_id = ?",
+                (str(result_id or "").strip(),),
+            )
+            if row is None:
+                raise InvalidStateTransitionError(f"下载任务不存在: {result_id}")
+            assert_download_transition(LoraDownloadState(row["state"]), new_state)
+            now = utcnow_iso()
+            set_parts = ["state = ?", "updated_at = ?"]
+            params: list = [new_state.value, now]
+            if progress is not None:
+                progress = dict(progress)
+                validate_public_json(progress, name="progress")
+                set_parts.append("progress = ?")
+                params.append(json_dumps(progress))
+            if result is not None:
+                result = dict(result)
+                validate_public_json(result, name="result")
+                set_parts.append("result = ?")
+                params.append(json_dumps(result))
+            if error is not None:
+                set_parts.append("error = ?")
+                params.append(str(error)[:2048])
+            if part_files is not None:
+                cleaned = [
+                    normalize_relative_path(item, name="part_files[]") for item in part_files
+                ]
+                validate_json(cleaned, name="part_files")
+                set_parts.append("part_files = ?")
+                params.append(json_dumps(cleaned))
+            if new_state in DOWNLOAD_ACTIVE_STATES:
+                set_parts.append("started_at = COALESCE(started_at, ?)")
+                params.append(now)
+            if new_state in DOWNLOAD_TERMINAL_STATES:
+                set_parts.append("finished_at = ?")
+                params.append(now)
+            params.append(str(result_id or "").strip())
+            conn.execute(
+                f"UPDATE lora_download_jobs SET {', '.join(set_parts)} WHERE result_id = ?",
+                params,
+            )
+            updated = _fetch_one(
+                conn, "SELECT * FROM lora_download_jobs WHERE result_id = ?",
+                (str(result_id or "").strip(),),
+            )
+            return _row_to_lora_download_job(updated)  # type: ignore[arg-type]
+
+    def set_progress(
+        self,
+        result_id: str,
+        progress: Optional[Dict[str, Any]] = None,
+        *,
+        part_files: Optional[List[str]] = None,
+    ) -> LoraDownloadJobRecord:
+        """下载中更新进度/分片文件（纯字段更新，不改状态）。"""
+        rid = str(result_id or "").strip()
+        conn = self.db.connection
+        with self.db.transaction():
+            row = _fetch_one(
+                conn, "SELECT * FROM lora_download_jobs WHERE result_id = ?", (rid,)
+            )
+            if row is None:
+                raise InvalidStateTransitionError(f"下载任务不存在: {result_id}")
+            set_parts = ["updated_at = ?"]
+            params: list = [utcnow_iso()]
+            if progress is not None:
+                progress = dict(progress)
+                validate_public_json(progress, name="progress")
+                set_parts.append("progress = ?")
+                params.append(json_dumps(progress))
+            if part_files is not None:
+                cleaned = [
+                    normalize_relative_path(item, name="part_files[]")
+                    for item in part_files
+                ]
+                validate_json(cleaned, name="part_files")
+                set_parts.append("part_files = ?")
+                params.append(json_dumps(cleaned))
+            params.append(rid)
+            conn.execute(
+                f"UPDATE lora_download_jobs SET {', '.join(set_parts)} WHERE result_id = ?",
+                params,
+            )
+            updated = _fetch_one(
+                conn, "SELECT * FROM lora_download_jobs WHERE result_id = ?", (rid,)
+            )
+            return _row_to_lora_download_job(updated)  # type: ignore[arg-type]
+
+    def finish(self, result_id: str, result: Dict[str, Any]) -> LoraDownloadJobRecord:
+        """完成下载（profiling/refreshing -> completed）。"""
+        return self.update_state(
+            result_id, LoraDownloadState.COMPLETED, result=result
+        )
+
+    def requeue(self, result_id: str) -> LoraDownloadJobRecord:
+        """重试：failed/cancelled/interrupted -> queued。"""
+        conn = self.db.connection
+        with self.db.transaction():
+            row = _fetch_one(
+                conn, "SELECT * FROM lora_download_jobs WHERE result_id = ?",
+                (str(result_id or "").strip(),),
+            )
+            if row is None:
+                raise InvalidStateTransitionError(f"下载任务不存在: {result_id}")
+            assert_download_transition(
+                LoraDownloadState(row["state"]), LoraDownloadState.QUEUED
+            )
+            now = utcnow_iso()
+            conn.execute(
+                "UPDATE lora_download_jobs SET state = 'queued', error = NULL,"
+                " progress = '{}', updated_at = ? WHERE result_id = ?",
+                (now, str(result_id or "").strip()),
+            )
+            updated = _fetch_one(
+                conn, "SELECT * FROM lora_download_jobs WHERE result_id = ?",
+                (str(result_id or "").strip(),),
+            )
+            return _row_to_lora_download_job(updated)  # type: ignore[arg-type]
+
+    def mark_interrupted(
+        self,
+        states: Optional[Iterable[LoraDownloadState]] = None,
+    ) -> List[LoraDownloadJobRecord]:
+        """应用重启：把非终态任务原子置为 interrupted。返回受影响记录。"""
+        conn = self.db.connection
+        targets = list(states) if states is not None else sorted(DOWNLOAD_ACTIVE_STATES, key=lambda s: s.value)
+        if not targets:
+            return []
+        marks = ", ".join("?" for _ in targets)
+        affected: List[LoraDownloadJobRecord] = []
+        now = utcnow_iso()
+        with self.db.transaction():
+            rows = conn.execute(
+                f"SELECT * FROM lora_download_jobs WHERE state IN ({marks})",
+                [LoraDownloadState(s).value for s in targets],
+            ).fetchall()
+            for row in rows:
+                assert_download_transition(
+                    LoraDownloadState(row["state"]), LoraDownloadState.INTERRUPTED
+                )
+            conn.execute(
+                f"UPDATE lora_download_jobs SET state = 'interrupted', finished_at = ?,"
+                f" updated_at = ? WHERE state IN ({marks})",
+                [now, now, *(LoraDownloadState(s).value for s in targets)],
+            )
+            for row in rows:
+                updated = _fetch_one(
+                    conn, "SELECT * FROM lora_download_jobs WHERE result_id = ?",
+                    (row["result_id"],),
+                )
+                affected.append(_row_to_lora_download_job(updated))  # type: ignore[arg-type]
+        if affected:
+            try:
+                AppEventStore(self.db).record(
+                    "lora.downloads_interrupted",
+                    {"count": len(affected), "result_ids": [r.result_id for r in affected]},
+                )
+            except Exception:  # pragma: no cover - 事件写入失败不应阻断恢复
+                logger.warning("[WineFoxStorage] 下载中断事件写入失败", exc_info=True)
+        return affected
+
+    def delete(self, result_id: str) -> bool:
+        conn = self.db.connection
+        with self.db.transaction():
+            cur = conn.execute(
+                "DELETE FROM lora_download_jobs WHERE result_id = ?",
+                (str(result_id or "").strip(),),
             )
             return cur.rowcount > 0
 

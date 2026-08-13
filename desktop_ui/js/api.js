@@ -82,6 +82,14 @@ export const api = {
   startLoraDownload: (resultId, alias = "", options = {}) => request("/lora/downloads", { ...options, method: "POST", body: JSON.stringify({ result_id: resultId, alias }) }),
   loraDownload: (id, options = {}) => request(`/lora/downloads/${encodeURIComponent(id)}`, options),
   probeLoraBridge: (options = {}) => request("/lora/bridge/probe", { ...options, method: "POST", body: JSON.stringify({}) }),
+  /* ---- LoRA 本地库（Agent 07 后端，见 lora_library_audit.md） ---- */
+  loraLibraryList: (family, options = {}) => request("/lora/library", { ...options, query: { family } }),
+  loraLibraryGet: (id, options = {}) => request(`/lora/library/${encodeURIComponent(id)}`, options),
+  loraLibraryUpdate: (id, patch, options = {}) => request(`/lora/library/${encodeURIComponent(id)}`, { ...options, method: "PATCH", body: JSON.stringify(patch) }),
+  loraLibraryDelete: (id, options = {}) => request(`/lora/library/${encodeURIComponent(id)}`, { ...options, method: "DELETE" }),
+  loraLibraryQuarantine: (id, reason, options = {}) => request(`/lora/library/${encodeURIComponent(id)}/quarantine`, { ...options, method: "POST", body: JSON.stringify({ reason }) }),
+  loraLibraryRestore: (id, options = {}) => request(`/lora/library/${encodeURIComponent(id)}/restore`, { ...options, method: "POST" }),
+  loraLibraryMatchPreview: (prompt, family, limit, options = {}) => request("/lora/library/match-preview", { ...options, method: "POST", body: JSON.stringify({ prompt, family, limit }) }),
 
   /* ---- 环境中心（ComfyUI setup，冻结接口，见 docs/desktop_setup_migration.md） ---- */
   setupSummary: (options = {}) => request("/setup/summary", options),

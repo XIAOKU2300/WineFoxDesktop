@@ -25,13 +25,22 @@ from typing import Any, Dict, List, Optional, Union
 __all__ = [
     "utcnow_iso",
     "validate_json",
+    "validate_public_json",
     "normalize_relative_path",
     "JobState",
     "ALLOWED_STATE_TRANSITIONS",
+    "LoraAssetState",
+    "LoraDownloadState",
+    "DOWNLOAD_ACTIVE_STATES",
+    "DOWNLOAD_TERMINAL_STATES",
+    "DOWNLOAD_STATE_TRANSITIONS",
+    "assert_download_transition",
     "JobRecord",
     "HistoryRecord",
     "FavoriteRecord",
     "LoraProfileRecord",
+    "LoraAssetRecord",
+    "LoraDownloadJobRecord",
     "WorkflowRecord",
     "AppEventRecord",
     "StorageError",
@@ -145,6 +154,55 @@ def json_loads(text: Optional[str], default: Any = None) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# 公开 JSON 校验（禁止持久化带凭据的 URL / Cookie / Authorization / 绝对路径）
+# ---------------------------------------------------------------------------
+
+_SECRET_QUERY_PARAM_RE = re.compile(
+    r"(?i)(?:access[_-]?token|api[_-]?key|apikey|token|secret|password|"
+    r"passwd|auth|signature|sig|credential|sign)(?:[&]|=)[^&\s;]+"
+)
+_CREDENTIAL_USERINFO_RE = re.compile(r"(?i)^https?://[^/@\s]+:[^/@\s]+@")
+_URL_RE = re.compile(r"(?i)\bhttps?://\S+")
+_HEADER_SECRET_RE = re.compile(r"(?i)^(?:cookie|authorization|proxy-authorization)\s*:\s*\S+")
+_ABS_PATH_RE = re.compile(r"(?:^|[^\w])(?:[A-Za-z]:[\\/]|\\\\|[\\/])[^\r\n\"'<>|?*]+")
+
+
+def validate_public_json(value: Any, *, name: str = "payload") -> None:
+    """校验 JSON 可序列化性，且不允许出现凭据泄漏模式。
+
+    在 :func:`validate_json` 的基础上追加扫描：递归检查每个字符串，若它
+    看起来像 URL（https?://），则拒绝含查询参数凭据（token/api_key 等）或
+    ``user:pass@`` 的 URL；以 ``Cookie:/Authorization:`` 开头的整串拒绝；
+    形如 Windows 盘符 / UNC / 根目录的绝对路径字符串拒绝。
+
+    用于会持久化下载源/结果/信息的字段（source_ref / result / info），
+    防止带 token 的下载 URL、Cookie、Authorization、绝对路径落入数据库。
+    """
+    validate_json(value, name=name)
+
+    def _walk(node: Any) -> None:
+        if isinstance(node, dict):
+            for item in node.values():
+                _walk(item)
+        elif isinstance(node, (list, tuple)):
+            for item in node:
+                _walk(item)
+        elif isinstance(node, str):
+            text = node
+            if _URL_RE.search(text):
+                if _CREDENTIAL_USERINFO_RE.match(text):
+                    raise ValidationError(f"{name} 包含带凭据的 URL（user:pass@）")
+                if _SECRET_QUERY_PARAM_RE.search(text):
+                    raise ValidationError(f"{name} 的 URL 包含敏感查询参数（token/api_key 等）")
+            elif _HEADER_SECRET_RE.match(text.strip()):
+                raise ValidationError(f"{name} 包含 Cookie/Authorization 头")
+            elif _ABS_PATH_RE.match(text.strip()):
+                raise ValidationError(f"{name} 包含绝对路径: {text[:80]!r}")
+
+    _walk(value)
+
+
+# ---------------------------------------------------------------------------
 # 相对路径
 # ---------------------------------------------------------------------------
 
@@ -215,6 +273,102 @@ def assert_transition(old: JobState, new: JobState) -> None:
     if new_s not in ALLOWED_STATE_TRANSITIONS.get(old_s, set()):
         raise InvalidStateTransitionError(
             f"非法状态迁移: {old_s.value} -> {new_s.value}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# LoRA 资产 / 下载任务状态
+# ---------------------------------------------------------------------------
+
+class LoraAssetState(str, Enum):
+    """本地库资产状态。隔离不删除权重文件，只移动并记录隔离后相对路径。"""
+
+    INSTALLED = "installed"
+    QUARANTINED = "quarantined"
+
+    def __str__(self) -> str:  # pragma: no cover - 便利方法
+        return self.value
+
+
+class LoraDownloadState(str, Enum):
+    """LoRA 下载任务状态机。"""
+
+    QUEUED = "queued"
+    RESOLVING = "resolving"
+    DOWNLOADING = "downloading"
+    PROFILING = "profiling"
+    REFRESHING = "refreshing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    INTERRUPTED = "interrupted"
+
+    def __str__(self) -> str:  # pragma: no cover - 便利方法
+        return self.value
+
+
+DOWNLOAD_ACTIVE_STATES = frozenset({
+    LoraDownloadState.QUEUED,
+    LoraDownloadState.RESOLVING,
+    LoraDownloadState.DOWNLOADING,
+    LoraDownloadState.PROFILING,
+    LoraDownloadState.REFRESHING,
+})
+
+DOWNLOAD_TERMINAL_STATES = frozenset({
+    LoraDownloadState.COMPLETED,
+    LoraDownloadState.FAILED,
+    LoraDownloadState.CANCELLED,
+    LoraDownloadState.INTERRUPTED,
+})
+
+DOWNLOAD_STATE_TRANSITIONS: Dict[LoraDownloadState, set] = {
+    LoraDownloadState.QUEUED: {
+        LoraDownloadState.RESOLVING,
+        LoraDownloadState.CANCELLED,
+        LoraDownloadState.FAILED,
+        LoraDownloadState.INTERRUPTED,
+    },
+    LoraDownloadState.RESOLVING: {
+        LoraDownloadState.DOWNLOADING,
+        LoraDownloadState.CANCELLED,
+        LoraDownloadState.FAILED,
+        LoraDownloadState.INTERRUPTED,
+    },
+    LoraDownloadState.DOWNLOADING: {
+        LoraDownloadState.PROFILING,
+        LoraDownloadState.CANCELLED,
+        LoraDownloadState.FAILED,
+        LoraDownloadState.INTERRUPTED,
+    },
+    LoraDownloadState.PROFILING: {
+        LoraDownloadState.REFRESHING,
+        LoraDownloadState.COMPLETED,
+        LoraDownloadState.CANCELLED,
+        LoraDownloadState.FAILED,
+        LoraDownloadState.INTERRUPTED,
+    },
+    LoraDownloadState.REFRESHING: {
+        LoraDownloadState.COMPLETED,
+        LoraDownloadState.CANCELLED,
+        LoraDownloadState.FAILED,
+        LoraDownloadState.INTERRUPTED,
+    },
+    LoraDownloadState.COMPLETED: set(),
+    LoraDownloadState.FAILED: {LoraDownloadState.QUEUED},  # 重试
+    LoraDownloadState.CANCELLED: {LoraDownloadState.QUEUED},  # 重新排队
+    LoraDownloadState.INTERRUPTED: {LoraDownloadState.QUEUED},  # 用户重试
+}
+
+
+def assert_download_transition(
+    old: LoraDownloadState, new: LoraDownloadState
+) -> None:
+    """校验下载任务状态迁移，非法时抛出 :class:`InvalidStateTransitionError`。"""
+    old_s, new_s = LoraDownloadState(old), LoraDownloadState(new)
+    if new_s not in DOWNLOAD_STATE_TRANSITIONS.get(old_s, set()):
+        raise InvalidStateTransitionError(
+            f"非法下载任务状态迁移: {old_s.value} -> {new_s.value}"
         )
 
 
@@ -333,6 +487,106 @@ class LoraProfileRecord:
             "display_key": self.display_key,
             "profile": self.profile,
             "updated_at": self.updated_at,
+        }
+
+
+@dataclass
+class LoraAssetRecord:
+    """lora_assets 表一行（(model_family, filename) 唯一）。
+
+    只记录索引与相对路径；权重文件本身不受本层删除/改写。隔离时
+    quarantine_relpath 记录隔离后的相对路径，恢复只能回原位。
+    """
+
+    id: int
+    model_family: str
+    filename: str
+    comfy_key: str = ""
+    display_name: str = ""
+    source: str = "local"
+    model_id: Optional[int] = None
+    version_id: Optional[int] = None
+    preview_key: Optional[str] = None
+    state: str = "installed"
+    quarantine_relpath: Optional[str] = None
+    disabled: bool = False
+    disable_reason: Optional[str] = None
+    info: Dict[str, Any] = field(default_factory=dict)
+    installed_at: Optional[str] = None
+    created_at: str = ""
+    updated_at: str = ""
+
+    @property
+    def state_enum(self) -> LoraAssetState:
+        return LoraAssetState(self.state)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "model_family": self.model_family,
+            "filename": self.filename,
+            "comfy_key": self.comfy_key,
+            "display_name": self.display_name,
+            "source": self.source,
+            "model_id": self.model_id,
+            "version_id": self.version_id,
+            "preview_key": self.preview_key,
+            "state": self.state,
+            "quarantine_relpath": self.quarantine_relpath,
+            "disabled": self.disabled,
+            "disable_reason": self.disable_reason,
+            "info": self.info,
+            "installed_at": self.installed_at,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+
+@dataclass
+class LoraDownloadJobRecord:
+    """lora_download_jobs 表一行（result_id 主键）。
+
+    source_ref / result / progress 均为已验证的公开 JSON（不含带 token 的
+    下载 URL、Cookie、Authorization、绝对路径）。
+    """
+
+    result_id: str
+    state: str = "queued"
+    family: str = "illustrious"
+    alias: str = ""
+    source: str = "civitai"
+    source_ref: Dict[str, Any] = field(default_factory=dict)
+    progress: Dict[str, Any] = field(default_factory=dict)
+    result: Dict[str, Any] = field(default_factory=dict)
+    part_files: List[str] = field(default_factory=list)
+    error: Optional[str] = None
+    request_timeout: int = 60
+    created_at: str = ""
+    updated_at: str = ""
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+
+    @property
+    def state_enum(self) -> LoraDownloadState:
+        return LoraDownloadState(self.state)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "result_id": self.result_id,
+            "state": self.state,
+            "family": self.family,
+            "alias": self.alias,
+            "source": self.source,
+            "source_ref": self.source_ref,
+            "progress": self.progress,
+            "result": self.result,
+            "part_files": list(self.part_files),
+            "error": self.error,
+            "request_timeout": self.request_timeout,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
         }
 
 
