@@ -50,7 +50,7 @@ export class SettingsView {
       ]),
       el("div", { class: "settings-layout" }, [
         el("nav", { class: "settings-nav", "aria-label": "设置分类" }, [
-          ["comfyui", "ComfyUI 连接"], ["tls", "TLS"], ["auth", "认证与密钥"], ["ai_provider", "AI 提供商"], ["defaults", "默认参数"], ["ui", "界面"], ["about", "关于与更新"],
+          ["comfyui", "ComfyUI 连接"], ["tls", "TLS"], ["auth", "认证与密钥"], ["ai_provider", "AI 提供商"], ["lora", "LoRA"], ["defaults", "默认参数"], ["ui", "界面"], ["about", "关于与更新"],
         ].map(([id, label]) => {
           const b = el("button", { type: "button", "aria-current": this.section === id ? "true" : "false", dataset: { sec: id } }, esc(label));
           b.addEventListener("click", () => this.activateSection(id));
@@ -139,6 +139,32 @@ export class SettingsView {
             ]),
           ]),
           el("button", { class: "btn btn-sm", id: "s-test", type: "button" }, [ic("refresh"), esc("测试连接")]),
+        ]),
+      ]),
+    ];
+  }
+
+  /* ---------- LoRA 下载 ---------- */
+  sec_lora() {
+    const l = this.settings?.lora_download || {};
+    return [
+      el("div", { class: "section-card" }, [
+        el("div", { class: "sec-head" }, [el("h3", {}, "LoRA 下载")]),
+        el("div", { class: "sec-body" }, [
+          el("div", { class: "field" }, [
+            el("label", { for: "s-lora-mode" }, "下载模式"),
+            this.select("s-lora-mode", [
+              ["auto", "自动"],
+              ["local", "本地下载"],
+              ["comfyui_bridge", "ComfyUI Bridge"],
+            ], l.mode || "auto"),
+            el("span", { class: "hint" }, "auto：填了本地目录就本地下载，否则交给 ComfyUI 所在机器下载。"),
+          ]),
+          el("div", { class: "field" }, [
+            el("label", { for: "s-lora-dir" }, "本地下载目录"),
+            this.input("s-lora-dir", l.local_dir || "", { placeholder: "ComfyUI 的 models/loras 目录", autocomplete: "off", spellcheck: "false" }),
+            el("span", { class: "hint" }, "必须指向 ComfyUI 实际读取的 models/loras；跨机器建议使用 ComfyUI Bridge，可留空。"),
+          ]),
         ]),
       ]),
     ];
@@ -646,6 +672,11 @@ export class SettingsView {
         workflow: val("sd-workflow")?.trim() || null,
         width: parseInt(val("sd-w"), 10) || undefined,
         height: parseInt(val("sd-h"), 10) || undefined,
+      };
+    } else if (section === "lora") {
+      patch.lora_download = {
+        mode: val("s-lora-mode") || "auto",
+        local_dir: val("s-lora-dir")?.trim() || "",
       };
     } else if (section === "ui") {
       patch.ui = { reduced_motion: checked("s-reduced") };

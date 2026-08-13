@@ -7,6 +7,7 @@ import { GenerateView } from "./views/generate.js";
 import { HistoryView } from "./views/history.js";
 import { FavoritesView } from "./views/favorites.js";
 import { ModelsView } from "./views/models.js";
+import { LoraLibraryView } from "./views/lora.js";
 import { SettingsView } from "./views/settings.js";
 import { DiagnosticsView } from "./views/diagnostics.js";
 import { LabView } from "./views/lab.js";
@@ -16,6 +17,7 @@ const ROUTES = [
   { id: "history", label: "历史", icon: "history", ctor: HistoryView },
   { id: "favorites", label: "收藏", icon: "fav", ctor: FavoritesView },
   { id: "models", label: "模型与 LoRA", icon: "model", ctor: ModelsView },
+  { id: "lora", label: "LoRA 库", icon: "wand", ctor: LoraLibraryView },
   { id: "settings", label: "设置", icon: "gear", ctor: SettingsView },
   { id: "diagnostics", label: "诊断", icon: "diag", ctor: DiagnosticsView },
 ];

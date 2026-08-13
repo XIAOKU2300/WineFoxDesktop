@@ -524,3 +524,47 @@ def merge_prompt_tags(prompt: str, tags: Iterable[str]) -> str:
             parts.append(value)
             seen.add(value.casefold())
     return ", ".join(parts)
+
+
+def import_lora_profiles_into_db(
+    db: Any,
+    data_root: Path,
+    *,
+    env: Mapping[str, str] | None = None,
+    auto_cache_key: str = "",
+    app_events: Any | None = None,
+) -> int:
+    """把 JSON LoRA 档案幂等导入 SQLite（lora_profiles 作为唯一真相源）。
+
+    复用 :func:`load_lora_profiles` 的合并语义（含别名/角色提示词/生成缓存），
+    按 (model_family, normalized_key) upsert；重复运行不产生重复行。
+    返回导入/更新的条目数。
+    """
+    from winefox_core.storage import LoraProfileStore
+
+    loaded = load_lora_profiles(Path(data_root), env, auto_cache_key=auto_cache_key)
+    store = LoraProfileStore(db)
+    imported = 0
+    added = 0
+    for family, items in loaded.profiles.items():
+        for key, profile in items.items():
+            if not isinstance(profile, dict):
+                continue
+            try:
+                if store.get(family, str(key)) is None:
+                    added += 1
+                store.save(family, str(key), profile)
+                imported += 1
+            except Exception as exc:  # 单条坏数据不阻断整体导入
+                logger.warning(
+                    "LoRA 档案导入失败 family=%s key=%s: %s", family, key, exc
+                )
+    # 只在真正新增（非稳态重复导入）时记录事件，避免每次启动刷事件
+    if added and app_events is not None:
+        try:
+            app_events.record(
+                "lora.profiles.imported", {"count": imported, "added": added}
+            )
+        except Exception:  # pragma: no cover - 事件写入失败不应阻断导入
+            logger.warning("LoRA 档案导入事件写入失败", exc_info=True)
+    return imported

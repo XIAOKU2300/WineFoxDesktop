@@ -218,11 +218,152 @@ async def handle_get_lora_download(request: web.Request) -> web.Response:
     return _json(await engine.get_lora_download(job_id))
 
 
+async def handle_lora_preview(request: web.Request) -> web.Response:
+    """GET /api/v1/lora/preview：同源返回 LoRA 预览图字节。
+
+    token 即缓存键；图片数据一律来自后端 LoraPreviewService 校验结果，
+    绝不直接加载或转发第三方 URL。
+    """
+    engine = _ctx(request).get("engine")
+    if engine is None or not hasattr(engine, "lora_preview"):
+        raise AppError(503, "lora_preview_not_configured", "LoRA 预览服务未配置")
+    token = str(request.query.get("token") or "").strip()
+    if not token or len(token) > 128:
+        raise AppError(404, "lora_preview_not_found", "预览图不存在或已过期")
+    service = engine.lora_preview
+    if service is None:
+        raise AppError(503, "lora_preview_not_configured", "LoRA 预览服务未配置")
+    result = await service.fetch(token)
+    if result is None:
+        raise AppError(404, "lora_preview_not_found", "预览图不存在或已过期")
+    content_type, data = result
+    if not isinstance(content_type, str) or not isinstance(data, bytes):
+        raise AppError(500, "invalid_engine_result", "引擎返回了无效的预览图数据")
+    logger.info("LoRA 预览已返回: token=%s...", token[:8])
+    return web.Response(
+        body=data,
+        content_type=content_type,
+        headers={
+            "Cache-Control": "private, max-age=300",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 async def handle_probe_lora_bridge(request: web.Request) -> web.Response:
     engine = _ctx(request).get("engine")
     if engine is None or not hasattr(engine, "probe_lora_bridge"):
         raise AppError(503, "lora_download_not_configured", "LoRA 下载服务未配置")
     return _json(await engine.probe_lora_bridge())
+
+
+# ---------------- local lora library ----------------
+
+def _library_id(request: web.Request) -> int:
+    raw = str(request.match_info.get("id") or "").strip()
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValidationError("LoRA 资产 ID 无效") from exc
+    if value <= 0:
+        raise ValidationError("LoRA 资产 ID 无效")
+    return value
+
+
+async def handle_lora_library_list(request: web.Request) -> web.Response:
+    engine = _ctx(request).get("engine")
+    if engine is None or not hasattr(engine, "lora_library_list"):
+        raise AppError(503, "lora_library_not_configured", "本地 LoRA 库服务未配置")
+    family = str(request.query.get("family") or "").strip().lower() or None
+    if family is not None and family not in {"anima", "illustrious"}:
+        raise ValidationError("模型族必须是 anima 或 illustrious")
+    return _json({"items": engine.lora_library_list(family)})
+
+
+async def handle_lora_library_get(request: web.Request) -> web.Response:
+    engine = _ctx(request).get("engine")
+    if engine is None or not hasattr(engine, "lora_library_get"):
+        raise AppError(503, "lora_library_not_configured", "本地 LoRA 库服务未配置")
+    return _json(engine.lora_library_get(_library_id(request)))
+
+
+async def handle_lora_library_update(request: web.Request) -> web.Response:
+    engine = _ctx(request).get("engine")
+    if engine is None or not hasattr(engine, "lora_library_update"):
+        raise AppError(503, "lora_library_not_configured", "本地 LoRA 库服务未配置")
+    body = await _json_body(request)
+    if not isinstance(body, dict):
+        raise ValidationError("LoRA 编辑请求体必须是 JSON 对象")
+    aliases = body.get("aliases")
+    role = body.get("role")
+    triggers = body.get("triggers")
+    disabled = body.get("disabled")
+    if aliases is not None and (not isinstance(aliases, list) or not all(isinstance(x, str) for x in aliases)):
+        raise ValidationError("aliases 必须是字符串数组")
+    if triggers is not None and (not isinstance(triggers, list) or not all(isinstance(x, str) for x in triggers)):
+        raise ValidationError("triggers 必须是字符串数组")
+    if role is not None and not isinstance(role, str):
+        raise ValidationError("role 必须是字符串")
+    if disabled is not None and not isinstance(disabled, bool):
+        raise ValidationError("disabled 必须是布尔值")
+    return _json(
+        engine.lora_library_update(
+            _library_id(request),
+            aliases=aliases,
+            role=role,
+            triggers=triggers,
+            disabled=disabled,
+        )
+    )
+
+
+async def handle_lora_library_delete(request: web.Request) -> web.Response:
+    engine = _ctx(request).get("engine")
+    if engine is None or not hasattr(engine, "lora_library_delete"):
+        raise AppError(503, "lora_library_not_configured", "本地 LoRA 库服务未配置")
+    engine.lora_library_delete(_library_id(request))
+    return _json({"ok": True})
+
+
+async def handle_lora_library_quarantine(request: web.Request) -> web.Response:
+    engine = _ctx(request).get("engine")
+    if engine is None or not hasattr(engine, "lora_library_quarantine"):
+        raise AppError(503, "lora_library_not_configured", "本地 LoRA 库服务未配置")
+    body = await _json_body(request, required=False)
+    reason = str(body.get("reason") or "").strip() if isinstance(body, dict) else ""
+    if len(reason) > 200:
+        raise ValidationError("隔离原因不能超过 200 个字符")
+    return _json(engine.lora_library_quarantine(_library_id(request), reason=reason))
+
+
+async def handle_lora_library_restore(request: web.Request) -> web.Response:
+    engine = _ctx(request).get("engine")
+    if engine is None or not hasattr(engine, "lora_library_restore"):
+        raise AppError(503, "lora_library_not_configured", "本地 LoRA 库服务未配置")
+    return _json(engine.lora_library_restore(_library_id(request)))
+
+
+async def handle_lora_library_match_preview(request: web.Request) -> web.Response:
+    engine = _ctx(request).get("engine")
+    if engine is None or not hasattr(engine, "lora_library_match_preview"):
+        raise AppError(503, "lora_library_not_configured", "本地 LoRA 库服务未配置")
+    body = await _json_body(request)
+    if not isinstance(body, dict):
+        raise ValidationError("匹配预览请求体必须是 JSON 对象")
+    prompt = str(body.get("prompt") or "").strip()
+    family = str(body.get("family") or "illustrious").strip().lower()
+    if not prompt or len(prompt) > 2000:
+        raise ValidationError("提示词长度必须为 1-2000 个字符")
+    if family not in {"anima", "illustrious"}:
+        raise ValidationError("模型族必须是 anima 或 illustrious")
+    limit = 8
+    raw_limit = body.get("limit")
+    if raw_limit is not None:
+        try:
+            limit = int(raw_limit)
+        except (TypeError, ValueError) as exc:
+            raise ValidationError("limit 必须是整数") from exc
+    return _json(await engine.lora_library_match_preview(prompt, family=family, limit=max(1, min(limit, 20))))
 
 
 # ---------------- uploads ----------------
@@ -586,7 +727,15 @@ def register_routes(app: web.Application) -> None:
     app.router.add_get("/api/v1/lora/search", handle_lora_search)
     app.router.add_post("/api/v1/lora/downloads", handle_start_lora_download)
     app.router.add_get("/api/v1/lora/downloads/{id}", handle_get_lora_download)
+    app.router.add_get("/api/v1/lora/preview", handle_lora_preview)
     app.router.add_post("/api/v1/lora/bridge/probe", handle_probe_lora_bridge)
+    app.router.add_get("/api/v1/lora/library", handle_lora_library_list)
+    app.router.add_get("/api/v1/lora/library/{id}", handle_lora_library_get)
+    app.router.add_patch("/api/v1/lora/library/{id}", handle_lora_library_update)
+    app.router.add_delete("/api/v1/lora/library/{id}", handle_lora_library_delete)
+    app.router.add_post("/api/v1/lora/library/{id}/quarantine", handle_lora_library_quarantine)
+    app.router.add_post("/api/v1/lora/library/{id}/restore", handle_lora_library_restore)
+    app.router.add_post("/api/v1/lora/library/match-preview", handle_lora_library_match_preview)
     app.router.add_post("/api/v1/uploads", handle_upload)
     app.router.add_get("/api/v1/uploads/{id}", handle_get_upload)
     app.router.add_post("/api/v1/jobs", handle_submit_job)

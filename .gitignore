@@ -44,6 +44,9 @@ html_render_cache/
 .env
 .env.*
 
+# CodeGraph index（本地索引，不提交）
+.codegraph/
+
 # WineFox Desktop local state and build outputs
 settings.json
 settings.json.bak

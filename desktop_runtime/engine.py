@@ -20,7 +20,15 @@ from desktop_backend.errors import AppError
 from desktop_backend.models import HistoryEntry, ImageData, JobRecord
 from winefox_core.comfyui_executor import ComfyUIExecutor
 from winefox_core.comfyui_types import AuthMode, ComfyUIAuth, ComfyUIError, ComfyUIServerConfig, ExecutionSnapshot
-from winefox_core.storage import Database, FavoriteStore, HistoryStore
+from winefox_core.storage import (
+    AppEventStore,
+    Database,
+    FavoriteStore,
+    HistoryStore,
+    LoraAssetStore,
+    LoraDownloadJobStore,
+    LoraProfileStore,
+)
 from winefox_core.storage_models import utcnow_iso
 from winefox_core.prompt_service import PromptService
 from winefox_core.lora_service import LoraService, normalize_lora_key
@@ -29,8 +37,11 @@ from winefox_core.workflow_service import WorkflowEntry, WorkflowService
 from .config_adapter import DesktopConfigAdapter
 from .llm_client import OpenAICompatibleLLMClient, resolve_provider
 from .lora_download import LoraDownloadService
+from .lora_library import LoraLibraryService
+from .lora_preview import LoraPreviewService
 from .lora_profiles import (
     cache_generated_lora_profiles,
+    import_lora_profiles_into_db,
     load_lora_profiles,
     lora_metadata_cache_key,
     merge_prompt_tags,
@@ -136,6 +147,18 @@ class DesktopEngine:
         self._reload_lora_profiles()
         self.history_store = HistoryStore(database)
         self.favorite_store = FavoriteStore(database)
+        self.app_event_store = AppEventStore(database)
+        self.lora_asset_store = LoraAssetStore(database)
+        self.lora_download_jobs = LoraDownloadJobStore(database)
+        try:
+            import_lora_profiles_into_db(
+                database,
+                self.data_root,
+                auto_cache_key=self._lora_metadata_cache_key,
+                app_events=self.app_event_store,
+            )
+        except Exception:
+            logger.warning("LoRA 档案导入失败（继续启动）", exc_info=True)
         self._queue: asyncio.Queue[int] = asyncio.Queue(maxsize=20)
         self._worker: asyncio.Task | None = None
         self._accepting = False
@@ -146,11 +169,32 @@ class DesktopEngine:
         self._probe_task: asyncio.Task[dict[str, Any]] | None = None
         self._lora_metadata_task: asyncio.Task[None] | None = None
         self._lora_metadata_attempted: set[str] = set()
+        self.lora_preview = LoraPreviewService(data_root=self.data_root)
         self.lora_download = LoraDownloadService(
+            db=database,
             config=self.config,
             data_root=self.data_root,
             connection_factory=self._connection_config,
             on_installed=self._after_lora_installed,
+            search_service_factory=self._lora_search_service_factory,
+        )
+        self.lora_profile_store = LoraProfileStore(database)
+        self.lora_library = LoraLibraryService(
+            db=database,
+            data_root=self.data_root,
+            asset_store=self.lora_asset_store,
+            profile_store=self.lora_profile_store,
+            service_factory=lambda **kw: self.lora_service,
+        )
+
+    def _lora_search_service_factory(self, *, config: Any, data_root: Path) -> Any:
+        """构造 LoraSearchService，把预览服务注入结果，使搜索结果带 preview_token。"""
+        from .lora_search import LoraSearchService
+
+        return LoraSearchService(
+            config=config,
+            data_root=Path(data_root),
+            preview_service=self.lora_preview,
         )
 
     def _reload_lora_profiles(self) -> None:
@@ -171,6 +215,11 @@ class DesktopEngine:
         if self._accepting:
             return
         self._accepting = True
+        # 重启：把上次未结束的 LoRA 下载任务原子置为 interrupted
+        try:
+            self.lora_download_jobs.mark_interrupted()
+        except Exception:
+            logger.warning("LoRA 下载任务中断标记失败（继续启动）", exc_info=True)
         rows = self.db.connection.execute(
             "SELECT id, state, comfy_prompt_id FROM jobs WHERE state NOT IN ('completed','failed','cancelled','detached') ORDER BY id"
         ).fetchall()
@@ -392,6 +441,41 @@ class DesktopEngine:
         """环境中心装完 Bridge 后调用：清 probe 缓存、强制重探、重载 profiles。"""
         await self._after_lora_installed()
         return {"ok": True, "bridge": await self.probe_lora_bridge()}
+
+    # -- 本地 LoRA 库 ------------------------------------------------------------
+
+    def lora_library_list(self, family: str | None = None) -> list[dict[str, Any]]:
+        return self.lora_library.list(family)
+
+    def lora_library_get(self, asset_id: int) -> dict[str, Any]:
+        return self.lora_library.get(asset_id)
+
+    def lora_library_update(
+        self,
+        asset_id: int,
+        *,
+        aliases: list[str] | None = None,
+        role: str | None = None,
+        triggers: list[str] | None = None,
+        disabled: bool | None = None,
+    ) -> dict[str, Any]:
+        return self.lora_library.update(
+            asset_id, aliases=aliases, role=role, triggers=triggers, disabled=disabled
+        )
+
+    def lora_library_delete(self, asset_id: int) -> None:
+        self.lora_library.delete(asset_id)
+
+    def lora_library_quarantine(self, asset_id: int, *, reason: str = "") -> dict[str, Any]:
+        return self.lora_library.quarantine(asset_id, reason=reason)
+
+    def lora_library_restore(self, asset_id: int) -> dict[str, Any]:
+        return self.lora_library.restore(asset_id)
+
+    async def lora_library_match_preview(
+        self, prompt: str, *, family: str = "illustrious", limit: int = 8
+    ) -> dict[str, Any]:
+        return await self.lora_library.match_preview(prompt, family=family, limit=limit)
 
     async def _after_lora_installed(self) -> None:
         self._last_probe = None
