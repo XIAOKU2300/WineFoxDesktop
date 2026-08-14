@@ -49,8 +49,10 @@ class FakePreview:
     def __init__(self):
         self.registered: list[tuple[str, str, str]] = []
 
-    def register(self, token: str, url: str, source: str = "") -> None:
+    def register(self, token: str, url: str, source: str = "") -> str:
+        token = token or ("b" * 24)
         self.registered.append((token, url, source))
+        return token
 
 
 def _item(name: str, **kwargs) -> dict:
@@ -189,6 +191,26 @@ class SearchFiltering(IsolatedAsyncioTestCase):
 
 
 class SearchParsing(LoraSearchBase):
+    def test_red_source_does_not_receive_civitai_credentials(self):
+        captured = {}
+
+        def red_factory(**kwargs):
+            captured.update(kwargs)
+            return FakeCivitaiClient()
+
+        service = self._make_service(
+            config=FakeConfig(
+                secrets={
+                    "civitai_api_token": "civitai-secret",
+                    "civitai_cookie": "cookie-secret",
+                }
+            ),
+            red_client_factory=red_factory,
+        )
+        service._source_client("civitai_red")
+        self.assertEqual(captured.get("api_token"), "")
+        self.assertEqual(captured.get("cookie"), "")
+
     def test_normalize_term(self):
         service = self._make_service()
         self.assertEqual(service._normalize_civitai_search_term("  【Yae Miko】  "), "Yae Miko")

@@ -275,12 +275,14 @@ class LoraMatchResult:
     matches: list[LoraSelection] = field(default_factory=list)
     multi: bool = False
     connector_found: bool = False
+    connector: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "matches": [m.to_dict() for m in self.matches],
             "multi": self.multi,
             "connector_found": self.connector_found,
+            "connector": self.connector,
         }
 
 
@@ -302,7 +304,7 @@ _CJK_BOUNDARY_CHARS = set("的了着給给畫画绘繪看要想找搜选選用�
 _CJK_BOUNDARY_PHRASES = (
     "来点", "來點", "想看", "要看", "给我", "給我", "帮我", "幫我",
     "画个", "畫個", "画张", "畫張", "画一张", "畫一張", "生成",
-    "找", "搜", "搜索", "导入", "導入", "切换", "切換",
+    "找", "搜", "搜索", "导入", "導入", "切换", "切換", "一个", "一個",
 )
 _CJK_CHUNK_RE = re.compile(r"[\u3400-\u9fff\u3040-\u30ff]+")
 
@@ -323,11 +325,14 @@ def _short_cjk_marker_has_safe_boundary(marker: str, raw_text: str) -> bool:
             start, end = hit.span()
             before = chunk[:start]
             after = chunk[end:]
-            if not before or not after:
+            if not before and not after:
                 return True
-            if before[-1] in _CJK_BOUNDARY_CHARS:
+            if before and (
+                before[-1] in _CJK_BOUNDARY_CHARS
+                or any(before.endswith(phrase) for phrase in _CJK_BOUNDARY_PHRASES)
+            ):
                 return True
-            if any(before.endswith(phrase) for phrase in _CJK_BOUNDARY_PHRASES):
+            if after and after[0] in _CJK_BOUNDARY_CHARS:
                 return True
     return False
 
@@ -966,10 +971,11 @@ class LoraService:
                 break
 
         # 多角色判定：>=2 命中且存在连接词证据或显式多角色意图
-        connector_found = self._multi_lora_matches_have_connector(raw_text, selected)
+        connector = self._multi_lora_matches_have_connector(raw_text, selected)
         multi_intent = self.has_multi_character_intent(raw_text)
-        result.multi = len(result.matches) >= 2 and (connector_found or multi_intent)
-        result.connector_found = connector_found
+        result.multi = len(result.matches) >= 2 and (bool(connector) or multi_intent)
+        result.connector_found = bool(connector)
+        result.connector = connector or ""
         return result
 
     def single_match(self, text: str, family: Optional[str] = None, min_score: float = 75.0) -> Optional[LoraSelection]:
@@ -1390,12 +1396,13 @@ class LoraService:
     # -- 多角色连接符（移植原插件 _multi_lora_matches_have_connector）---------------
 
     @staticmethod
-    def _multi_lora_matches_have_connector(text: str, matches: list) -> bool:
+    def _multi_lora_matches_have_connector(text: str, matches: list) -> Optional[str]:
+        """返回相邻命中之间的首个连接词文本；无则 None。"""
         if len(matches or []) < 2:
-            return False
+            return None
         raw = str(text or "")
         if not raw or not _CONNECTOR_RE.search(raw):
-            return False
+            return None
         spans = []
         for match in matches or []:
             profile = match.get("profile")
@@ -1415,9 +1422,10 @@ class LoraService:
         spans.sort(key=lambda item: item[0])
         for left, right in zip(spans, spans[1:]):
             between = raw[left[1]:right[0]]
-            if _CONNECTOR_RE.search(between):
-                return True
-        return False
+            found = _CONNECTOR_RE.search(between)
+            if found:
+                return found.group(0)
+        return None
 
     # -- 多角色触发词（移植原插件 _profile_effective_trigger_prompt / 路由）--------
 
@@ -1491,15 +1499,24 @@ class LoraService:
             pass
         wanted = normalize_lora_key(lora_name)
         if wanted:
+            best = None
             try:
                 for item in base_dir.rglob("*.safetensors"):
                     try:
-                        if item.is_file() and item.stat().st_size > 0 and wanted in normalize_lora_key(item.name):
-                            return item
+                        if not item.is_file() or item.stat().st_size <= 0:
+                            continue
+                        key = normalize_lora_key(item.name)
+                        if not key or wanted not in key:
+                            continue
+                        rank = (0 if normalize_lora_key(item.stem) == wanted else 1, len(key))
+                        if best is None or rank < best[0]:
+                            best = (rank, item)
                     except Exception:
                         continue
             except Exception:
                 pass
+            if best is not None:
+                return best[1]
         return None
 
     @staticmethod

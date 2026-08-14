@@ -479,6 +479,7 @@ class LoraProfileRecord:
     display_key: str
     profile: Dict[str, Any] = field(default_factory=dict)
     updated_at: str = ""
+    revision: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -487,6 +488,7 @@ class LoraProfileRecord:
             "display_key": self.display_key,
             "profile": self.profile,
             "updated_at": self.updated_at,
+            "revision": self.revision,
         }
 
 

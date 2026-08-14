@@ -2,9 +2,10 @@
  * 展示本地资源，并通过后台任务搜索/安装 Civitai LoRA。
  */
 import { el, $, $$, ic, esc, sanitizeResourceName, fmtBytes, loadingState, copyText, toast } from "../utils.js";
-import { api } from "../api.js";
+import { api, loraPreviewUrl } from "../api.js";
 import { store } from "../store.js";
 import { EnvSetupView } from "../setup.js";
+import { ensureR18Consent } from "./lora.js";
 
 export class ModelsView {
   constructor() {
@@ -19,6 +20,7 @@ export class ModelsView {
     this.paginationState = null;
     this.onlineQuery = "";
     this.onlineFamily = store.get("settings")?.defaults?.family || "illustrious";
+    this.onlineSources = ["civitai", "huggingface"];
     this.onlineResults = [];
     this.onlineLoading = false;
     this.searchController = null;
@@ -132,6 +134,16 @@ export class ModelsView {
             el("option", { value: "anima", selected: this.onlineFamily === "anima" }, "Anima"),
           ]),
         ]),
+        el("div", { class: "lora-source-select", id: "lora-source-select" }, [
+          ...["civitai", "huggingface", "civitai_red"].map((key) => {
+            const label = key === "civitai" ? "Civitai" : key === "huggingface" ? "Hugging Face" : "Civitai Red (R18+)";
+            const checked = this.onlineSources.includes(key);
+            return el("label", { class: "lora-source-chip" }, [
+              el("input", { type: "checkbox", value: key, checked, dataset: { loraSource: key } }),
+              el("span", {}, esc(label)),
+            ]);
+          }),
+        ]),
         el("button", { class: "btn btn-primary lora-search-submit", type: "submit", disabled: this.onlineLoading }, [ic("search"), esc(this.onlineLoading ? "搜索中…" : "搜索")]),
       ]),
       el("div", { class: "lora-channel-status hint", id: "lora-channel-status" }, this.downloadHint(capabilities)),
@@ -140,6 +152,17 @@ export class ModelsView {
     $("#lora-search-form", panel)?.addEventListener("submit", (event) => {
       event.preventDefault();
       void this.searchOnlineLoras();
+    });
+    panel.addEventListener("change", (event) => {
+      const box = event.target.closest("[data-lora-source]");
+      if (!box) return;
+      const key = box.value;
+      if (box.checked) {
+        if (!this.onlineSources.includes(key)) this.onlineSources.push(key);
+      } else {
+        this.onlineSources = this.onlineSources.filter((item) => item !== key);
+      }
+      if (this.onlineSources.length === 0) this.onlineSources = ["civitai"];
     });
     $("#lora-bridge-probe", panel)?.addEventListener("click", (event) => void this.probeDownloadChannel(event.currentTarget));
     panel.addEventListener("click", (event) => {
@@ -167,7 +190,11 @@ export class ModelsView {
   onlineResultRow(item) {
     const words = Array.isArray(item.trained_words) ? item.trained_words.filter(Boolean).slice(0, 6) : [];
     const meta = [item.base_model || "未知底模", item.version_name, item.download_count ? `${item.download_count.toLocaleString()} 次下载` : ""].filter(Boolean).join(" · ");
+    const thumb = item.preview_token ? el("div", { class: "lora-result-thumb" }, [
+      el("img", { src: loraPreviewUrl(item.preview_token), alt: esc(item.name || "LoRA 预览"), loading: "lazy", referrerpolicy: "no-referrer" }),
+    ]) : null;
     return el("article", { class: "lora-search-result", dataset: { resultId: item.id } }, [
+      thumb,
       el("div", { class: "lora-result-main" }, [
         el("div", { class: "row wrap gap-2" }, [
           el("h4", { class: "lora-result-title" }, esc(item.name || "Civitai LoRA")),
@@ -193,6 +220,13 @@ export class ModelsView {
     if (!query) { toast("先输入 LoRA 名称或角色别称", "warn"); return; }
     this.onlineQuery = query;
     this.onlineFamily = family;
+    this.onlineSources = [...($("#lora-source-select", this.root)?.querySelectorAll("[data-lora-source]:checked") || [])].map((box) => box.value);
+    if (!this.onlineSources.length) this.onlineSources = ["civitai"];
+    let adultConsent = false;
+    if (this.onlineSources.includes("civitai_red")) {
+      adultConsent = await ensureR18Consent();
+      if (!adultConsent) return;
+    }
     this.onlineLoading = true;
     this.searchController?.abort();
     const controller = new AbortController();
@@ -200,9 +234,14 @@ export class ModelsView {
     const timeout = setTimeout(() => controller.abort(), 45000);
     this.renderBody();
     try {
-      const result = await api.searchLoras(query, family, { signal: controller.signal });
+      const result = await api.searchLoras(query, family, {
+        signal: controller.signal,
+        sources: this.onlineSources,
+        adult_consent: adultConsent,
+      });
       if (controller.signal.aborted) return;
       this.onlineResults = Array.isArray(result?.items) ? result.items : [];
+      if (result?.nsfw_hidden) toast(`已隐藏 ${result.nsfw_hidden} 条敏感结果`, "warn");
       if (!this.onlineResults.length) toast("没有找到匹配当前模型族的 LoRA", "warn");
     } catch (error) {
       if (error?.name !== "AbortError") toast("LoRA 搜索失败：" + error.message, "err");
@@ -235,10 +274,16 @@ export class ModelsView {
     const row = button.closest(".lora-search-result");
     const state = $(".lora-download-state", row);
     const alias = $(".lora-alias-input", row)?.value?.trim() || "";
+    const item = this.onlineResults.find((entry) => String(entry.id) === button.dataset.loraDownload);
+    let adultConsent = false;
+    if (item?.nsfw) {
+      if (!(await ensureR18Consent())) { state?.replaceChildren(); return; }
+      adultConsent = true;
+    }
     button.disabled = true;
     state?.replaceChildren(loadingState("正在创建下载任务", { compact: true }));
     try {
-      const job = await api.startLoraDownload(button.dataset.loraDownload, alias);
+      const job = await api.startLoraDownload(button.dataset.loraDownload, alias, { adult_consent: adultConsent });
       this.pollLoraDownload(job.id, row, button);
     } catch (error) {
       button.disabled = false;

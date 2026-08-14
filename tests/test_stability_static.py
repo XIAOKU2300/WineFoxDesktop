@@ -2268,7 +2268,7 @@ class StabilityStaticTests(unittest.TestCase):
         self.assertIn("http://127.0.0.1:7890", main_text + docs_text)
         self.assertIn("http://CLASH_LAN_IP:7890", main_text + docs_text)
         self.assertIn("/comfy_civitai bridge", main_text)
-        self.assertIn("BRIDGE_VERSION = \"1.4.1\"", bridge_text)
+        self.assertIn("BRIDGE_VERSION = \"1.4.2\"", bridge_text)
         self.assertIn("import ipaddress", bridge_text)
         self.assertIn("@routes.post(\"/astrbot/lora/fetch\")", bridge_text)
         self.assertIn("@routes.post(\"/astrbot/lora/download\")", bridge_text)
@@ -2281,7 +2281,14 @@ class StabilityStaticTests(unittest.TestCase):
         self.assertIn("subject_audit_endpoint", bridge_text)
         self.assertIn("allow_local_requests_without_token", bridge_text)
         self.assertIn("def _request_is_local_or_private(", bridge_text)
-        self.assertIn("ip.is_loopback or ip.is_private or ip.is_link_local", bridge_text)
+        self.assertIn("return bool(ip.is_loopback)", bridge_text)
+        self.assertNotIn('request.query.get("token")', bridge_text)
+        self.assertNotIn('payload.get("token")', bridge_text)
+        self.assertIn("if not _host_resolves_public(url):", bridge_text)
+        self.assertIn(
+            "trace_configs=_redirect_trace_configs(require_allowlisted=True)",
+            bridge_text,
+        )
         self.assertIn("local_auth_bypass", bridge_text)
         self.assertIn("TARGET_TYPE_ALIASES", bridge_text)
         self.assertIn("controlnet_aux_ckpts", bridge_text)

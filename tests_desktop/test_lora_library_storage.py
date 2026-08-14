@@ -467,18 +467,18 @@ class TestImportProfilesIntoDb(LoraLibraryStorageBase):
         rec = store.get("illustrious", "anmi style")
         self.assertIsNotNone(rec)
         self.assertEqual(rec.profile["lora"], "anmi_style.safetensors")
-        events1 = len(self.events.list_events(event_type="lora.profiles.imported"))
+        events1 = len(self.events.list_events(event_type="lora.profiles.migrated"))
 
-        # 再次导入：幂等，行数不变，不新增事件
+        # 源摘要未变 -> 跳过整体导入（返回 0），不新增事件，不覆盖已有档案
         imported2 = import_lora_profiles_into_db(
             self.db, root, app_events=self.events
         )
-        self.assertEqual(imported2, imported)
+        self.assertEqual(imported2, 0)
         rows = self.db.connection.execute(
             "SELECT COUNT(*) FROM lora_profiles WHERE model_family='illustrious'"
         ).fetchone()[0]
         self.assertEqual(rows, 1)
-        events2 = len(self.events.list_events(event_type="lora.profiles.imported"))
+        events2 = len(self.events.list_events(event_type="lora.profiles.migrated"))
         self.assertEqual(events2, events1)
 
     def test_new_entries_record_event(self):
@@ -486,10 +486,10 @@ class TestImportProfilesIntoDb(LoraLibraryStorageBase):
         root.mkdir()
         self._seed_json(root)
         import_lora_profiles_into_db(self.db, root, app_events=self.events)
-        # 新增一条后再导入 -> 事件 +1
+        # 源摘要变化 -> 重跑迁移：只插入缺失条目，记录事件 added=1
         self._seed_json(root, {"nagi": {"lora": "nagi.safetensors", "character": "Nagi"}})
         import_lora_profiles_into_db(self.db, root, app_events=self.events)
-        events = self.events.list_events(event_type="lora.profiles.imported")
+        events = self.events.list_events(event_type="lora.profiles.migrated")
         self.assertEqual(len(events), 2)
         self.assertEqual(events[-1].payload["added"], 1)
 
@@ -510,6 +510,40 @@ class TestImportProfilesIntoDb(LoraLibraryStorageBase):
         imported = import_lora_profiles_into_db(self.db, root)
         self.assertEqual(imported, 1)
         self.assertIsNotNone(LoraProfileStore(self.db).get("illustrious", "good"))
+
+    def test_migration_never_overwrites_existing_sqlite_profile(self) -> None:
+        root = self.tmp / "data_root4"
+        root.mkdir()
+        store = LoraProfileStore(self.db)
+        # 先有用户编辑的 SQLite 档案（与 JSON 同名）
+        store.save("illustrious", "anmi style", {
+            "lora": "anmi_style.safetensors",
+            "character": "Anmi",
+            "aliases": ["user_edited_alias"],
+            "source": "sqlite",
+        })
+        self._seed_json(root)  # JSON 里是 character "Anmi"、aliases ["anmi","anmi_style"]
+        import_lora_profiles_into_db(self.db, root)
+        rec = store.get("illustrious", "anmi style")
+        self.assertEqual(rec.profile["aliases"], ["user_edited_alias"])
+        self.assertEqual(rec.profile["source"], "sqlite")
+
+    def test_migration_does_not_duplicate_same_lora_under_different_key(self) -> None:
+        root = self.tmp / "data_root5"
+        root.mkdir()
+        store = LoraProfileStore(self.db)
+        store.save("illustrious", "custom display key", {
+            "lora": "anmi_style.safetensors",
+            "character": "Anmi",
+            "aliases": ["user_alias"],
+            "source": "sqlite",
+        })
+        self._seed_json(root)
+        import_lora_profiles_into_db(self.db, root)
+        records = store.get_family("illustrious")
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].display_key, "custom display key")
+        self.assertEqual(records[0].profile["aliases"], ["user_alias"])
 
 
 if __name__ == "__main__":

@@ -117,7 +117,7 @@
 | ComfyUI-GGUF | `city96/ComfyUI-GGUF` | full/wan | 同上 | 同上 |
 | ComfyUI-VideoHelperSuite | `Kosinkadink/ComfyUI-VideoHelperSuite` | full/wan | 同上 | 同上 |
 | ComfyUI-WanMoeKSampler | `stduhpf/ComfyUI-WanMoeKSampler` | full/wan | 同上 | 同上 |
-| ComfyUI-AstrBot-LoraBridge | **本地打包源**（见 3.8） | 所有档位 | 资源打包 | 不打 GitHub，用仓库内 v1.4.1 源 |
+| ComfyUI-AstrBot-LoraBridge | **本地打包源**（见 3.8） | 所有档位 | 资源打包 | 不打 GitHub，用仓库内 v1.4.2 源 |
 
 **依赖（BAT `Install-NodeRequirements` 1098 / `Install-SubjectAuditRequirements` 1126）**：
 - Impact-Pack / Impact-Subpack 的 `requirements.txt` 用目标 Python `pip install`；

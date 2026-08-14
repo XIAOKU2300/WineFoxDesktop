@@ -13,7 +13,7 @@ import re
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from desktop_backend import VERSION
 from desktop_backend.errors import AppError
@@ -29,7 +29,7 @@ from winefox_core.storage import (
     LoraDownloadJobStore,
     LoraProfileStore,
 )
-from winefox_core.storage_models import utcnow_iso
+from winefox_core.storage_models import json_dumps, json_loads, utcnow_iso, validate_public_json
 from winefox_core.prompt_service import PromptService
 from winefox_core.lora_service import LoraService, normalize_lora_key
 from winefox_core.workflow_service import WorkflowEntry, WorkflowService
@@ -38,11 +38,12 @@ from .config_adapter import DesktopConfigAdapter
 from .llm_client import OpenAICompatibleLLMClient, resolve_provider
 from .lora_download import LoraDownloadService
 from .lora_library import LoraLibraryService
+from .lora_llm_match import LoraLlmMatchService
 from .lora_preview import LoraPreviewService
 from .lora_profiles import (
-    cache_generated_lora_profiles,
+    AutoLoraResolution,
+    LoadedLoraProfiles,
     import_lora_profiles_into_db,
-    load_lora_profiles,
     lora_metadata_cache_key,
     merge_prompt_tags,
     profile_from_comfy_metadata,
@@ -144,12 +145,12 @@ class DesktopEngine:
         self._lora_metadata_cache_key = lora_metadata_cache_key(
             self._connection_config().server_address
         )
-        self._reload_lora_profiles()
         self.history_store = HistoryStore(database)
         self.favorite_store = FavoriteStore(database)
         self.app_event_store = AppEventStore(database)
         self.lora_asset_store = LoraAssetStore(database)
         self.lora_download_jobs = LoraDownloadJobStore(database)
+        self.lora_profile_store = LoraProfileStore(database)
         try:
             import_lora_profiles_into_db(
                 database,
@@ -158,7 +159,8 @@ class DesktopEngine:
                 app_events=self.app_event_store,
             )
         except Exception:
-            logger.warning("LoRA 档案导入失败（继续启动）", exc_info=True)
+            logger.warning("LoRA JSON 档案一次性迁移失败（继续启动）", exc_info=True)
+        self._reload_lora_profiles()
         self._queue: asyncio.Queue[int] = asyncio.Queue(maxsize=20)
         self._worker: asyncio.Task | None = None
         self._accepting = False
@@ -177,14 +179,23 @@ class DesktopEngine:
             connection_factory=self._connection_config,
             on_installed=self._after_lora_installed,
             search_service_factory=self._lora_search_service_factory,
+            preview_service=self.lora_preview,
         )
-        self.lora_profile_store = LoraProfileStore(database)
+        self._disabled_lora_keys: set[str] = set()
+        self._reload_disabled_lora_keys()
+        self._lora_llm_match = LoraLlmMatchService(
+            config=self.config,
+            data_root=self.data_root,
+        )
         self.lora_library = LoraLibraryService(
             db=database,
             data_root=self.data_root,
             asset_store=self.lora_asset_store,
             profile_store=self.lora_profile_store,
             service_factory=lambda **kw: self.lora_service,
+            on_profiles_changed=self._on_lora_profiles_changed,
+            settings_fn=self.config.snapshot,
+            llm_service=self._lora_llm_match,
         )
 
     def _lora_search_service_factory(self, *, config: Any, data_root: Path) -> Any:
@@ -198,18 +209,252 @@ class DesktopEngine:
         )
 
     def _reload_lora_profiles(self) -> None:
-        loaded = load_lora_profiles(
-            self.data_root,
-            auto_cache_key=self._lora_metadata_cache_key,
-        )
-        service = LoraService(loaded.profiles)
+        """从 SQLite（唯一真相源）构造 LoraService 与档案索引；不再读 JSON。"""
+        profiles: dict[str, dict[str, dict[str, Any]]] = {
+            "anima": {},
+            "illustrious": {},
+        }
+        for family in ("anima", "illustrious"):
+            items = profiles[family]
+            for record in self.lora_profile_store.get_family(family):
+                items[record.display_key] = dict(record.profile or {})
+        service = LoraService(profiles)
         index: dict[str, list[Any]] = {}
         for family in ("anima", "illustrious"):
             for profile in service.profiles_for(family).values():
                 index.setdefault(normalize_lora_key(profile.lora_name), []).append(profile)
-        self.loaded_lora_profiles = loaded
+        self.loaded_lora_profiles = LoadedLoraProfiles(
+            profiles=profiles, sources=("sqlite",)
+        )
         self.lora_service = service
         self._lora_profile_index = index
+
+    def _reload_disabled_lora_keys(self) -> None:
+        """重建自动引用排除集合。
+
+        disabled、隔离/非 installed、以及 inventory 已标记缺失的资产都不能
+        被自动引用；集合同时收录 comfy_key 与 filename 的归一化键。
+        """
+        keys: set[str] = set()
+        try:
+            rows = self.db.connection.execute(
+                "SELECT comfy_key, filename, disabled, state, info FROM lora_assets"
+            ).fetchall()
+            for row in rows:
+                info = dict(json_loads(row["info"]) or {})
+                unavailable = (
+                    bool(row["disabled"])
+                    or str(row["state"] or "").strip().lower() != "installed"
+                    or bool(info.get("file_missing"))
+                )
+                if not unavailable:
+                    continue
+                for value in (row["comfy_key"], row["filename"]):
+                    norm = normalize_lora_key(value)
+                    if norm:
+                        keys.add(norm)
+        except Exception:  # pragma: no cover - 表不可用时按空集合处理
+            logger.warning("读取已禁用 LoRA 列表失败", exc_info=True)
+        self._disabled_lora_keys = keys
+
+    def _default_lora_family(self) -> str:
+        """读取设置默认模型族；非法值回落 illustrious。"""
+        try:
+            settings = self.config.snapshot()
+            defaults = settings.get("defaults") if isinstance(settings.get("defaults"), Mapping) else {}
+            family = str(
+                defaults.get("family") or settings.get("model_family") or "illustrious"
+            ).strip().lower()
+        except Exception:  # pragma: no cover
+            family = "illustrious"
+        return family if family in {"anima", "illustrious"} else "illustrious"
+
+    def _set_asset_info(self, asset_id: int, info: dict[str, Any]) -> None:
+        """更新资产 info（公开 JSON），失败仅记录。"""
+        try:
+            validate_public_json(info, name="info")
+            with self.db.transaction():
+                self.db.connection.execute(
+                    "UPDATE lora_assets SET info = ?, updated_at = ? WHERE id = ?",
+                    (json_dumps(info), utcnow_iso(), int(asset_id)),
+                )
+        except Exception:  # pragma: no cover
+            logger.warning("LoRA 资产 info 更新失败 asset=%s", asset_id, exc_info=True)
+
+    def _reconcile_lora_assets(
+        self,
+        inventory_names: Iterable[str],
+        family: str | None = None,
+    ) -> dict[str, int]:
+        """inventory 与 lora_assets 双向对账（模块 B #3）。
+
+        - inventory 中未登记的文件注册为 source="inventory" 资产；已有行（任意
+          family）保持不覆盖。
+        - 应存在于 ComfyUI inventory 的资产（source=inventory/comfyui_bridge）
+          若文件不在 inventory，标记 info.file_missing=true；重新出现则清除。
+          本地下载（source=local）文件位于 local_dir，不在 ComfyUI inventory，
+          不参与缺失标记。
+        """
+        store = self.lora_asset_store
+        names = [str(n or "").strip() for n in inventory_names if str(n or "").strip()]
+        present = {
+            normalize_lora_key(Path(n).name)
+            for n in names
+            if normalize_lora_key(Path(n).name)
+        }
+        try:
+            rows = self.db.connection.execute(
+                "SELECT id, model_family, filename, source, info FROM lora_assets"
+            ).fetchall()
+        except Exception:  # pragma: no cover - 表不可用时按全 0 处理
+            logger.warning("LoRA 资产表对账读取失败", exc_info=True)
+            return {"registered": 0, "marked_missing": 0, "cleared_missing": 0}
+        registered = 0
+        marked_missing = 0
+        cleared_missing = 0
+        for row in rows:
+            source = str(row["source"] or "").strip().lower()
+            if source not in {"inventory", "comfyui_bridge"}:
+                continue
+            in_inventory = (
+                normalize_lora_key(Path(str(row["filename"] or "")).name) in present
+            )
+            info = dict(json_loads(row["info"]) or {})
+            was_missing = bool(info.get("file_missing"))
+            if not in_inventory and not was_missing:
+                info["file_missing"] = True
+                self._set_asset_info(row["id"], info)
+                marked_missing += 1
+            elif in_inventory and was_missing:
+                info.pop("file_missing", None)
+                self._set_asset_info(row["id"], info)
+                cleared_missing += 1
+        existing = {
+            normalize_lora_key(str(r["filename"] or ""))
+            for r in rows
+            if normalize_lora_key(str(r["filename"] or ""))
+        }
+        default_family = self._default_lora_family() if family is None else str(family or "").strip().lower()
+        for name in names:
+            plain = Path(name).name
+            normalized_plain = normalize_lora_key(plain)
+            if (
+                not plain.lower().endswith(".safetensors")
+                or not normalized_plain
+                or normalized_plain in existing
+            ):
+                continue
+            store.register(
+                default_family,
+                plain,
+                comfy_key=name,
+                display_name=Path(plain).stem,
+                source="inventory",
+                info={"mode": "inventory"},
+            )
+            existing.add(normalized_plain)
+            registered += 1
+        if marked_missing or cleared_missing:
+            self._reload_disabled_lora_keys()
+        return {
+            "registered": registered,
+            "marked_missing": marked_missing,
+            "cleared_missing": cleared_missing,
+        }
+
+    def _lora_profile_aggregate_revision(self) -> int:
+        """当前全部档案 revision 总和（匹配/LLM 缓存失效依据）。"""
+        try:
+            row = self.db.connection.execute(
+                "SELECT COALESCE(SUM(revision), 0) FROM lora_profiles"
+            ).fetchone()
+            return int(row[0] or 0) if row else 0
+        except Exception:  # pragma: no cover - 旧库无列时按 0 处理
+            return 0
+
+    def _on_lora_profiles_changed(self) -> None:
+        """档案/禁用状态变化后刷新内存快照并失效匹配缓存。"""
+        self._reload_lora_profiles()
+        self._reload_disabled_lora_keys()
+        self._invalidate_lora_match_caches()
+
+    def _invalidate_lora_match_caches(self) -> None:
+        """匹配/LLM 内存缓存失效（#11 接线后生效）。"""
+        try:
+            llm_service = getattr(self, "_lora_llm_match", None)
+            if llm_service is not None and hasattr(llm_service, "invalidate"):
+                llm_service.invalidate()
+        except Exception:  # pragma: no cover
+            logger.debug("LLM 匹配缓存失效跳过", exc_info=True)
+
+    def _apply_auto_lora_confirmations(
+        self,
+        confirmations: list[dict[str, Any]],
+        family: str,
+        inventory_names: Iterable[str],
+    ) -> AutoLoraResolution | None:
+        """把前端确认的 auto 命中组装为 AutoLoraResolution。
+
+        逐个校验：归一化名必须在实时 inventory 中，且不在已禁用集合；
+        无效项跳过，全部无效返回 None（空数组 = 用户移除全部，不应用）。
+        """
+        excluded = self._disabled_lora_keys
+        inventory_map: dict[str, str] = {}
+        for name in inventory_names:
+            value = str(name or "").strip()
+            norm = normalize_lora_key(Path(value).name)
+            if norm and norm not in excluded:
+                inventory_map[norm] = value
+        profiles = {
+            normalize_lora_key(profile.lora_name): profile
+            for profile in self.lora_service.profiles_for(family).values()
+            if normalize_lora_key(profile.lora_name)
+            and normalize_lora_key(profile.lora_name) not in excluded
+        }
+        selected: list[dict[str, Any]] = []
+        triggers: list[str] = []
+        evidence: list[dict[str, Any]] = []
+        for item in confirmations:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name") or item.get("id") or item.get("lora_name")
+            actual = inventory_map.get(normalize_lora_key(name))
+            if not actual:
+                continue
+            profile = profiles.get(normalize_lora_key(name))
+            entry: dict[str, Any] = {"id": actual, "name": actual}
+            if profile is not None:
+                entry["strength_model"] = profile.strength_model
+                entry["strength_clip"] = profile.strength_clip
+                triggers.extend(profile.trigger_words)
+                evidence.append(profile.to_dict())
+            else:
+                try:
+                    strength = float(item.get("strength"))
+                except (TypeError, ValueError):
+                    strength = None
+                if strength is not None and strength > 0:
+                    entry["strength_model"] = strength
+                    entry["strength_clip"] = strength
+            selected.append(entry)
+        if not selected:
+            return None
+        return AutoLoraResolution(
+            loras=tuple(selected),
+            triggers=tuple(
+                dict.fromkeys(
+                    str(value).strip()
+                    for value in triggers
+                    if str(value).strip()
+                )
+            ),
+            metadata={
+                "family": family,
+                "multi": len(selected) > 1,
+                "source": "confirmed",
+                "matches": evidence,
+            },
+        )
 
     async def start(self) -> None:
         if self._accepting:
@@ -371,6 +616,7 @@ class DesktopEngine:
         self._last_probe = result
         self._last_probe_at = time.monotonic()
         if result.get("online"):
+            self._reconcile_lora_assets(result.get("loras", []))
             self._schedule_lora_metadata_refresh(result.get("loras", []))
         return result
 
@@ -425,11 +671,25 @@ class DesktopEngine:
             },
         }
 
-    async def search_loras(self, query: str, *, family: str = "illustrious", limit: int = 12) -> dict[str, Any]:
-        return await self.lora_download.search(query, family=family, limit=limit)
+    async def search_loras(
+        self,
+        query: str,
+        *,
+        family: str = "illustrious",
+        limit: int = 12,
+        sources: list[str] | None = None,
+        adult_consent: bool = False,
+    ) -> dict[str, Any]:
+        return await self.lora_download.search(
+            query,
+            family=family,
+            limit=limit,
+            sources=sources,
+            adult_consent=adult_consent,
+        )
 
-    async def start_lora_download(self, result_id: str, *, alias: str = "") -> dict[str, Any]:
-        return self.lora_download.start_download(result_id, alias=alias)
+    async def start_lora_download(self, result_id: str, *, alias: str = "", adult_consent: bool = False) -> dict[str, Any]:
+        return self.lora_download.start_download(result_id, alias=alias, adult_consent=adult_consent)
 
     async def get_lora_download(self, job_id: str) -> dict[str, Any]:
         return self.lora_download.snapshot(job_id)
@@ -444,8 +704,8 @@ class DesktopEngine:
 
     # -- 本地 LoRA 库 ------------------------------------------------------------
 
-    def lora_library_list(self, family: str | None = None) -> list[dict[str, Any]]:
-        return self.lora_library.list(family)
+    def lora_library_list(self, family: str | None = None, *, include_quarantined: bool = False) -> list[dict[str, Any]]:
+        return self.lora_library.list(family, include_quarantined=include_quarantined)
 
     def lora_library_get(self, asset_id: int) -> dict[str, Any]:
         return self.lora_library.get(asset_id)
@@ -463,20 +723,47 @@ class DesktopEngine:
             asset_id, aliases=aliases, role=role, triggers=triggers, disabled=disabled
         )
 
-    def lora_library_delete(self, asset_id: int) -> None:
-        self.lora_library.delete(asset_id)
-
     def lora_library_quarantine(self, asset_id: int, *, reason: str = "") -> dict[str, Any]:
         return self.lora_library.quarantine(asset_id, reason=reason)
 
     def lora_library_restore(self, asset_id: int) -> dict[str, Any]:
         return self.lora_library.restore(asset_id)
 
+    def lora_profiles_export_json(self) -> dict[str, Any]:
+        """导出全部 SQLite 档案为 {family: {key: profile}}（显式导出，只读）。"""
+        profiles: dict[str, dict[str, dict[str, Any]]] = {"anima": {}, "illustrious": {}}
+        for family in ("anima", "illustrious"):
+            for record in self.lora_profile_store.get_family(family):
+                profiles[family][record.display_key] = dict(record.profile or {})
+        return {
+            "families": profiles,
+            "count": sum(len(items) for items in profiles.values()),
+            "updated_at": utcnow_iso(),
+        }
+
+    def lora_profiles_import_json(self) -> dict[str, Any]:
+        """显式从原插件 JSON 一次性导入（只插入缺失，绝不覆盖已有档案）。"""
+        processed = import_lora_profiles_into_db(
+            self.db,
+            self.data_root,
+            auto_cache_key=self._lora_metadata_cache_key,
+            app_events=self.app_event_store,
+        )
+        if processed:
+            self._reload_lora_profiles()
+        try:
+            from winefox_core.storage import LoraProfileStore
+
+            store = LoraProfileStore(self.db)
+            total = len(store.get_family("anima")) + len(store.get_family("illustrious"))
+        except Exception:  # pragma: no cover
+            total = 0
+        return {"processed": processed, "total": total}
+
     async def lora_library_match_preview(
         self, prompt: str, *, family: str = "illustrious", limit: int = 8
     ) -> dict[str, Any]:
         return await self.lora_library.match_preview(prompt, family=family, limit=limit)
-
     async def _after_lora_installed(self) -> None:
         self._last_probe = None
         self._last_probe_at = 0.0
@@ -570,12 +857,20 @@ class DesktopEngine:
                         generated[family][normalize_lora_key(filename)] = profile
                     if not any(generated.values()):
                         continue
-                    await asyncio.to_thread(
-                        cache_generated_lora_profiles,
-                        self.data_root,
-                        self._lora_metadata_cache_key,
-                        generated,
-                    )
+                    # 生成档案只插缺失（不覆盖用户编辑），正常写入路径仅 SQLite
+                    for family, items in generated.items():
+                        for key, profile in items.items():
+                            if self.lora_profile_store.get(family, str(key)) is not None:
+                                continue
+                            try:
+                                self.lora_profile_store.save(family, str(key), profile)
+                            except Exception as exc:  # 单条坏档案不阻断批量
+                                logger.warning(
+                                    "LoRA metadata 档案写入失败 family=%s key=%s: %s",
+                                    family,
+                                    key,
+                                    _redact_diagnostic_text(exc),
+                                )
                     generated_count += sum(len(items) for items in generated.values())
                     self._reload_lora_profiles()
             logger.info(
@@ -700,11 +995,23 @@ class DesktopEngine:
                     self.lora_service,
                     str(payload.get("family") or "illustrious"),
                     selected_loras,
+                    excluded_keys=self._disabled_lora_keys,
                 )
                 if selected_triggers:
                     prompt_result.final_prompt = merge_prompt_tags(
                         prompt_result.final_prompt, selected_triggers
                     )
+                    execution_payload["prompt"] = prompt_result.final_prompt
+            elif isinstance(payload.get("auto_lora_confirmations"), list):
+                # 前端已预览并确认/移除：以确认列表为准（空数组 = 全部移除不应用）。
+                auto_lora = self._apply_auto_lora_confirmations(
+                    [c for c in payload["auto_lora_confirmations"] if isinstance(c, dict)],
+                    str(payload.get("family") or "illustrious"),
+                    inventory.loras,
+                )
+                if auto_lora is not None and auto_lora.loras:
+                    execution_payload["loras"] = list(auto_lora.loras)
+                    prompt_result.final_prompt = merge_prompt_tags(prompt_result.final_prompt, auto_lora.triggers)
                     execution_payload["prompt"] = prompt_result.final_prompt
             else:
                 auto_lora = resolve_prompt_loras(
@@ -712,6 +1019,7 @@ class DesktopEngine:
                     raw_prompt,
                     str(payload.get("family") or "illustrious"),
                     inventory.loras,
+                    excluded_keys=self._disabled_lora_keys,
                 )
                 if auto_lora.loras:
                     execution_payload["loras"] = list(auto_lora.loras)

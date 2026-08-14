@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import struct
 import sys
 import tempfile
 import unittest
@@ -25,6 +26,7 @@ from winefox_core.storage import (  # noqa: E402
     Database,
     LoraAssetStore,
     LoraDownloadJobStore,
+    LoraProfileStore,
 )
 from winefox_core.storage_models import LoraDownloadState  # noqa: E402
 
@@ -57,6 +59,17 @@ DEFAULT_SUMMARY = {
 }
 
 
+def _safetensors_bytes(size: int = 2048) -> bytes:
+    header = json.dumps({
+        "weight": {
+            "dtype": "U8",
+            "shape": [size],
+            "data_offsets": [0, size],
+        }
+    }, separators=(",", ":")).encode("utf-8")
+    return struct.pack("<Q", len(header)) + header + (b"\x00" * size)
+
+
 class FakeClient:
     def __init__(self, summary=None, version_files=None, search_results=None):
         self.summary = dict(summary or DEFAULT_SUMMARY)
@@ -74,7 +87,7 @@ class FakeClient:
         return dict(self.summary)
 
     async def download_file(self, url: str, dest_path: Path, progress_cb=None):
-        dest_path.write_bytes(b"\x00" * 2048)
+        dest_path.write_bytes(_safetensors_bytes())
         self.downloaded.append(dest_path)
         return dest_path
 
@@ -82,11 +95,24 @@ class FakeClient:
         return {"files": list(self.version_files)}
 
 
+class FakePreviewService:
+    def __init__(self):
+        self.registered: list[tuple[str, str, str]] = []
+
+    def register(self, token: str, url: str, source: str = "") -> str | None:
+        token = token or ("a" * 24)
+        self.registered.append((token, url, str(source or "")))
+        return token
+
+    async def fetch(self, token: str):
+        return None
+
+
 class FakeSearchService:
     def __init__(self, items):
         self.items = list(items)
 
-    async def search(self, query: str, *, family: str = "illustrious", limit: int = 12):
+    async def search(self, query: str, *, family: str = "illustrious", limit: int = 12, sources: list[str] | None = None):
         return {"query": query, "family": family, "items": list(self.items)}
 
 
@@ -101,7 +127,7 @@ class LoraDownloadBase(IsolatedAsyncioTestCase):
         self.jobs = LoraDownloadJobStore(self.db)
         self.assets = LoraAssetStore(self.db)
 
-    def _make_service(self, *, client=None, search_factory=None, settings=None) -> LoraDownloadService:
+    def _make_service(self, *, client=None, search_factory=None, settings=None, preview=None) -> LoraDownloadService:
         settings = settings or {"lora_download": {"mode": "local", "local_dir": str(self.tmp / "models" / "loras")}}
         return LoraDownloadService(
             db=self.db,
@@ -111,6 +137,7 @@ class LoraDownloadBase(IsolatedAsyncioTestCase):
             on_installed=None,
             client_factory=lambda **kw: client or FakeClient(),
             search_service_factory=search_factory,
+            preview_service=preview,
         )
 
 
@@ -162,6 +189,30 @@ class DownloadStart(LoraDownloadBase):
             svc.start_download("ffffffffffffffffffffffffffffffff")
         self.assertEqual(ctx.exception.status, 404)
 
+    async def test_start_download_nsfw_requires_consent(self):
+        client = FakeClient()
+        svc = self._make_service(client=client)
+        result_id = "a" * 32
+        svc._cache_result(result_id, family="illustrious", source="civitai",
+                          model_id="456", version_id="123", query="test", nsfw=True)
+        with self.assertRaises(AppError) as ctx:
+            svc.start_download(result_id)
+        self.assertEqual(ctx.exception.status, 400)
+        self.assertEqual(ctx.exception.code, "LORA_R18_REQUIRES_CONSENT")
+        # 提供 adult_consent 后放行
+        svc.start_download(result_id, adult_consent=True)
+        await svc.stop()
+
+    async def test_start_download_sfw_no_consent_needed(self):
+        client = FakeClient()
+        svc = self._make_service(client=client)
+        result_id = "a" * 32
+        svc._cache_result(result_id, family="illustrious", source="civitai",
+                          model_id="456", version_id="123", query="test", nsfw=False)
+        snapshot = svc.start_download(result_id)
+        self.assertEqual(snapshot["status"], "queued")
+        await svc.stop()
+
     async def test_start_download_enqueues_and_requeues_terminal(self):
         client = FakeClient()
         svc = self._make_service(client=client)
@@ -204,12 +255,53 @@ class DownloadFullFlow(LoraDownloadBase):
         self.assertEqual(result.get("mode"), "local")
         self.assertTrue(result.get("filename"))
         self.assertTrue(result.get("asset_id"))
-        # 档案写入磁盘
-        profile_path = self.tmp / "lora_profiles" / "lora_profiles_illustrious.json"
-        self.assertTrue(profile_path.is_file())
+        # 档案写入 SQLite（唯一真相源），不再写 JSON
+        profile_records = LoraProfileStore(self.db).get_family("illustrious")
+        self.assertTrue(profile_records)
         # 资产登记
         assets = self.assets.list()
         self.assertEqual(len(assets), 1)
+
+    async def test_local_install_registers_preview_key(self):
+        summary = dict(DEFAULT_SUMMARY)
+        summary["preview_url"] = "https://image.civitai.com/test_thumb.png"
+        preview = FakePreviewService()
+        svc = self._make_service(client=FakeClient(summary=summary), preview=preview)
+        result_id = "f" * 32
+        self.jobs.enqueue(result_id, family="illustrious", alias="", source="civitai",
+                          source_ref={"source": "civitai", "model_id": "456", "version_id": "123"},
+                          request_timeout=60)
+        await svc._run_download(result_id, "")
+        assets = self.assets.list()
+        self.assertEqual(len(assets), 1)
+        record = self.assets.get_by_id(assets[0].id)
+        # 资产带 preview_key（同源代理 token），预览服务收到登记且来源一致
+        self.assertTrue(record.preview_key)
+        self.assertEqual(len(preview.registered), 1)
+        token, url, source = preview.registered[0]
+        self.assertEqual(url, "https://image.civitai.com/test_thumb.png")
+        self.assertEqual(token, record.preview_key)
+        # 公开字段只暴露 token 不暴露 URL
+        item = dict(record.info or {})
+        self.assertNotIn("https:", json.dumps(item))
+
+    async def test_local_install_skips_unsafe_preview(self):
+        from desktop_runtime.lora_preview import LoraPreviewService
+
+        summary = dict(DEFAULT_SUMMARY)
+        summary["preview_url"] = "http://127.0.0.1/evil.png"
+        svc = self._make_service(client=FakeClient(summary=summary),
+                                 preview=LoraPreviewService(data_root=self.tmp))
+        result_id = "g" * 32
+        self.jobs.enqueue(result_id, family="illustrious", alias="", source="civitai",
+                          source_ref={"source": "civitai", "model_id": "456", "version_id": "123"},
+                          request_timeout=60)
+        await svc._run_download(result_id, "")
+        assets = self.assets.list()
+        self.assertEqual(len(assets), 1)
+        record = self.assets.get_by_id(assets[0].id)
+        # 不安全预览 URL 不登记 token，资产预览保持空
+        self.assertFalse(record.preview_key)
 
     async def test_hash_mismatch_fails(self):
         version_files = [{"name": "test_character_lora.safetensors", "hashes": {"SHA256": "ab" * 32}}]
@@ -244,6 +336,71 @@ class DownloadHelpers(LoraDownloadBase):
         self.assertEqual(LoraDownloadService._build_reference({"model_id": "456"}), "456")
         self.assertEqual(LoraDownloadService._build_reference({}), "")
 
+    def test_build_huggingface_reference_preserves_nested_file(self):
+        ref = LoraDownloadService._build_reference({
+            "source": "huggingface",
+            "model_id": "owner/repo",
+            "file_name": "loras/character/model.safetensors",
+        })
+        self.assertEqual(
+            ref,
+            "https://huggingface.co/owner/repo?file=loras%2Fcharacter%2Fmodel.safetensors",
+        )
+        self.assertEqual(
+            LoraDownloadService._build_reference({
+                "source": "huggingface",
+                "model_id": "owner/repo",
+                "file_name": "../secret.safetensors",
+            }),
+            "https://huggingface.co/owner/repo",
+        )
+
+    def test_civitai_red_client_never_receives_civitai_credentials(self):
+        captured = {}
+
+        def red_factory(**kwargs):
+            captured.update(kwargs)
+            return FakeClient()
+
+        svc = LoraDownloadService(
+            db=self.db,
+            config=FakeConfig(
+                snapshot={"lora_download": {}},
+                secrets={
+                    "civitai_api_token": "civitai-secret",
+                    "civitai_cookie": "cookie-secret",
+                },
+            ),
+            data_root=self.tmp,
+            connection_factory=lambda: None,
+            red_client_factory=red_factory,
+        )
+        svc._client("civitai_red")
+        self.assertEqual(captured.get("api_token"), "")
+        self.assertNotIn("cookie", captured)
+
+    def test_save_sqlite_profile_does_not_overwrite_user_profile(self):
+        store = LoraProfileStore(self.db)
+        original = {
+            "lora": "hero.safetensors",
+            "character": "Hero",
+            "aliases": ["用户别名"],
+            "trigger_words": ["custom_trigger"],
+        }
+        store.save("illustrious", "Hero", original)
+        svc = self._make_service()
+        resolved = svc._save_sqlite_profile("illustrious", {
+            "lora": "hero.safetensors",
+            "character": "Hero",
+            "aliases": ["remote alias"],
+            "trigger_words": ["remote_trigger"],
+        })
+        self.assertEqual(resolved["aliases"], ["用户别名"])
+        self.assertEqual(
+            store.get("illustrious", "Hero").profile["trigger_words"],
+            ["custom_trigger"],
+        )
+
     def test_extract_sha256(self):
         self.assertEqual(
             LoraDownloadService._extract_sha256({"hashes": {"SHA256": "ABC123"}}),
@@ -263,6 +420,37 @@ class DownloadHelpers(LoraDownloadBase):
         target2, renamed2 = svc._unique_local_target(str(local_dir), "same.safetensors")
         self.assertTrue(renamed2)
         self.assertEqual(target2.name, "same (1).safetensors")
+
+    def test_unique_local_target_never_overwrites_small_existing_file(self):
+        svc = LoraDownloadService.__new__(LoraDownloadService)
+        local_dir = self.tmp / "small-conflict"
+        local_dir.mkdir(parents=True)
+        existing = local_dir / "same.safetensors"
+        existing.write_bytes(b"x")
+        target, renamed = svc._unique_local_target(str(local_dir), existing.name)
+        self.assertTrue(renamed)
+        self.assertEqual(target.name, "same (1).safetensors")
+        self.assertEqual(existing.read_bytes(), b"x")
+
+    def test_save_sqlite_profile_preserves_user_edited_profile(self):
+        svc = self._make_service()
+        store = LoraProfileStore(self.db)
+        store.save("illustrious", "Mizuki", {
+            "lora": "mizuki.safetensors",
+            "character": "Mizuki",
+            "aliases": ["用户别名"],
+            "trigger_words": ["user_trigger"],
+        })
+        saved = svc._save_sqlite_profile("illustrious", {
+            "lora": "mizuki.safetensors",
+            "character": "Mizuki",
+            "aliases": ["remote_alias"],
+            "trigger_words": ["remote_trigger"],
+        })
+        self.assertEqual(saved["aliases"], ["用户别名"])
+        record = store.get("illustrious", "Mizuki")
+        self.assertEqual(record.profile["trigger_words"], ["user_trigger"])
+        self.assertEqual(record.revision, 1)
 
     def test_local_target_sanitizes_filename(self):
         target = LoraDownloadService._local_target(str(self.tmp), "../evil?name.safetensors")

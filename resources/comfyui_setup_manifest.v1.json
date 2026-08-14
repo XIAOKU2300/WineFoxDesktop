@@ -1,14 +1,14 @@
 {
   "format_version": 1,
   "manifest_version": "1.0.0",
-  "generated_at": "2026-08-11",
-  "source_of_truth": "scripts/astrbot_comfyui_setup.bat",
+  "generated_at": "2026-08-15",
+  "source_of_truth": "comfyui_custom_nodes/ComfyUI-AstrBot-LoraBridge/__init__.py",
   "description": "ComfyUI 环境中心安装清单：模型/节点/Bridge/Python 规则，逐项对齐旧 BAT 真实行为。",
 
   "bridge": {
     "source": "comfyui_custom_nodes/ComfyUI-AstrBot-LoraBridge",
     "dest_folder": "ComfyUI-AstrBot-LoraBridge",
-    "version": "1.4.1",
+    "version": "1.4.2",
     "allow_local_requests_without_token": false,
     "allowed_hosts": [
       "civitai.com", "civitai.red", "civitaired.com",

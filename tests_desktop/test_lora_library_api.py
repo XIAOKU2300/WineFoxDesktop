@@ -51,8 +51,8 @@ class FakeEngine:
     def __init__(self):
         self.calls: list[tuple] = []
 
-    def lora_library_list(self, family=None):
-        self.calls.append(("list", family))
+    def lora_library_list(self, family=None, *, include_quarantined=False):
+        self.calls.append(("list", family, include_quarantined))
         return [dict(SAMPLE_ITEM)] if family in (None, "illustrious") else []
 
     def lora_library_get(self, asset_id):
@@ -122,11 +122,11 @@ class LibraryList(LoraLibraryApiBase):
         resp = await handle_lora_library_list(self._req(query={"family": "illustrious"}))
         payload = _body(resp)["data"]
         self.assertEqual(payload["items"][0]["name"], SAMPLE_ITEM["name"])
-        self.assertEqual(self.engine.calls[-1], ("list", "illustrious"))
+        self.assertEqual(self.engine.calls[-1], ("list", "illustrious", False))
 
     async def test_list_without_family_lists_all(self):
         await handle_lora_library_list(self._req(query={}))
-        self.assertEqual(self.engine.calls[-1], ("list", None))
+        self.assertEqual(self.engine.calls[-1], ("list", None, False))
 
     async def test_list_bad_family_rejected(self):
         with self.assertRaises(ValidationError):
@@ -168,10 +168,13 @@ class LibraryGetUpdateDelete(LoraLibraryApiBase):
                     self._req(match={"id": "7"}, body=json.dumps(body))
                 )
 
-    async def test_delete_ok(self):
-        resp = await handle_lora_library_delete(self._req(match={"id": "7"}))
-        self.assertTrue(_body(resp)["ok"])
-        self.assertEqual(self.engine.calls[-1], ("delete", 7))
+    async def test_delete_is_disabled(self):
+        from desktop_backend.errors import AppError
+
+        with self.assertRaises(AppError) as cm:
+            await handle_lora_library_delete(self._req(match={"id": "7"}))
+        self.assertEqual(cm.exception.status, 405)
+        self.assertEqual(cm.exception.code, "LORA_PERMANENT_DELETE_DISABLED")
 
 
 class LibraryQuarantineRestore(LoraLibraryApiBase):
@@ -243,14 +246,12 @@ class LibraryEngineMissing(LoraLibraryApiBase):
             handle_lora_library_list,
             handle_lora_library_get,
             handle_lora_library_update,
-            handle_lora_library_delete,
             handle_lora_library_quarantine,
             handle_lora_library_restore,
             handle_lora_library_match_preview,
         )
         requests = (
             self._req(query={}),
-            self._req(match={"id": "7"}),
             self._req(match={"id": "7"}, body="{}"),
             self._req(match={"id": "7"}),
             self._req(match={"id": "7"}, body="{}"),

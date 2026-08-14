@@ -91,7 +91,8 @@ class TestDatabaseInit(StorageBase):
         applied1 = self.db.list_applied_migrations()
         self.assertEqual(
             applied1,
-            ["0001_initial", "0002_history_favorite_indexes", "0003_lora_library"],
+            ["0001_initial", "0002_history_favorite_indexes",
+             "0003_lora_library", "0004_lora_profile_revision"],
         )
         # 重复初始化
         applied2 = self.db.initialize()
@@ -502,6 +503,18 @@ class TestLoraProfileStore(StorageBase):
         with self.assertRaises(ValidationError):
             self.loras.save("f", "k", {"x": object()})
 
+    def test_revision_increments_on_upsert(self):
+        first = self.loras.save("illustrious", "Anmi Style", {"trigger": "anmi"})
+        self.assertEqual(first.revision, 1)
+        second = self.loras.save("illustrious", "Anmi Style", {"trigger": "anmi2"})
+        self.assertEqual(second.revision, 2)
+        self.assertEqual(second.profile, {"trigger": "anmi2"})
+        # 不同 key 各从 1 开始
+        other = self.loras.save("illustrious", "Other Style", {"trigger": "other"})
+        self.assertEqual(other.revision, 1)
+        # to_dict 携带 revision
+        self.assertEqual(second.to_dict()["revision"], 2)
+
 
 class TestWorkflowRegistry(StorageBase):
     def test_register_upsert_and_flags(self):
@@ -706,7 +719,8 @@ class TestMigrations(StorageBase):
         applied = good.initialize()
         self.assertEqual(
             applied,
-            ["0001_initial", "0002_history_favorite_indexes", "0003_lora_library"],
+            ["0001_initial", "0002_history_favorite_indexes",
+             "0003_lora_library", "0004_lora_profile_revision"],
         )
         good.close()
 
@@ -735,7 +749,8 @@ class TestMigrations(StorageBase):
         self.assertNotIn("0003_bad", applied)
         self.assertEqual(
             applied,
-            ["0001_initial", "0002_history_favorite_indexes", "0003_lora_library"],
+            ["0001_initial", "0002_history_favorite_indexes",
+             "0003_lora_library", "0004_lora_profile_revision"],
         )
         db3.close()
 

@@ -12,6 +12,10 @@
 
 export const API_BASE = "/api/v1";
 
+export function loraPreviewUrl(token) {
+  return `${API_BASE}/lora/preview?token=${encodeURIComponent(String(token || "").trim())}`;
+}
+
 export class ApiError extends Error {
   constructor(status, message, data) {
     super(message || `请求失败 (${status})`);
@@ -26,7 +30,14 @@ async function request(path, opts = {}) {
   if (query) {
     const qs = new URLSearchParams();
     for (const [k, v] of Object.entries(query)) {
-      if (v != null && v !== "") qs.set(k, v);
+      if (v == null || v === "") continue;
+      if (Array.isArray(v)) {
+        for (const item of v) {
+          if (item != null && item !== "") qs.append(k, item);
+        }
+      } else {
+        qs.set(k, v);
+      }
     }
     const s = qs.toString();
     if (s) url += "?" + s;
@@ -78,18 +89,20 @@ export const api = {
   probe: (payload = {}, options = {}) => request("/comfyui/probe", { ...options, method: "POST", body: JSON.stringify(payload) }),
   catalog: (options = {}) => request("/catalog", options),
   models: (options = {}) => request("/models", options),
-  searchLoras: (query, family = "illustrious", options = {}) => request("/lora/search", { ...options, query: { q: query, family, limit: 12 } }),
-  startLoraDownload: (resultId, alias = "", options = {}) => request("/lora/downloads", { ...options, method: "POST", body: JSON.stringify({ result_id: resultId, alias }) }),
+  searchLoras: (query, family = "illustrious", options = {}) => request("/lora/search", { ...options, query: { q: query, family, limit: 12, source: options.sources || [], adult_consent: options.adult_consent ? "1" : undefined } }),
+  startLoraDownload: (resultId, alias = "", options = {}) => request("/lora/downloads", { ...options, method: "POST", body: JSON.stringify({ result_id: resultId, alias, adult_consent: !!options.adult_consent }) }),
   loraDownload: (id, options = {}) => request(`/lora/downloads/${encodeURIComponent(id)}`, options),
   probeLoraBridge: (options = {}) => request("/lora/bridge/probe", { ...options, method: "POST", body: JSON.stringify({}) }),
   /* ---- LoRA 本地库（Agent 07 后端，见 lora_library_audit.md） ---- */
-  loraLibraryList: (family, options = {}) => request("/lora/library", { ...options, query: { family } }),
+  loraLibraryList: (family, options = {}) => request("/lora/library", { ...options, query: { family, include_quarantined: options.include_quarantined ? "1" : undefined } }),
   loraLibraryGet: (id, options = {}) => request(`/lora/library/${encodeURIComponent(id)}`, options),
   loraLibraryUpdate: (id, patch, options = {}) => request(`/lora/library/${encodeURIComponent(id)}`, { ...options, method: "PATCH", body: JSON.stringify(patch) }),
-  loraLibraryDelete: (id, options = {}) => request(`/lora/library/${encodeURIComponent(id)}`, { ...options, method: "DELETE" }),
   loraLibraryQuarantine: (id, reason, options = {}) => request(`/lora/library/${encodeURIComponent(id)}/quarantine`, { ...options, method: "POST", body: JSON.stringify({ reason }) }),
   loraLibraryRestore: (id, options = {}) => request(`/lora/library/${encodeURIComponent(id)}/restore`, { ...options, method: "POST" }),
   loraLibraryMatchPreview: (prompt, family, limit, options = {}) => request("/lora/library/match-preview", { ...options, method: "POST", body: JSON.stringify({ prompt, family, limit }) }),
+  loraMatchPreview: ({ prompt, family, limit = 10 } = {}) => request("/lora/library/match-preview", { method: "POST", body: JSON.stringify({ prompt, family, limit }) }),
+  loraProfilesImportJson: (options = {}) => request("/lora/profiles/import-json", { ...options, method: "POST", body: JSON.stringify({}) }),
+  loraProfilesExportJson: (options = {}) => request("/lora/profiles/export-json", options),
 
   /* ---- 环境中心（ComfyUI setup，冻结接口，见 docs/desktop_setup_migration.md） ---- */
   setupSummary: (options = {}) => request("/setup/summary", options),

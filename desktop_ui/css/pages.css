@@ -370,6 +370,20 @@
 .gen-submit-bar #g-submit { min-width: 132px; min-height: 36px; }
 .gen-submit-bar .queue-info { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* 生成前自动匹配预览（提交条上方） */
+.auto-lora-panel {
+  flex: none; padding: var(--sp-2) var(--sp-4);
+  border-top: 1px solid var(--hairline);
+  background: var(--surface-2);
+  display: flex; flex-direction: column; gap: var(--sp-1);
+  max-height: 40%; overflow: auto;
+}
+.auto-lora-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); padding: 2px 0; }
+.auto-lora-hint { padding: var(--sp-1) 0; }
+.auto-lora-row { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-1) var(--sp-2); border-radius: var(--r-sm); }
+.auto-lora-row:hover { background: var(--surface); }
+.auto-lora-name { font-size: var(--fs-sm); font-weight: 600; }
+
 /* ================= 向导（首次运行） ================= */
 .wizard { position: fixed; inset: 0; z-index: 50; background: var(--canvas); display: flex; flex-direction: column; }
 .wizard-top {
@@ -637,6 +651,21 @@
   .model-row > .grow { flex-basis: calc(100% - 84px); }
   .model-row .m-warn { width: 100%; max-width: none; }
 }
+
+/* LoRA 预览图缩略图（同源代理，不直接加载第三方图） */
+.lora-result-thumb {
+  flex: none;
+  width: 84px; height: 84px;
+  border-radius: var(--r-sm);
+  overflow: hidden;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.lora-result-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.lora-search-result { display: flex; align-items: flex-start; gap: var(--sp-3); min-width: 0; }
+.lora-search-result > .lora-result-thumb { width: 96px; height: 96px; }
+.lora-search-result .lora-result-main { flex: 1 1 180px; min-width: 0; }
+.lora-search-result .lora-result-actions { flex: 0 0 auto; }
 
 .workflow-override {
   padding: var(--sp-3);

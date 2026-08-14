@@ -235,7 +235,7 @@ def test_capabilities_lists_tiers_and_manual(tmp_path):
         assert status == 200 and js["ok"] is True
         caps = js["data"]
         assert "lite" in caps["profiles"]
-        assert caps["bridge"]["version"] == "1.4.1"
+        assert caps["bridge"]["version"] == "1.4.2"
         assert [m["name"] for m in caps["manual_files"]] == ["manual-a.safetensors"]
         assert "127.0.0.1" in caps["allowed_hosts"]
         _assert_no_absolute_path(caps)
@@ -387,7 +387,7 @@ def test_remote_kit_no_credentials(tmp_path):
         kit = js["data"]
         assert kit["configured"] is False
         assert "token" not in json.dumps(kit).lower()
-        assert kit["bridge_version"] == "1.4.1"
+        assert kit["bridge_version"] == "1.4.2"
         _assert_no_absolute_path(kit)
 
 

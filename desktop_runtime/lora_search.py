@@ -41,6 +41,18 @@ def _bounded_text(value: Any, limit: int) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip())[:limit]
 
 
+def _public_text(value: Any, limit: int = 200) -> str:
+    """脱敏公开文本：命中 URL/凭据/绝对路径/穿越/网络路径模式的字符串一律置空。"""
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    if not text:
+        return ""
+    if re.search(r"(?i)https?://|www\.|ftp://|file://|token=|api[_-]?key|authorization|cookie", text):
+        return ""
+    if re.search(r"(?i)(?:[a-z]:[\\/]|\\\\|^[\\/]|\.\.|//)", text):
+        return ""
+    return text[:limit]
+
+
 def _safe_error(value: Any) -> str:
     text = str(value or "LoRA 搜索失败")
     text = re.sub(r"(?i)(token=)[^&\s]+", r"\1[REDACTED]", text)
@@ -115,8 +127,9 @@ class LoraSearchService:
         kwargs = self._client_kwargs()
         if source == "civitai_red":
             client = self.red_client_factory(
-                api_token=self.config.get_secret("civitai_api_token") or "",
-                cookie=self.config.get_secret("civitai_cookie") or "",
+                # civitai.red 是独立来源，绝不能把 civitai.com 的凭据转发过去。
+                api_token="",
+                cookie="",
                 **kwargs,
             )
         elif source == "huggingface":
@@ -459,9 +472,10 @@ class LoraSearchService:
         preview_url = str(item.get("preview_url") or "").strip()
         preview_token = ""
         if preview_url and self.preview_service is not None:
-            preview_token = uuid.uuid4().hex
             try:
-                self.preview_service.register(preview_token, preview_url, source=source)
+                preview_token = str(
+                    self.preview_service.register("", preview_url, source=source) or ""
+                )
             except Exception:
                 preview_token = ""
         return {
@@ -470,18 +484,19 @@ class LoraSearchService:
             "family": family,
             "model_id": _bounded_text(item.get("model_id"), 80),
             "version_id": _bounded_text(item.get("version_id"), 80),
-            "name": _bounded_text(item.get("name") or "Civitai LoRA", 160),
-            "version_name": _bounded_text(item.get("version_name"), 100),
-            "base_model": _bounded_text(item.get("base_model"), 80),
+            "file_name": _public_text(item.get("file_name"), 200),
+            "name": _public_text(item.get("name") or "Civitai LoRA", 160),
+            "version_name": _public_text(item.get("version_name"), 100),
+            "base_model": _public_text(item.get("base_model"), 80),
             "trained_words": [
-                _bounded_text(x, 100)
+                _public_text(x, 100)
                 for x in (item.get("trained_words") or [])[:12]
-                if _bounded_text(x, 100)
+                if _public_text(x, 100)
             ],
             "tags": [
-                _bounded_text(x, 60)
+                _public_text(x, 60)
                 for x in (item.get("tags") or [])[:12]
-                if _bounded_text(x, 60)
+                if _public_text(x, 60)
             ],
             "download_count": int(item.get("download_count") or 0),
             "heart_count": int(item.get("heart_count") or 0),

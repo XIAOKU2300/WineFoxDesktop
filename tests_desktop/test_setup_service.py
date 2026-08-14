@@ -79,7 +79,7 @@ class ScanTests(unittest.TestCase):
         (fake / "__init__.py").write_text("", encoding="utf-8")
         status = self.scanner.scan(bases=[self.base])
         self.assertTrue(status.bridge.installed)
-        self.assertEqual(status.bridge.version, "1.4.1")
+        self.assertEqual(status.bridge.version, "1.4.2")
         self.assertTrue(status.nodes["wan.gguf"].present)
 
 

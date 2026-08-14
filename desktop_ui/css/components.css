@@ -137,6 +137,8 @@
 .badge.danger { color: var(--danger); border-color: currentColor; background: var(--danger-soft); }
 .badge.primary { color: var(--primary); border-color: currentColor; background: var(--primary-soft); }
 .badge.neutral::before { display: none; }
+.badge.rule-hit { color: var(--primary); border-color: currentColor; background: var(--primary-soft); }
+.badge.llm-hit { color: var(--accent, var(--success)); border-color: currentColor; background: var(--accent-soft, var(--success-soft)); }
 .badge.pulse::before { animation: dotPulse 1.6s ease-in-out infinite; }
 @keyframes dotPulse { 0%,100% { opacity: 0.35; } 50% { opacity: 1; } }
 
