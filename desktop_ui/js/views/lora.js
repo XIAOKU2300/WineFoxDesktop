@@ -1,10 +1,11 @@
 /* WineFox Desktop — LoRA 库页
- * 本地 LoRA 库管理：自动匹配预览、库列表、别名/触发词编辑、隔离/恢复/删除、R18 内容确认。
- * 对应后端端点（已注册）：GET/PATCH/DELETE /lora/library、{id}、{id}/quarantine、{id}/restore，
+ * 本地 LoRA 库管理：自动匹配预览、库列表、别名/触发词编辑、隔离/恢复、R18 内容确认。
+ * 不提供永久删除：仅隔离（移入同磁盘 .winefox-quarantine）与恢复。
+ * 对应后端端点（已注册）：GET/PATCH /lora/library、{id}、{id}/quarantine、{id}/restore，
  * POST /lora/library/match-preview。
  */
 import { el, $, $$, ic, esc, toast, loadingState, copyText } from "../utils.js";
-import { api } from "../api.js";
+import { api, loraPreviewUrl } from "../api.js";
 import { store } from "../store.js";
 
 export class LoraLibraryView {
@@ -14,6 +15,7 @@ export class LoraLibraryView {
     this.loaded = false;
     this.loadToken = 0;
     this.previewBusy = false;
+    this.showQuarantined = false;
   }
 
   async mount(container) {
@@ -155,6 +157,11 @@ export class LoraLibraryView {
             el("option", { value: "illustrious", selected: this.family === "illustrious" }, "Illustrious"),
             el("option", { value: "anima", selected: this.family === "anima" }, "Anima"),
           ]),
+          el("label", { class: "check", id: "lora-lib-quarantined-wrap" }, [
+            el("input", { type: "checkbox", id: "lora-lib-quarantined", checked: this.showQuarantined }),
+            el("span", { class: "box" }, [ic("check")]),
+            el("span", {}, "显示已隔离"),
+          ]),
           el("button", { class: "btn btn-sm", type: "button", id: "lora-lib-refresh" }, [ic("refresh"), esc("刷新")]),
         ]),
       ]),
@@ -168,7 +175,7 @@ export class LoraLibraryView {
     const token = ++this.loadToken;
     if (body) body.replaceChildren(loadingState("正在读取 LoRA 库", { compact: true }));
     try {
-      const result = await api.loraLibraryList(this.family);
+      const result = await api.loraLibraryList(this.family, { include_quarantined: this.showQuarantined });
       if (token !== this.loadToken || !this.root?.isConnected) return;
       this.items = Array.isArray(result?.items) ? result.items : [];
       this.loaded = true;
@@ -206,7 +213,11 @@ export class LoraLibraryView {
       : el("span", { class: "badge ok" }, "已安装");
     const disabledBadge = item.disabled ? el("span", { class: "badge danger" }, "已禁用") : null;
     const label = item.name || "未命名 LoRA";
+    const thumb = item.preview ? el("div", { class: "lora-result-thumb" }, [
+      el("img", { src: loraPreviewUrl(item.preview), alt: esc(label), loading: "lazy", referrerpolicy: "no-referrer" }),
+    ]) : null;
     return el("div", { class: "model-row" }, [
+      thumb,
       el("div", { class: "grow" }, [
         el("div", { class: "m-name-wrap" }, [
           el("div", { class: "m-name", title: label }, esc(label)),
@@ -223,7 +234,6 @@ export class LoraLibraryView {
           ? el("button", { class: "btn btn-sm", type: "button", "data-restore": item.id }, [ic("restore"), esc("恢复")])
           : el("button", { class: "btn btn-sm", type: "button", "data-quarantine": item.id }, "隔离"),
         el("button", { class: "btn btn-sm", type: "button", "data-toggle": item.id }, item.disabled ? "启用" : "禁用"),
-        el("button", { class: "btn btn-sm btn-danger", type: "button", "data-delete": item.id }, [ic("trash"), esc("删除")]),
       ]),
     ]);
   }
@@ -239,6 +249,10 @@ export class LoraLibraryView {
   bindEvents() {
     const root = this.root;
     $("#lora-lib-refresh", root)?.addEventListener("click", () => void this.load());
+    $("#lora-lib-quarantined", root)?.addEventListener("change", (event) => {
+      this.showQuarantined = !!event.target.checked;
+      void this.load();
+    });
     $("#lora-lib-family", root)?.addEventListener("change", (event) => {
       this.family = event.target.value || "illustrious";
       const previewFamily = $("#lora-mp-family", root);
@@ -254,8 +268,6 @@ export class LoraLibraryView {
       if (quarantine) { void this.quarantineItem(quarantine.dataset.quarantine); return; }
       const restore = event.target.closest("[data-restore]");
       if (restore) { void this.restoreItem(restore.dataset.restore); return; }
-      const del = event.target.closest("[data-delete]");
-      if (del) { void this.deleteItem(del.dataset.delete); return; }
       const copy = event.target.closest(".m-copy");
       if (copy) { void this.copyRowName(copy); }
     });
@@ -304,20 +316,6 @@ export class LoraLibraryView {
       void this.load();
     } catch (error) {
       toast("恢复失败：" + (error?.message || "未知错误"), "err");
-    }
-  }
-
-  async deleteItem(id) {
-    const item = this.findItem(id);
-    if (!item) return;
-    const ok = await this.confirmDialog("删除 LoRA", `确定从库中删除 “${item.name || "该 LoRA"}” 吗？此操作不可撤销。`, "删除");
-    if (!ok) return;
-    try {
-      await api.loraLibraryDelete(id);
-      toast("已删除", "ok");
-      void this.load();
-    } catch (error) {
-      toast("删除失败：" + (error?.message || "未知错误"), "err");
     }
   }
 
@@ -458,7 +456,8 @@ export class LoraLibraryView {
  */
 export function ensureR18Consent() {
   return new Promise((resolve) => {
-    if (localStorage.getItem("winefox.r18_consent") === "1") {
+    const consentKey = "winefox.r18_consent.v1";
+    if (localStorage.getItem(consentKey) === "accepted") {
       resolve(true);
       return;
     }
@@ -503,7 +502,7 @@ export function ensureR18Consent() {
     document.addEventListener("keydown", onKey);
     $("#r18-cancel", overlay)?.addEventListener("click", close);
     $("#r18-ok", overlay)?.addEventListener("click", () => {
-      localStorage.setItem("winefox.r18_consent", "1");
+      localStorage.setItem(consentKey, "accepted");
       finish(true);
     });
     $("#r18-ok", overlay)?.focus();

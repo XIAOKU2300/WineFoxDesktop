@@ -120,6 +120,7 @@ class MatchBehaviour(LoraLlmMatchBase):
         result = await service.match(prompt="yae miko sitting in a cafe", candidates=CANDIDATES)
         self.assertIs(result["matched"], CANDIDATES[0])
         self.assertFalse(result["used_cache"])
+        self.assertAlmostEqual(result["confidence"], 0.98)
         self.assertTrue(result["reason"])
 
     async def test_match_no_config_degrades(self):
@@ -179,7 +180,18 @@ class MatchCache(LoraLlmMatchBase):
         second = await service.match(prompt="yae miko in a cafe", candidates=CANDIDATES)
         self.assertTrue(second["used_cache"])
         self.assertIs(second["matched"], CANDIDATES[0])
+        self.assertAlmostEqual(second["confidence"], 0.98)
         self.assertEqual(len(fake.calls), calls_after_first)
+
+    async def test_revision_change_invalidates_cache(self):
+        fake = FakeLlmClient(responses=[VALID_RESPONSE, VALID_RESPONSE])
+        service = self._make_service(config=_enabled_config(), llm_factory=lambda *a, **k: fake)
+        await service.match(prompt="yae miko in a cafe", candidates=CANDIDATES, revision=1)
+        second = await service.match(
+            prompt="yae miko in a cafe", candidates=CANDIDATES, revision=2
+        )
+        self.assertFalse(second["used_cache"])
+        self.assertEqual(len(fake.calls), 2)
 
     async def test_cache_eviction(self):
         fake = FakeLlmClient(responses=[VALID_RESPONSE])
@@ -219,6 +231,21 @@ class FieldSafety(LoraLlmMatchBase):
         payload_blob = json.dumps(fake.calls[0][1], ensure_ascii=False)
         self.assertNotIn("http", payload_blob)
         self.assertNotIn("token=", payload_blob)
+
+    async def test_success_cache_does_not_store_sensitive_prompt(self):
+        fake = FakeLlmClient(responses=[VALID_RESPONSE])
+        service = self._make_service(config=_enabled_config(), llm_factory=lambda *a, **k: fake)
+        await service.match(
+            prompt="yae miko token=super-secret C:\\private\\prompt.txt",
+            candidates=CANDIDATES,
+        )
+        blobs = [
+            path.read_text(encoding="utf-8")
+            for path in (self.tmp / "lora_llm_cache").glob("*.json")
+        ]
+        self.assertTrue(blobs)
+        self.assertNotIn("super-secret", "".join(blobs))
+        self.assertNotIn("C:\\\\private", "".join(blobs))
 
 
 if __name__ == "__main__":

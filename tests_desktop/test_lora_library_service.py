@@ -24,6 +24,25 @@ from winefox_core.lora_service import LoraService  # noqa: E402
 from winefox_core.storage import Database, LoraAssetStore, LoraProfileStore  # noqa: E402
 
 
+class FakeLlmMatchService:
+    """可注入 LoraLibraryService 的假 LLM 匹配服务。"""
+
+    def __init__(self, enabled: bool = True, matched_index=0):
+        self.enabled = enabled
+        self.matched_index = matched_index
+        self.calls: list[tuple[str, str, int]] = []
+
+    def llm_enabled(self) -> bool:
+        return self.enabled
+
+    async def match(self, *, prompt, candidates, family="illustrious", revision=0, limit=5):
+        self.calls.append((prompt, family, revision))
+        if not self.enabled or not candidates or self.matched_index is None:
+            return {"matched": None, "reason": "无候选", "used_cache": False}
+        idx = min(int(self.matched_index), len(candidates) - 1)
+        return {"matched": candidates[idx], "confidence": 0.95, "reason": "LLM 命中", "used_cache": False}
+
+
 class LoraLibraryServiceBase(IsolatedAsyncioTestCase):
     def setUp(self):
         self._tmpdir = tempfile.TemporaryDirectory(prefix="lora_lib_svc_")
@@ -149,6 +168,18 @@ class TestUpdate(LoraLibraryServiceBase):
         self.assertIsNotNone(stored)
         self.assertEqual(stored.profile["aliases"], aliases)
 
+    def test_update_aliases_replaces_removed_values(self):
+        self._weight_file("replace_alias.safetensors")
+        rec = self._register("replace_alias.safetensors", display_name="Replace Alias")
+        self._seed_profile(
+            "illustrious", "replace alias", "Replace Alias",
+            aliases=["obsolete_alias", "keep_alias"],
+            lora_name="replace_alias.safetensors",
+        )
+        result = self.svc.update(rec.id, aliases=["keep_alias", "new_alias"])
+        self.assertIn("new_alias", result["aliases"])
+        self.assertNotIn("obsolete_alias", result["aliases"])
+
     def test_update_triggers_and_role(self):
         self._weight_file("hoshino.safetensors")
         rec = self._register("hoshino.safetensors", display_name="Hoshino")
@@ -182,16 +213,16 @@ class TestUpdate(LoraLibraryServiceBase):
 
 
 class TestQuarantineRestoreDelete(LoraLibraryServiceBase):
-    def test_quarantine_moves_file_into_deleted_loras(self):
+    def test_quarantine_moves_file_into_quarantine_dir(self):
         path = self._weight_file("isolate_me.safetensors")
         rec = self._register("isolate_me.safetensors", display_name="Isolate Me")
         result = self.svc.quarantine(rec.id, reason="手动隔离")
         self.assertEqual(result["state"], "quarantined")
         self.assertEqual(result["quarantine_reason"], "手动隔离")
         relpath = result["quarantine_relpath"]
-        self.assertTrue(relpath.startswith("deleted_loras/"))
+        self.assertTrue(relpath.startswith(".winefox-quarantine/"))
         self.assertTrue(relpath.endswith("_isolate_me.safetensors"))
-        # 原文件已移入隔离目录，内容保留
+        # 原文件已移入同磁盘隔离目录，内容保留
         self.assertFalse(path.exists())
         moved = self.tmp / relpath
         self.assertTrue(moved.is_file())
@@ -210,6 +241,32 @@ class TestQuarantineRestoreDelete(LoraLibraryServiceBase):
         self.assertIsNone(result["quarantine_relpath"])
         self.assertTrue(path.is_file())
         self.assertEqual(path.read_bytes(), b"lora-weight-bytes")
+
+    def test_inventory_asset_with_local_dir_can_be_quarantined_and_restored(self):
+        local_dir = self.tmp / "inventory_local"
+        local_dir.mkdir(parents=True, exist_ok=True)
+        path = local_dir / "inventory_file.safetensors"
+        path.write_bytes(b"lora-weight-bytes")
+        rec = self.asset_store.register(
+            "illustrious", "inventory_file.safetensors",
+            comfy_key="inventory_file.safetensors", display_name="Inventory File",
+            source="inventory",
+        )
+        events = []
+        svc = LoraLibraryService(
+            db=self.db,
+            data_root=self.tmp,
+            asset_store=self.asset_store,
+            profile_store=self.profile_store,
+            settings_fn=lambda: {
+                "lora_download": {"mode": "local", "local_dir": str(local_dir)}
+            },
+            on_profiles_changed=lambda: events.append("changed"),
+        )
+        self.assertEqual(svc.quarantine(rec.id)["state"], "quarantined")
+        self.assertEqual(svc.restore(rec.id)["state"], "installed")
+        self.assertTrue(path.is_file())
+        self.assertEqual(events, ["changed", "changed"])
 
     def test_restore_rejects_out_of_bounds_path(self):
         rec = self._register("escape.safetensors")
@@ -230,29 +287,72 @@ class TestQuarantineRestoreDelete(LoraLibraryServiceBase):
             self.svc.restore(rec.id)
         self.assertEqual(cm.exception.code, "LORA_NOT_QUARANTINED")
 
-    def test_delete_removes_index_keeps_file_recoverable(self):
+    def test_delete_is_disabled_and_keeps_index_and_file(self):
         path = self._weight_file("obsolete.safetensors")
         rec = self._register("obsolete.safetensors", display_name="Obsolete")
-        self.svc.delete(rec.id)
-        # 索引已删
-        self.assertIsNone(self.asset_store.get_by_id(rec.id))
-        # 权重文件未删除，移入 deleted_loras 可恢复
-        self.assertFalse(path.exists())
-        deleted_files = list((self.tmp / "deleted_loras").glob("*_obsolete.safetensors"))
-        self.assertEqual(len(deleted_files), 1)
-        self.assertEqual(deleted_files[0].read_bytes(), b"lora-weight-bytes")
+        with self.assertRaises(AppError) as cm:
+            self.svc.delete(rec.id)
+        self.assertEqual(cm.exception.code, "LORA_PERMANENT_DELETE_DISABLED")
+        self.assertIsNotNone(self.asset_store.get_by_id(rec.id))
+        self.assertTrue(path.is_file())
 
-    def test_quarantine_tolerates_unavailable_directory(self):
+    def test_quarantine_rejects_when_file_missing(self):
         shutil.rmtree(self.loras_dir)
         rec = self._register("ghost.safetensors")
-        result = self.svc.quarantine(rec.id)
-        self.assertEqual(result["state"], "quarantined")
-        self.assertTrue(result["quarantine_relpath"].startswith("deleted_loras/"))
+        with self.assertRaises(AppError) as cm:
+            self.svc.quarantine(rec.id)
+        self.assertEqual(cm.exception.code, "LORA_QUARANTINE_FILE_MISSING")
+        # 移动失败/找不到文件不得标记 DB 隔离
+        asset = self.asset_store.get_by_id(rec.id)
+        self.assertEqual(asset.state, "installed")
 
-    def test_delete_tolerates_missing_file(self):
+    def test_quarantine_uses_local_dir_root_and_restores(self):
+        local_dir = self.tmp / "local_loras"
+        local_dir.mkdir(parents=True, exist_ok=True)
+        svc = LoraLibraryService(
+            db=self.db,
+            data_root=self.tmp,
+            asset_store=self.asset_store,
+            profile_store=self.profile_store,
+            settings_fn=lambda: {"lora_download": {"local_dir": str(local_dir)}},
+        )
+        path = local_dir / "mizuki.safetensors"
+        path.write_bytes(b"lora-weight-bytes")
+        rec = self.asset_store.register(
+            "illustrious", "mizuki.safetensors",
+            comfy_key="mizuki.safetensors", display_name="Mizuki", source="local",
+        )
+        result = svc.quarantine(rec.id, reason="本地隔离")
+        self.assertEqual(result["state"], "quarantined")
+        relpath = result["quarantine_relpath"]
+        self.assertTrue(relpath.startswith(".winefox-quarantine/"))
+        # 隔离目录在 local_dir 下（与源同磁盘），原文件已移走
+        self.assertTrue((local_dir / relpath).is_file())
+        self.assertFalse(path.exists())
+        restored = svc.restore(rec.id)
+        self.assertEqual(restored["state"], "installed")
+        self.assertTrue(path.is_file())
+        self.assertEqual(path.read_bytes(), b"lora-weight-bytes")
+
+    def test_restore_missing_file_keeps_quarantined(self):
+        path = self._weight_file("gone.safetensors")
         rec = self._register("gone.safetensors")
-        self.svc.delete(rec.id)
-        self.assertIsNone(self.asset_store.get_by_id(rec.id))
+        result = self.svc.quarantine(rec.id)
+        relpath = result["quarantine_relpath"]
+        (self.tmp / relpath).unlink()
+        with self.assertRaises(AppError) as cm:
+            self.svc.restore(rec.id)
+        self.assertEqual(cm.exception.code, "LORA_RESTORE_FILE_MISSING")
+        # 隔离文件不存在时保持隔离状态
+        asset = self.asset_store.get_by_id(rec.id)
+        self.assertEqual(asset.state, "quarantined")
+
+    def test_delete_missing_file_is_still_disabled(self):
+        rec = self._register("gone.safetensors")
+        with self.assertRaises(AppError) as cm:
+            self.svc.delete(rec.id)
+        self.assertEqual(cm.exception.code, "LORA_PERMANENT_DELETE_DISABLED")
+        self.assertIsNotNone(self.asset_store.get_by_id(rec.id))
 
     def test_quarantine_missing_asset_raises(self):
         with self.assertRaises(AppError):
@@ -282,6 +382,8 @@ class TestMatchPreview(LoraLibraryServiceBase):
         self.assertIn("relevance", m)
         self.assertIn("connector", m)
         self.assertIn("note", m)
+        self.assertIn("strength_model", m)
+        self.assertIn("strength_clip", m)
         blob = json.dumps(result, ensure_ascii=False)
         for forbidden in ("http", "token", "authorization", "cookie", "C:", ":\\\\"):
             self.assertNotIn(forbidden, blob)
@@ -323,6 +425,97 @@ class TestMatchPreview(LoraLibraryServiceBase):
         result = await svc.match_preview("hoshino", family="illustrious")
         self.assertGreaterEqual(len(result["matches"]), 1)
         self.assertEqual(result["matches"][0]["key"], "hoshino")
+
+
+class TestMatchPreviewLlm(LoraLibraryServiceBase):
+    def test_family_revision_is_sum_not_max(self):
+        self._seed_profile(
+            "illustrious", "first", "First", lora_name="first.safetensors",
+        )
+        self._seed_profile(
+            "illustrious", "second", "Second", lora_name="second.safetensors",
+        )
+        first = self.profile_store.get("illustrious", "first")
+        self.profile_store.save("illustrious", "first", dict(first.profile))
+        self.assertEqual(self.svc._family_revision("illustrious"), 3)
+
+    async def test_rules_match_take_precedence_over_llm(self):
+        self._weight_file("hoshino_mirai.safetensors")
+        self._seed_profile(
+            "illustrious", "hoshino mirai", "Hoshino Mirai",
+            aliases=["Hoshino Mirai", "hoshino"], triggers=["hoshino"],
+            lora_name="hoshino_mirai.safetensors",
+        )
+        llm = FakeLlmMatchService(enabled=True)
+        self.svc.llm_service = llm
+        result = await self.svc.match_preview("画一个 hoshino 与蓝天", family="illustrious")
+        self.assertGreaterEqual(len(result["matches"]), 1)
+        self.assertEqual(result["matches"][0]["source"], "rule")
+        # 规则命中时不调用 LLM
+        self.assertEqual(llm.calls, [])
+
+    async def test_llm_rescue_when_rules_empty(self):
+        self._weight_file("hoshino_mirai.safetensors")
+        self._seed_profile(
+            "illustrious", "hoshino mirai", "Hoshino Mirai",
+            aliases=["Hoshino Mirai", "hoshino"], triggers=["hoshino"],
+            lora_name="hoshino_mirai.safetensors",
+        )
+        llm = FakeLlmMatchService(enabled=True, matched_index=0)
+        self.svc.llm_service = llm
+        result = await self.svc.match_preview("一只蓝色小猫在草地上玩耍", family="illustrious")
+        self.assertEqual(len(result["matches"]), 1)
+        m = result["matches"][0]
+        self.assertEqual(m["source"], "llm")
+        self.assertEqual(m["character"], "Hoshino Mirai")
+        self.assertEqual(m["name"], "hoshino_mirai.safetensors")
+        self.assertIn("llm", m["relevance"].lower())
+        self.assertGreaterEqual(m["score"], 0)
+        # revision 传入 LLM（save 后 revision 递增）
+        self.assertGreaterEqual(llm.calls[0][2], 1)
+        blob = json.dumps(result, ensure_ascii=False)
+        for forbidden in ("http", "authorization", "cookie", "C:", ":\\\\"):
+            self.assertNotIn(forbidden, blob)
+
+    async def test_llm_disabled_degrades_to_rules(self):
+        self._weight_file("hoshino_mirai.safetensors")
+        self._seed_profile(
+            "illustrious", "hoshino mirai", "Hoshino Mirai",
+            aliases=["Hoshino Mirai", "hoshino"], triggers=["hoshino"],
+            lora_name="hoshino_mirai.safetensors",
+        )
+        llm = FakeLlmMatchService(enabled=False)
+        self.svc.llm_service = llm
+        result = await self.svc.match_preview("一只蓝色小猫在草地上玩耍", family="illustrious")
+        self.assertEqual(result["matches"], [])
+        # 不可用时完全降级到规则，无 LLM 项
+        self.assertEqual(llm.calls, [])
+
+    async def test_llm_no_match_returns_empty(self):
+        self._weight_file("hoshino_mirai.safetensors")
+        self._seed_profile(
+            "illustrious", "hoshino mirai", "Hoshino Mirai",
+            aliases=["Hoshino Mirai", "hoshino"], triggers=["hoshino"],
+            lora_name="hoshino_mirai.safetensors",
+        )
+        llm = FakeLlmMatchService(enabled=True, matched_index=None)
+        self.svc.llm_service = llm
+        result = await self.svc.match_preview("一只蓝色小猫在草地上玩耍", family="illustrious")
+        self.assertEqual(result["matches"], [])
+
+    async def test_llm_candidates_exclude_disabled_assets(self):
+        path = self._weight_file("disabled_hero.safetensors")
+        rec = self._register("disabled_hero.safetensors", display_name="Disabled Hero")
+        self._seed_profile(
+            "illustrious", "disabled hero", "Disabled Hero",
+            aliases=["disabledhero"], lora_name="disabled_hero.safetensors",
+        )
+        self.svc.update(rec.id, disabled=True)
+        llm = FakeLlmMatchService(enabled=True, matched_index=0)
+        self.svc.llm_service = llm
+        result = await self.svc.match_preview("一只蓝色小猫在草地上玩耍", family="illustrious")
+        # 禁用资产不进入 LLM 候选，也就不会有 LLM 命中
+        self.assertEqual(result["matches"], [])
 
 
 if __name__ == "__main__":

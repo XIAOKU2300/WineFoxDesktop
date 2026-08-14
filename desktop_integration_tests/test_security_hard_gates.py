@@ -151,25 +151,16 @@ class TestBridgeAuth:
 
         assert bridge_module._check_auth(Req()) is True
 
-    @pytest.mark.xfail(
-        reason=(
-            "HARD-GATE FINDING: ComfyUI-AstrBot-LoraBridge accepts tokens via query string (?token=). "
-            "Desktop integration must strip query tokens and require X-AstrBot-Bridge-Token header."
-        ),
-        strict=False,
-    )
-    def test_remote_with_correct_query_token_accepted_but_flagged(self, bridge_module):
-        """Documented risk: bridge accepts ?token= in query; desktop must NOT do this."""
+    def test_remote_query_or_body_token_rejected(self, bridge_module):
         class Req:
             headers = {}
             query = {"token": "test-bridge-token-0123456789"}
             remote = "203.0.113.7"
 
-        assert bridge_module._check_auth(Req()) is True  # behavior exists
-        raise AssertionError(
-            "HARD-GATE FINDING (desktop must fix): bridge accepts query-string token. "
-            "Desktop layer must require the X-AstrBot-Bridge-Token header and strip ?token=."
-        )
+        assert bridge_module._check_auth(Req()) is False
+        assert bridge_module._check_auth(
+            Req(), payload={"token": "test-bridge-token-0123456789"}
+        ) is False
 
     def test_local_request_bypass_respects_flag(self, bridge_module):
         class Req:
@@ -182,9 +173,18 @@ class TestBridgeAuth:
         bridge_module.CONFIG["allow_local_requests_without_token"] = True
         assert bridge_module._check_auth(Req()) is True
 
+    def test_private_network_request_never_uses_local_bypass(self, bridge_module):
+        class Req:
+            headers = {}
+            query = {}
+            remote = "192.168.1.20"
+
+        bridge_module.CONFIG["allow_local_requests_without_token"] = True
+        assert bridge_module._check_auth(Req()) is False
+
     def test_filename_sanitizers_block_traversal(self, bridge_module):
         assert bridge_module._safe_filename("../../evil.safetensors") == "evil.safetensors"
-        assert bridge_module._safe_filename("..\\..\\evil.ckpt") == "evil.ckpt"
+        assert bridge_module._safe_filename("..\\..\\evil.ckpt") == "evil.safetensors"
         assert bridge_module._safe_image_filename("../../x.png") == "x.png"
         assert ".." not in bridge_module._safe_filename("a/b/../../c.safetensors")
         assert ".." not in bridge_module._safe_image_filename("a\\..\\b\\c.webp")

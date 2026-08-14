@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
 import time
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from desktop_backend.errors import AppError
 from winefox_core.lora_identity import clean_alias, expand_aliases, extract_identity_candidates, normalize_key
@@ -17,13 +18,20 @@ from winefox_core.lora_service import (
     SUPPORTED_MODEL_FAMILIES,
     normalize_lora_key,
 )
-from winefox_core.storage_models import json_dumps, utcnow_iso, validate_public_json
+from winefox_core.storage_models import (
+    json_dumps,
+    normalize_relative_path,
+    utcnow_iso,
+    validate_public_json,
+)
 
 logger = logging.getLogger("winefox.runtime.lora_library")
 
-#: 本地权重文件候选来源子目录（相对 data_root）；deleted_loras 不在此列，防止误找回已隔离文件。
+#: 本地权重文件候选来源子目录（相对 data_root）；deleted_loras / .winefox-quarantine
+#: 不在候选，防止误找回已隔离文件。
 _SOURCE_SUBDIRS = ("models/loras", "loras", "imports", "legacy")
 _DELETED_DIR_NAME = "deleted_loras"
+_QUARANTINE_DIR_NAME = ".winefox-quarantine"
 _MAX_LIST = 2000
 
 
@@ -32,13 +40,13 @@ def _bounded_text(value: Any, limit: int) -> str:
 
 
 def _public_text(value: Any, limit: int = 200) -> str:
-    """脱敏公开文本：命中 URL/凭据/绝对路径模式的字符串一律置空。"""
+    """脱敏公开文本：命中 URL/凭据/绝对路径/穿越/网络路径模式的字符串一律置空。"""
     text = re.sub(r"\s+", " ", str(value or "").strip())
     if not text:
         return ""
-    if re.search(r"(?i)https?://|www\.|token=|api[_-]?key|authorization|cookie", text):
+    if re.search(r"(?i)https?://|www\.|ftp://|file://|token=|api[_-]?key|authorization|cookie", text):
         return ""
-    if re.search(r"(?i)(?:[a-z]:[\\/]|\\\\|^[\\/])", text):
+    if re.search(r"(?i)(?:[a-z]:[\\/]|\\\\|^[\\/]|\.\.|//)", text):
         return ""
     return text[:limit]
 
@@ -77,12 +85,58 @@ class LoraLibraryService:
         asset_store,
         profile_store,
         service_factory: Callable | None = None,
+        on_profiles_changed: Callable | None = None,
+        settings_fn: Callable[[], Any] | None = None,
+        llm_service: Any = None,
     ) -> None:
         self._db = db
         self.data_root = Path(data_root)
         self.asset_store = asset_store
         self.profile_store = profile_store
         self.service_factory = service_factory
+        self.on_profiles_changed = on_profiles_changed
+        self.settings_fn = settings_fn
+        self.llm_service = llm_service
+
+    # -- 配置 ----------------------------------------------------------------
+
+    def _settings(self) -> dict[str, Any]:
+        if self.settings_fn is None:
+            return {}
+        try:
+            snapshot = self.settings_fn()
+            if not isinstance(snapshot, Mapping):
+                return {}
+            value = snapshot.get("lora_download")
+            return dict(value) if isinstance(value, Mapping) else {}
+        except Exception:
+            return {}
+
+    def _local_dir_root(self) -> Path | None:
+        """解析配置的 local_dir 固定根目录；未配置/非法返回 None。"""
+        raw = str(self._settings().get("local_dir") or "").strip()
+        if not raw:
+            return None
+        try:
+            return Path(os.path.expandvars(os.path.expanduser(raw))).resolve()
+        except (OSError, ValueError):
+            return None
+
+    def _require_local_file_management(self, asset: Any) -> None:
+        """Bridge/remote mode has no file-management protocol by design."""
+        settings = self._settings()
+        mode = str(settings.get("mode") or "auto").strip().lower()
+        source = str(getattr(asset, "source", "") or "").strip().lower()
+        if (
+            mode == "comfyui_bridge"
+            or source == "comfyui_bridge"
+            or (source == "inventory" and self._local_dir_root() is None)
+        ):
+            raise AppError(
+                403,
+                "LORA_BRIDGE_FILE_MANAGEMENT_DISABLED",
+                "Bridge 模式仅允许下载和读取，暂不允许隔离、恢复或删除远端文件",
+            )
 
     # -- 服务构造 ------------------------------------------------------------
 
@@ -148,6 +202,7 @@ class LoraLibraryService:
             "created_at": asset.created_at,
             "updated_at": asset.updated_at,
             "installed_at": asset.installed_at,
+            "nsfw": bool(info.get("nsfw")),
         }
 
     def _require_asset(self, asset_id: int) -> Any:
@@ -207,7 +262,14 @@ class LoraLibraryService:
             if triggers is None
             else [str(item) for item in _clean_list(triggers) if str(item or "").strip()]
         )
-        profile["aliases"] = expand_aliases(existing_aliases + new_aliases, profile_name=profile_name, trained_words=trained)
+        # PATCH 传入 aliases 时按“替换”处理，否则 UI 中删掉的旧别名会被
+        # existing_aliases 再次合并回来，造成看似保存成功但永远删不掉。
+        alias_seed = new_aliases if aliases is not None else existing_aliases
+        profile["aliases"] = expand_aliases(
+            alias_seed,
+            profile_name=profile_name,
+            trained_words=trained,
+        )
         if role is not None:
             profile["role_terms"] = _clean_list(role)
         if triggers is not None:
@@ -222,16 +284,33 @@ class LoraLibraryService:
                 self.asset_store.set_disabled(asset_id, reason="用户禁用")
             else:
                 self.asset_store.clear_disabled(asset_id)
+        if self.on_profiles_changed is not None:
+            self.on_profiles_changed()
         return self.get(asset_id)
 
     # -- 隔离 / 恢复 / 删除 --------------------------------------------------
 
     def _source_dirs(self) -> list[Path]:
-        return [d for sub in _SOURCE_SUBDIRS for d in [self.data_root / sub] if d.is_dir()]
+        """候选来源目录：优先 local_dir（下载/隔离需明确配置的本地根）。"""
+        dirs: list[Path] = []
+        local_root = self._local_dir_root()
+        if local_root is not None:
+            for sub in ("models/loras", "loras", ""):
+                d = local_root / sub if sub else local_root
+                if d.is_dir():
+                    dirs.append(d)
+        for sub in _SOURCE_SUBDIRS:
+            d = self.data_root / sub
+            if d.is_dir():
+                dirs.append(d)
+        return dirs
 
     def _source_base(self) -> Path:
         for base in self._source_dirs():
             return base
+        local_root = self._local_dir_root()
+        if local_root is not None:
+            return local_root
         base = self.data_root / "models" / "loras"
         try:
             base.mkdir(parents=True, exist_ok=True)
@@ -260,67 +339,149 @@ class LoraLibraryService:
     def _deleted_dir(self) -> Path:
         return self.data_root / _DELETED_DIR_NAME
 
-    def _unique_relpath(self, relpath: str) -> str:
-        if not (self.data_root / relpath).exists():
+    def _unique_relpath(self, root: Path, relpath: str) -> str:
+        if not (root / relpath).exists():
             return relpath
         prefix = relpath[: relpath.rfind("/") + 1]
         name = relpath[relpath.rfind("/") + 1:]
         for index in range(1, 1000):
             candidate = f"{prefix}{index}_{name}"
-            if not (self.data_root / candidate).exists():
+            if not (root / candidate).exists():
                 return candidate
         return relpath
 
+    def _quarantine_root_for(self, src: Path) -> tuple[Path, str]:
+        """返回 (隔离根, 标记)：源在 local_dir 下用 local_dir，否则 data_root。"""
+        local_root = self._local_dir_root()
+        if local_root is not None:
+            try:
+                if src.resolve().is_relative_to(local_root.resolve()):
+                    return local_root, "local"
+            except (OSError, ValueError):
+                pass
+        return self.data_root, "data"
+
+    def _root_for_quarantine(self, asset: Any) -> Path:
+        info = dict(asset.info or {})
+        if str(info.get("quarantine_root") or "").strip().lower() == "local":
+            local_root = self._local_dir_root()
+            if local_root is not None:
+                return local_root
+        return self.data_root
+
     def quarantine(self, asset_id: int, reason: str = "") -> dict:
+        """先移动权重文件到同磁盘 .winefox-quarantine，成功才提交 DB 隔离状态。
+
+        文件不在本地目录或移动失败：抛错且 DB 保持原状（不显示已隔离）。
+        """
         asset = self._require_asset(asset_id)
+        self._require_local_file_management(asset)
         if asset.state == "quarantined":
             raise AppError(409, "LORA_ALREADY_QUARANTINED", "LoRA 已处于隔离状态")
-        stamp = int(time.time())
-        relpath = f"{_DELETED_DIR_NAME}/{stamp}_{asset.filename}"
+        src = self._locate_source_file(asset)
+        if src is None:
+            raise AppError(409, "LORA_QUARANTINE_FILE_MISSING", "权重文件不在本地目录，无法隔离")
+        root, marker = self._quarantine_root_for(src)
+        root_resolved = root.resolve()
         try:
-            src = self._locate_source_file(asset)
-            if src is not None:
-                relpath = self._unique_relpath(relpath)
-                self._deleted_dir().mkdir(parents=True, exist_ok=True)
-                shutil.move(str(src), str(self.data_root / relpath))
+            original_relpath = src.resolve().relative_to(root_resolved).as_posix()
+        except ValueError as exc:
+            raise AppError(400, "LORA_QUARANTINE_PATH_UNSAFE", "LoRA 源文件不在受管目录内") from exc
+        original_relpath = normalize_relative_path(
+            original_relpath, name="original_relpath"
+        )
+        stamp = int(time.time())
+        relpath = f"{_QUARANTINE_DIR_NAME}/{stamp}_{asset.filename}"
+        try:
+            (root / _QUARANTINE_DIR_NAME).mkdir(parents=True, exist_ok=True)
+            relpath = self._unique_relpath(root, relpath)
+            shutil.move(str(src), str(root / relpath))
         except Exception as exc:
             logger.warning("LoRA 隔离移动文件失败 asset=%s: %s", asset_id, exc)
-        updated = self.asset_store.quarantine(asset_id, relpath)
-        reason = _public_text(reason, 200)
-        if reason:
-            self._set_info_field(asset_id, "quarantine_reason", reason)
-            updated = self.asset_store.get_by_id(asset_id) or updated
-        return self._asset_public(updated)
+            raise AppError(409, "LORA_QUARANTINE_MOVE_FAILED", "权重文件移动失败，未标记隔离") from exc
+        try:
+            with self._db.transaction():
+                self.asset_store.quarantine(asset_id, relpath)
+                reason = _public_text(reason, 200)
+                if reason:
+                    self._set_info_field(asset_id, "quarantine_reason", reason)
+                self._set_info_field(asset_id, "quarantine_root", marker)
+                self._set_info_field(asset_id, "original_relpath", original_relpath)
+        except Exception as exc:
+            try:
+                shutil.move(str(root / relpath), str(src))
+            except Exception:
+                logger.exception("LoRA 隔离 DB 失败且文件回滚失败 asset=%s", asset_id)
+                raise AppError(
+                    500,
+                    "LORA_QUARANTINE_ROLLBACK_FAILED",
+                    "隔离记录失败且文件无法自动复原，请检查隔离目录",
+                ) from exc
+            raise AppError(500, "LORA_QUARANTINE_DB_FAILED", "隔离记录失败，文件已恢复原位") from exc
+        updated = self._asset_public(self._require_asset(asset_id))
+        if self.on_profiles_changed is not None:
+            self.on_profiles_changed()
+        return updated
 
     def restore(self, asset_id: int) -> dict:
+        """先移动隔离文件回原位，成功才提交 DB 恢复状态。
+
+        隔离文件不存在或移动失败：保持隔离状态并抛错。
+        """
         asset = self._require_asset(asset_id)
+        self._require_local_file_management(asset)
         if asset.state != "quarantined" or not asset.quarantine_relpath:
             raise AppError(409, "LORA_NOT_QUARANTINED", "LoRA 不在隔离状态，无法恢复")
-        root = self.data_root.resolve()
-        quarantined = (self.data_root / asset.quarantine_relpath).resolve(strict=False)
-        if not quarantined.is_relative_to(root) or quarantined == root:
+        root = self._root_for_quarantine(asset)
+        root_resolved = root.resolve()
+        quarantined = (root / asset.quarantine_relpath).resolve(strict=False)
+        if not quarantined.is_relative_to(root_resolved) or quarantined == root_resolved:
             raise AppError(400, "LORA_RESTORE_PATH_UNSAFE", "隔离路径越界，拒绝恢复")
+        if not quarantined.is_file():
+            raise AppError(409, "LORA_RESTORE_FILE_MISSING", "隔离文件不存在，保持隔离状态")
+        info = dict(asset.info or {})
+        original_relpath = normalize_relative_path(
+            str(info.get("original_relpath") or asset.filename),
+            name="original_relpath",
+        )
+        base = root_resolved
+        target = (base / original_relpath).resolve(strict=False)
+        if not target.is_relative_to(base) or target == base:
+            raise AppError(400, "LORA_RESTORE_TARGET_UNSAFE", "恢复目标越界，拒绝恢复")
+        if target.exists():
+            raise AppError(409, "LORA_RESTORE_TARGET_EXISTS", "原位置已有同名文件，拒绝覆盖")
         try:
-            if quarantined.is_file():
-                base = self._source_base()
-                target = base / asset.filename
-                shutil.move(str(quarantined), str(target))
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(quarantined), str(target))
         except Exception as exc:
             logger.warning("LoRA 恢复移动文件失败 asset=%s: %s", asset_id, exc)
-        updated = self.asset_store.restore(asset_id)
-        return self._asset_public(updated)
+            raise AppError(409, "LORA_RESTORE_MOVE_FAILED", "权重文件恢复失败，保持隔离状态") from exc
+        try:
+            updated = self.asset_store.restore(asset_id)
+        except Exception as exc:
+            try:
+                quarantined.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(target), str(quarantined))
+            except Exception:
+                logger.exception("LoRA 恢复 DB 失败且文件回滚失败 asset=%s", asset_id)
+                raise AppError(
+                    500,
+                    "LORA_RESTORE_ROLLBACK_FAILED",
+                    "恢复记录失败且文件无法退回隔离目录，请检查文件位置",
+                ) from exc
+            raise AppError(500, "LORA_RESTORE_DB_FAILED", "恢复记录失败，文件仍保持隔离") from exc
+        result = self._asset_public(updated)
+        if self.on_profiles_changed is not None:
+            self.on_profiles_changed()
+        return result
 
     def delete(self, asset_id: int) -> None:
-        asset = self._require_asset(asset_id)
-        try:
-            src = self._locate_source_file(asset)
-            if src is not None:
-                relpath = self._unique_relpath(f"{_DELETED_DIR_NAME}/{int(time.time())}_{asset.filename}")
-                self._deleted_dir().mkdir(parents=True, exist_ok=True)
-                shutil.move(str(src), str(self.data_root / relpath))
-        except Exception as exc:
-            logger.warning("LoRA 删除保留文件失败 asset=%s: %s", asset_id, exc)
-        self.asset_store.delete(asset_id)
+        """仅作内部兼容（删除即隔离复用）；UI/API 不暴露永久删除。"""
+        raise AppError(
+            405,
+            "LORA_PERMANENT_DELETE_DISABLED",
+            "永久删除已禁用；请使用隔离功能，以便之后恢复",
+        )
 
     def _set_info_field(self, asset_id: int, key: str, value: Any) -> None:
         asset = self.asset_store.get_by_id(int(asset_id))
@@ -348,32 +509,172 @@ class LoraLibraryService:
         service = self._build_service()
         result = service.match(prompt, family=family, limit=limit)
         profiles = service.profiles_for(family)
+        # 已安装/未禁用/未隔离且文件在库的资产可进入候选；
+        # 无资产记录的档案无禁用/隔离/缺失状态，视为可用。
+        assets = {
+            normalize_lora_key(a.filename): a
+            for a in self.asset_store.list(family, limit=2000)
+        }
+
+        def _is_eligible(lora_name: str) -> bool:
+            asset = assets.get(normalize_lora_key(lora_name))
+            if asset is None:
+                return True
+            return (
+                asset.state == "installed"
+                and not asset.disabled
+                and not bool((asset.info or {}).get("file_missing"))
+            )
+
         matches: list[dict[str, Any]] = []
         for selection in result.matches:
+            if not _is_eligible(selection.lora_name):
+                continue
             lp = profiles.get(selection.key)
+            asset = assets.get(normalize_lora_key(selection.lora_name))
+            extra = dict(lp.extra) if lp else {}
             aliases = list(lp.aliases if lp else [])
             triggers = list(selection.trigger_words) or list(lp.trigger_words if lp else [])
             character = _public_text(selection.character or selection.key, 100)
+            connector = _public_text(result.connector, 60)
+            strength_model = getattr(selection, "strength_model", None)
+            strength_clip = getattr(selection, "strength_clip", None)
+            if strength_model is None and lp is not None:
+                strength_model = lp.strength_model
+            if strength_clip is None and lp is not None:
+                strength_clip = lp.strength_clip
             matches.append({
                 "key": _public_text(selection.key, 100),
                 "name": _public_text(selection.lora_name, 200),
                 "character": character,
                 "aliases": [_public_text(item, 100) for item in aliases if _public_text(item, 100)],
                 "triggers": [_public_text(item, 100) for item in triggers if _public_text(item, 100)],
-                "score": round(float(selection.score), 2),
+                "score": round(min(1.0, float(selection.score) / 100.0), 3),
+                "strength_model": strength_model,
+                "strength_clip": strength_clip,
                 "relevance": "精确匹配" if selection.match_kind == "exact" else "模糊匹配",
-                "connector": bool(result.connector_found),
+                "connector": connector,
+                "nsfw": bool((asset.info if asset else {}).get("nsfw") or extra.get("nsfw")),
+                "disabled": bool(asset.disabled if asset else False),
+                "family": asset.model_family if asset else selection.family,
+                "filename": _public_text(asset.filename if asset else selection.lora_name, 200),
+                "id": asset.id if asset else None,
+                "source": "rule",
                 "note": _public_text(
                     f"本地命中：{character or selection.key}（{selection.matched_term or selection.key}）",
                     200,
                 ),
             })
+        if not matches and self.llm_service is not None:
+            llm_item = await self._llm_rescue(service, prompt, family, assets, _is_eligible, limit)
+            if llm_item is not None:
+                matches = [llm_item]
         return {
             "prompt": prompt,
             "family": family,
             "multi": result.multi,
             "connector_found": result.connector_found,
+            "connector": _public_text(result.connector, 60),
             "matches": matches,
+        }
+
+    # -- LLM 补救层（保守：规则无可靠命中时才调用，结果仍须通过本地校验） ----
+
+    def _family_revision(self, family: str) -> int:
+        try:
+            # 每条档案各自递增 revision；取 max 会漏掉“修改非最大 revision
+            # 档案”的变化。求和在无删除的档案存储中是单调聚合版本。
+            return sum(record.revision for record in self.profile_store.get_family(family))
+        except Exception:
+            return 0
+
+    def _llm_candidates(self, service, family: str, assets: dict, is_eligible: Callable) -> list[dict]:
+        """从当前 family 已装/未禁用/未隔离且文件在库的档案构造 LLM 候选。
+
+        候选携带解析所需的元数据，但送进 LLM 的净化载荷只含公开安全字段。
+        """
+        candidates: list[dict] = []
+        for profile in service.profiles_for(family).values():
+            lora_name = str(profile.lora_name or "").strip()
+            if not lora_name or not is_eligible(lora_name):
+                continue
+            asset = assets.get(normalize_lora_key(lora_name))
+            extra = dict(profile.extra or {})
+            candidates.append({
+                "key": str(profile.key or profile.lora_name),
+                "id": asset.id if asset else None,
+                "character": str(profile.character or profile.key or ""),
+                "name": str(Path(lora_name).stem),
+                "lora": lora_name,
+                "lora_name": lora_name,
+                "family": family,
+                "filename": lora_name,
+                "aliases": list(profile.aliases or []),
+                "trigger_words": list(profile.trigger_words or []),
+                "search_aliases": list(extra.get("search_aliases") or []),
+                "tags": list(extra.get("tags") or []),
+                "title": str(extra.get("title") or ""),
+                "strength_model": profile.strength_model,
+                "strength_clip": profile.strength_clip,
+                "nsfw": bool((asset.info or {}).get("nsfw") if asset else extra.get("nsfw")),
+                "disabled": bool(asset.disabled if asset else False),
+            })
+        return candidates[:8]
+
+    async def _llm_rescue(self, service, prompt: str, family: str, assets: dict, is_eligible: Callable, limit: int) -> dict | None:
+        llm = self.llm_service
+        if llm is None or not llm.llm_enabled():
+            return None
+        candidates = self._llm_candidates(service, family, assets, is_eligible)
+        if not candidates:
+            return None
+        try:
+            result = await llm.match(
+                prompt=prompt,
+                candidates=candidates,
+                family=family,
+                revision=self._family_revision(family),
+                limit=max(1, min(int(limit or 5), 8)),
+            )
+        except Exception:
+            return None
+        if not isinstance(result, dict):
+            return None
+        matched = result.get("matched")
+        if not isinstance(matched, dict):
+            return None
+        return self._llm_match_item(matched, result)
+
+    def _llm_match_item(self, matched: dict, result: dict) -> dict:
+        key = _public_text(str(matched.get("key") or matched.get("id") or ""), 100)
+        lora_name = str(matched.get("lora_name") or matched.get("lora") or "")
+        character = _public_text(str(matched.get("character") or key), 100)
+        strength_model = matched.get("strength_model")
+        strength_clip = matched.get("strength_clip")
+        score = 0.0
+        try:
+            score = float(result.get("confidence") or 0)
+        except (TypeError, ValueError):
+            score = 0.0
+        reason = _public_text(str(result.get("reason") or ""), 200) or f"LLM 辅助命中：{character}"
+        return {
+            "key": key,
+            "name": _public_text(lora_name or str(matched.get("name") or ""), 200),
+            "character": character,
+            "aliases": [_public_text(x, 100) for x in (matched.get("aliases") or []) if _public_text(x, 100)],
+            "triggers": [_public_text(x, 100) for x in (matched.get("trigger_words") or []) if _public_text(x, 100)],
+            "score": round(min(1.0, score), 3),
+            "strength_model": strength_model,
+            "strength_clip": strength_clip,
+            "relevance": "LLM 辅助",
+            "connector": "",
+            "nsfw": bool(matched.get("nsfw")),
+            "disabled": bool(matched.get("disabled")),
+            "family": str(matched.get("family") or "illustrious"),
+            "filename": _public_text(lora_name, 200),
+            "id": matched.get("id"),
+            "source": "llm",
+            "note": reason,
         }
 
 

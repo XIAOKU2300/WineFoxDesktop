@@ -32,6 +32,9 @@ export class GenerateView {
       loraExpanded: false,
       loraQuery: "",
       loraVisible: 40,
+      autoLoraMatches: [], // 生成前自动匹配预览：提交时作为 auto_lora_confirmations
+      autoLoraBusy: false,
+      autoLoraPreviewReady: false,
     };
     store.set("genParams", this.state);
     this.root = null;
@@ -39,6 +42,7 @@ export class GenerateView {
     this.loraFallbackTarget = null;
     this.loraFallbackHandler = null;
     this.loraPageFrame = null;
+    this._autoPreviewTimer = null;
   }
 
   async mount(container) {
@@ -375,6 +379,7 @@ export class GenerateView {
     return el("section", { class: "gen-panel gen-center", "aria-label": "画布" }, [
       el("div", { class: "canvas-wrap" }, [
         el("div", { class: "canvas-area" + (s.mode === "img2img" ? "" : ""), id: "canvas-area", tabindex: "0", role: "img" }, content),
+        this.autoLoraPanel(),
         el("div", { class: "gen-actions gen-submit-bar" }, [
           el("button", { class: "btn btn-primary", id: "g-submit", type: "button", disabled: !!s.job }, [
             s.mode === "img2img" ? ic("wand") : ic("play"),
@@ -424,6 +429,118 @@ export class GenerateView {
     const autoMatches = s.result?.job?.meta?.auto_lora?.matches || [];
     const autoLabel = autoMatches.map((match) => match.character || match.key).filter(Boolean).join("、");
     return s.result ? `${autoLabel ? `LoRA ${autoLabel} · ` : ""}seed ${s.result.job.seed ?? "—"} · ${fmtRelative(s.result.job.created_at)}` : "";
+  }
+
+  /* ============ 生成前自动匹配预览 + 用户移除 ============ */
+  autoLoraPanel() {
+    const s = this.state;
+    let panel;
+    if (s.autoLoraBusy) {
+      panel = el("section", { class: "auto-lora-panel", id: "g-autolora-panel", "aria-live": "polite" }, [
+        el("div", { class: "auto-lora-hint text-xs text-muted" }, "正在匹配提示词中的 LoRA…"),
+      ]);
+      return panel;
+    }
+    const matches = s.autoLoraMatches;
+    if (!matches.length) {
+      return el("section", { class: "auto-lora-panel", id: "g-autolora-panel", hidden: true, "aria-live": "polite" });
+    }
+    const rows = matches.map((m) => {
+      const badge = m.source === "llm"
+        ? el("span", { class: "badge llm-hit" }, "LLM 辅助命中")
+        : el("span", { class: "badge rule-hit" }, "规则命中");
+      const nsfw = m.nsfw ? el("span", { class: "badge warn" }, "敏感内容") : null;
+      const score = Number(m.score);
+      const scoreText = Number.isFinite(score) ? ` · 匹配度 ${Math.round(score * 100)}%` : "";
+      const strength = Number.isFinite(Number(m.strength_model)) ? ` · 强度 ${Number(m.strength_model).toFixed(2)}` : "";
+      const meta = [m.character, m.filename].filter(Boolean).join(" · ");
+      const remove = el("button", {
+        class: "icon-btn auto-lora-remove", type: "button",
+        title: "移除该自动引用", "aria-label": `移除 ${m.name || m.character || "该 LoRA"}`,
+      }, [ic("x")]);
+      remove.dataset.name = String(m.name ?? m.key ?? m.id ?? "");
+      return el("div", { class: "auto-lora-row" }, [
+        el("div", { class: "grow" }, [
+          el("div", { class: "row wrap gap-2" }, [
+            el("b", { class: "auto-lora-name" }, esc(m.name || m.character || "未命名 LoRA")),
+            badge,
+            nsfw,
+          ]),
+          meta ? el("div", { class: "text-xs text-muted" }, esc(meta + scoreText + strength)) : null,
+        ]),
+        remove,
+      ]);
+    });
+    panel = el("section", { class: "auto-lora-panel", id: "g-autolora-panel", "aria-live": "polite" }, [
+      el("div", { class: "auto-lora-head" }, [
+        el("span", { class: "hint" }, `将自动引用 ${rows.length} 个 LoRA，提交前可移除`),
+        el("button", { class: "btn btn-sm", type: "button", id: "g-autolora-clear" }, "全部移除"),
+      ]),
+      ...rows,
+    ]);
+    panel.addEventListener("click", (event) => {
+      const remove = event.target.closest(".auto-lora-remove");
+      if (remove) { this.removeAutoLoraMatch(remove.dataset.name); return; }
+      if (event.target.closest("#g-autolora-clear")) { this.clearAutoLoraMatches(); }
+    });
+    return panel;
+  }
+
+  refreshAutoLoraPanel() {
+    const old = $("#g-autolora-panel", this.root);
+    const next = this.autoLoraPanel();
+    if (old && old.parentNode) old.replaceWith(next);
+  }
+
+  removeAutoLoraMatch(name) {
+    const s = this.state;
+    s.autoLoraMatches = s.autoLoraMatches.filter((m) => String(m.name ?? m.key ?? m.id) !== String(name));
+    this.refreshAutoLoraPanel();
+  }
+
+  clearAutoLoraMatches() {
+    this.state.autoLoraMatches = [];
+    this.refreshAutoLoraPanel();
+  }
+
+  scheduleAutoLoraPreview() {
+    const s = this.state;
+    if (this._autoPreviewTimer != null) { clearTimeout(this._autoPreviewTimer); this._autoPreviewTimer = null; }
+    const prompt = (s.params?.prompt || "").trim();
+    const family = s.family;
+    const seq = (s._autoPreviewSeq = (s._autoPreviewSeq || 0) + 1);
+    s.autoLoraBusy = true;
+    s.autoLoraPreviewReady = false;
+    s.autoLoraMatches = [];
+    this.refreshAutoLoraPanel();
+    if (!prompt) {
+      s.autoLoraBusy = false;
+      s.autoLoraPreviewReady = false;
+      this.refreshAutoLoraPanel();
+      return;
+    }
+    this._autoPreviewTimer = setTimeout(async () => {
+      this._autoPreviewTimer = null;
+      try {
+        const result = await api.loraMatchPreview({ prompt, family });
+        if (seq !== s._autoPreviewSeq || !this.root?.isConnected) return;
+        s.autoLoraBusy = false;
+        s.autoLoraPreviewReady = true;
+        s.autoLoraMatches = Array.isArray(result?.matches) ? result.matches : [];
+        this.refreshAutoLoraPanel();
+      } catch {
+        if (seq !== s._autoPreviewSeq || !this.root?.isConnected) return;
+        s.autoLoraBusy = false;
+        s.autoLoraPreviewReady = false;
+        s.autoLoraMatches = [];
+        this.refreshAutoLoraPanel();
+      }
+    }, 450);
+  }
+
+  cancelAutoLoraPreview() {
+    if (this._autoPreviewTimer != null) { clearTimeout(this._autoPreviewTimer); this._autoPreviewTimer = null; }
+    this.state._autoPreviewSeq = (this.state._autoPreviewSeq || 0) + 1;
   }
 
   /* 「重生成」：把上次提交的提示词回填到输入框，交由用户修改后再生成 */
@@ -560,6 +677,10 @@ export class GenerateView {
     g("g-family")?.addEventListener("change", (e) => {
       s.family = e.target.value;
       s.loraVisible = 40;
+      s.autoLoraMatches = [];
+      s.autoLoraBusy = false;
+      s.autoLoraPreviewReady = false;
+      this.cancelAutoLoraPreview();
       const workflows = (store.get("catalog")?.workflows || []).filter((workflow) =>
         !workflow.mode || workflow.mode === s.mode || workflow.mode === "any");
       const familyWorkflows = workflows.filter((workflow) => !workflow.family || workflow.family === "any" || workflow.family === s.family);
@@ -611,7 +732,11 @@ export class GenerateView {
     });
 
     // 参数
-    g("g-prompt")?.addEventListener("input", (e) => { s.params = s.params || {}; s.params.prompt = e.target.value; });
+    g("g-prompt")?.addEventListener("input", (e) => {
+      s.params = s.params || {};
+      s.params.prompt = e.target.value;
+      this.scheduleAutoLoraPreview();
+    });
     g("g-neg")?.addEventListener("input", (e) => { s.params = s.params || {}; s.params.negative = e.target.value; });
     g("g-seed")?.addEventListener("input", (e) => { s.seed = parseInt(e.target.value, 10) || -1; });
     g("g-seed-dec")?.addEventListener("click", () => { s.seed = (s.seed <= 0 ? 1 : s.seed) - 1; g("g-seed").value = s.seed; });
@@ -654,6 +779,10 @@ export class GenerateView {
       s.mode = mode;
       if (mode === "txt2img") s.refImage = null;
       s.result = null;
+      s.autoLoraMatches = [];
+      s.autoLoraBusy = false;
+      s.autoLoraPreviewReady = false;
+      this.cancelAutoLoraPreview();
 
       const workflows = (store.get("catalog")?.workflows || []).filter((workflow) =>
         !workflow.mode || workflow.mode === mode || workflow.mode === "any");
@@ -717,6 +846,7 @@ export class GenerateView {
       $("#g-prompt", this.root)?.focus();
       return;
     }
+    this.cancelAutoLoraPreview();
     const payload = {
       mode: s.mode,
       prompt: (p.prompt || "").trim(),
@@ -729,6 +859,16 @@ export class GenerateView {
       loras: [...s.loras.entries()].map(([id, v]) => ({ id, strength: v.strength })),
       ref_image: s.refImage ? { url: s.refImage.url } : null,
     };
+    // 只有预览请求已成功完成时才发送确认数组。请求仍在进行或失败时省略
+    // 该字段，让后端规则匹配正常兜底；成功预览后 [] 才表示用户明确全删。
+    if (s.autoLoraPreviewReady && !s.autoLoraBusy) {
+      payload.auto_lora_confirmations = s.autoLoraMatches.map((m) => ({
+        name: m.name || m.key || m.filename,
+        strength: Number.isFinite(Number(m.strength_model))
+          ? Number(m.strength_model)
+          : Number.isFinite(Number(m.score)) ? Number(m.score) : undefined,
+      }));
+    }
     if (s.workflowOverrides) {
       Object.assign(payload, {
         steps: p.steps || 24,
@@ -1039,6 +1179,7 @@ export class GenerateView {
   }
 
   dispose() {
+    this.cancelAutoLoraPreview();
     this.teardownLoraPagination();
     if (this.loraPageFrame != null) cancelAnimationFrame(this.loraPageFrame);
     this.loraPageFrame = null;

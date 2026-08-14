@@ -194,6 +194,41 @@ def _safe_int(value) -> int:
         return 0
 
 
+def _public_text(value: Any, limit: int = 200) -> str:
+    """脱敏公开文本：命中 URL/凭据/绝对路径/穿越/网络路径模式的字符串一律置空。"""
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    if not text:
+        return ""
+    if re.search(r"(?i)https?://|www\.|ftp://|file://|token=|api[_-]?key|authorization|cookie", text):
+        return ""
+    if re.search(r"(?i)(?:[a-z]:[\\/]|\\\\|^[\\/]|\.\.|//)", text):
+        return ""
+    return text[:limit]
+
+
+def _public_url(value: Any) -> str:
+    """净化公开 URL：仅保留 http/https，丢弃 userinfo 与敏感查询参数。"""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = urlparse(raw)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            return ""
+        query = parse_qs(parsed.query, keep_blank_values=True)
+        for key in list(query):
+            if re.search(r"(?i)token|api[_-]?key|authorization|cookie|secret|access_key", key):
+                query.pop(key, None)
+        netloc = parsed.hostname
+        if ":" in netloc and not netloc.startswith("["):
+            netloc = f"[{netloc}]"
+        if parsed.port is not None:
+            netloc = f"{netloc}:{parsed.port}"
+        return parsed._replace(netloc=netloc, query=urlencode(query, doseq=True) if query else "").geturl()
+    except Exception:
+        return ""
+
+
 class CivitaiClient:
     def __init__(
         self,
@@ -211,6 +246,7 @@ class CivitaiClient:
         proxy_circuit_breaker: bool = True,
         proxy_circuit_breaker_cooldown: int = 60,
         network_max_retries: int = 2,
+        download_redirect_validator=None,
     ):
         self.api_token = str(api_token or "").strip()
         self.proxy = str(proxy or "").strip()
@@ -231,6 +267,25 @@ class CivitaiClient:
         self.proxy_circuit_breaker = bool(proxy_circuit_breaker)
         self.proxy_circuit_breaker_cooldown = max(5, int(proxy_circuit_breaker_cooldown or 60))
         self.network_max_retries = max(1, min(int(network_max_retries or 2), 5))
+        self.download_redirect_validator = download_redirect_validator
+
+    def _download_trace_configs(self) -> list:
+        validator = self.download_redirect_validator
+        if validator is None:
+            return []
+        trace = aiohttp.TraceConfig()
+
+        async def validate_redirect(_session, _context, params):
+            location = str(params.response.headers.get("Location") or "").strip()
+            target = urljoin(str(params.url), location)
+            accepted = validator(target)
+            if asyncio.iscoroutine(accepted):
+                accepted = await accepted
+            if accepted is False:
+                raise RuntimeError("下载重定向地址未通过安全校验")
+
+        trace.on_request_redirect.append(validate_redirect)
+        return [trace]
 
     def _headers(self):
         headers = dict(DEFAULT_HEADERS)
@@ -1648,7 +1703,11 @@ class CivitaiClient:
         downloaded = 0
         logger.info(f"[ComfyUI] 使用单线程下载：{dest_path.name}")
         try:
-            async with aiohttp.ClientSession(headers=headers, timeout=timeout) as session:
+            async with aiohttp.ClientSession(
+                headers=headers,
+                timeout=timeout,
+                trace_configs=self._download_trace_configs(),
+            ) as session:
                 self._check_proxy_circuit()
                 async with session.get(download_url, proxy=self.proxy or None) as resp:
                     self._mark_proxy_success()
@@ -1737,7 +1796,11 @@ class CivitaiClient:
         timeout = aiohttp.ClientTimeout(total=None, connect=min(30, self.timeout), sock_read=120)
         headers = self._headers()
 
-        async with aiohttp.ClientSession(headers=headers, timeout=timeout) as session:
+        async with aiohttp.ClientSession(
+            headers=headers,
+            timeout=timeout,
+            trace_configs=self._download_trace_configs(),
+        ) as session:
             total, accept_ranges = await self._probe_download(session, download_url)
             if not total or not accept_ranges or self.split <= 1:
                 raise RuntimeError("服务器不支持 Range 分片或无法获取文件大小")
@@ -2604,11 +2667,11 @@ class LoraProfileStore:
             "lora": file_name,
             "aliases": aliases,
             "character": character_name or clean_model_alias or Path(file_name).stem,
-            "search_query": search_query,
-            "search_terms": [str(x).strip() for x in (summary.get("search_terms") or []) if str(x).strip()][:8],
-            "search_aliases": [str(x).strip() for x in (summary.get("search_aliases") or []) if str(x).strip()][:32],
-            "source_title": model_name,
-            "source_version_title": version_name,
+            "search_query": _public_text(search_query, 120),
+            "search_terms": [_public_text(x, 120) for x in (summary.get("search_terms") or []) if _public_text(x, 120)][:8],
+            "search_aliases": [_public_text(x, 120) for x in (summary.get("search_aliases") or []) if _public_text(x, 120)][:32],
+            "source_title": _public_text(model_name, 160),
+            "source_version_title": _public_text(version_name, 160),
             "identity_evidence": identity_candidates[:6],
             "official_aliases": official_aliases,
             "nickname_aliases": [],
@@ -2619,13 +2682,13 @@ class LoraProfileStore:
             "trigger_prompt": ", ".join(trained_words),
             "appearance_prompt": ", ".join(identity_appearance),
             "default_outfit_prompt": ", ".join(default_outfit),
-            "recommended_prompt": str(summary.get("recommended_prompt") or ""),
+            "recommended_prompt": _public_text(summary.get("recommended_prompt") or "", 400),
             "negative_prompt": "",
             "source": summary.get("source") or "civitai",
             "model_id": summary.get("model_id"),
             "version_id": summary.get("version_id"),
             "base_model": summary.get("base_model") or "",
-            "page_url": summary.get("page_url") or "",
+            "page_url": _public_url(summary.get("page_url") or ""),
             "strength_model": strength_model,
             "strength_clip": strength_clip,
             "updated_at": int(time.time()),

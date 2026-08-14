@@ -115,7 +115,7 @@ class SetupManifestTests(unittest.TestCase):
         self.assertEqual(len(self.manifest.bridge.allowed_hosts), 10)
         # Desktop hardens: local requests without a token are refused.
         self.assertFalse(self.manifest.bridge.allow_local_requests_without_token)
-        self.assertEqual(self.manifest.bridge.version, "1.4.1")
+        self.assertEqual(self.manifest.bridge.version, "1.4.2")
 
     def test_python_rule(self) -> None:
         self.assertEqual(tuple(self.manifest.python.min_version), (3, 10))

@@ -30,7 +30,7 @@ def build_manifest(base_url: str = "http://127.0.0.1:1") -> SetupManifest:
         "bridge": {
             "source": "comfyui_custom_nodes/ComfyUI-AstrBot-LoraBridge",
             "dest_folder": "ComfyUI-AstrBot-LoraBridge",
-            "version": "1.4.1",
+            "version": "1.4.2",
             "allow_local_requests_without_token": False,
             "allowed_hosts": ["127.0.0.1"],
             "config_defaults": dict(_BRIDGE_DEFAULTS),
@@ -151,7 +151,7 @@ class SetupManagerTests(unittest.IsolatedAsyncioTestCase):
     async def test_capabilities_from_manifest(self) -> None:
         manifest = self.manager.manifest
         self.assertIn("lite", manifest.tiers)
-        self.assertEqual(manifest.bridge.version, "1.4.1")
+        self.assertEqual(manifest.bridge.version, "1.4.2")
         self.assertEqual(manifest.manual_files[0].name, "manual-a.safetensors")
         self.assertIn("core.tiny", [m.id for m in manifest.models.values()])
 
@@ -228,7 +228,7 @@ class SetupManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(kit["configured"])
         blob = json.dumps(kit, ensure_ascii=False).lower()
         self.assertNotIn("token", blob)
-        self.assertEqual(kit["bridge_version"], "1.4.1")
+        self.assertEqual(kit["bridge_version"], "1.4.2")
         self.assertGreater(len(kit["manual_files"]), 0)
 
     async def test_start_job_rejects_root_in_install_dir(self) -> None:

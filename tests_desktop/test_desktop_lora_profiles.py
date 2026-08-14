@@ -16,7 +16,7 @@ from desktop_runtime.lora_profiles import (
     resolve_prompt_loras,
 )
 from desktop_runtime.workflow_builder import prepare_workflow
-from winefox_core.lora_service import LoraService
+from winefox_core.lora_service import LoraService, normalize_lora_key
 
 
 class DesktopLoraProfileTests(unittest.TestCase):
@@ -210,6 +210,29 @@ class DesktopLoraProfileTests(unittest.TestCase):
             self.assertIn("bailu outfit", resolved.triggers)
             self.assertEqual(resolved.metadata["matches"][0]["matched_term"], "小白露")
 
+    def test_resolve_prompt_loras_excludes_disabled_keys(self) -> None:
+        service = LoraService({
+            "illustrious": {
+                "白露": {
+                    "lora": "Bailu.safetensors",
+                    "character": "白露",
+                    "aliases": ["白露"],
+                }
+            }
+        })
+        inventory = ["Bailu.safetensors", "Other.safetensors"]
+        resolved = resolve_prompt_loras(service, "画一张白露", "illustrious", inventory)
+        self.assertEqual(len(resolved.loras), 1)
+        # 排除已禁用资产 -> 不再进入自动匹配候选
+        excluded = resolve_prompt_loras(
+            service,
+            "画一张白露",
+            "illustrious",
+            inventory,
+            excluded_keys=["Bailu.safetensors"],
+        )
+        self.assertEqual(len(excluded.loras), 0)
+
     def test_prompt_tags_are_appended_once(self) -> None:
         self.assertEqual(
             merge_prompt_tags("portrait, white hair", ["white hair", "blue eyes"]),
@@ -284,13 +307,19 @@ class _MetadataExecutor:
 
 
 class DesktopLoraMetadataRefreshTests(unittest.IsolatedAsyncioTestCase):
-    async def test_refresh_updates_cache_and_live_profile_index(self) -> None:
+    async def test_refresh_writes_sqlite_and_updates_live_profile_index(self) -> None:
+        from winefox_core.storage import Database, LoraProfileStore
+
         with tempfile.TemporaryDirectory(prefix="winefox_metadata_refresh_") as temp:
             root = Path(temp)
             server_address = "http://127.0.0.1:8188"
+            db = Database(root / "winefox.db")
+            db.initialize()
             engine = object.__new__(DesktopEngine)
             engine.data_root = root
             engine.config = _MetadataConfig(server_address)
+            engine.db = db
+            engine.lora_profile_store = LoraProfileStore(db)
             engine._lora_metadata_cache_key = lora_metadata_cache_key(server_address)
             engine._lora_metadata_attempted = set()
             engine._reload_lora_profiles()
@@ -300,12 +329,194 @@ class DesktopLoraMetadataRefreshTests(unittest.IsolatedAsyncioTestCase):
                     ["characters/Adult_Nahida.safetensors"]
                 )
 
-            cache_path = root / "cache" / "lora_profiles_metadata.json"
-            self.assertTrue(cache_path.is_file())
+            # 生成档案写入 SQLite（唯一真相源），不再写 JSON cache
+            records = engine.lora_profile_store.get_family("illustrious")
+            self.assertTrue(records)
+            self.assertFalse((root / "cache" / "lora_profiles_metadata.json").is_file())
             self.assertIn("adultnahida", engine._lora_profile_index)
             profile = engine._lora_profile_index["adultnahida"][0]
             self.assertEqual(profile.trigger_words, ["aunahida"])
-            self.assertIn("lora_profiles_metadata.json", engine.loaded_lora_profiles.sources)
+            self.assertEqual(engine.loaded_lora_profiles.sources, ("sqlite",))
+            db.close()
+
+
+class DesktopLoraReconcileTests(unittest.IsolatedAsyncioTestCase):
+    def _engine(self, root: Path) -> "DesktopEngine":
+        from winefox_core.storage import Database, LoraAssetStore, LoraProfileStore
+
+        db = Database(root / "winefox.db")
+        db.initialize()
+        engine = object.__new__(DesktopEngine)
+        engine.data_root = root
+        engine.config = _MetadataConfig("http://127.0.0.1:8188")
+        engine.db = db
+        engine.lora_asset_store = LoraAssetStore(db)
+        engine.lora_profile_store = LoraProfileStore(db)
+        engine._reload_lora_profiles()
+        return engine
+
+    def test_reconcile_registers_new_inventory_files(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="winefox_reconcile_") as temp:
+            engine = self._engine(Path(temp))
+            stats = engine._reconcile_lora_assets(
+                ["models/loras/Arknights_Mizuki.safetensors", "other.safetensors"]
+            )
+            self.assertEqual(stats["registered"], 2)
+            rec = engine.lora_asset_store.get("illustrious", "Arknights_Mizuki.safetensors")
+            self.assertIsNotNone(rec)
+            self.assertEqual(rec.source, "inventory")
+            self.assertEqual(rec.comfy_key, "models/loras/Arknights_Mizuki.safetensors")
+            self.assertEqual(rec.display_name, "Arknights_Mizuki")
+            engine.db.close()
+
+    def test_reconcile_never_overwrites_existing_row(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="winefox_reconcile_") as temp:
+            engine = self._engine(Path(temp))
+            engine.lora_asset_store.register(
+                "illustrious", "existing.safetensors",
+                comfy_key="existing.safetensors",
+                display_name="Existing", source="local",
+            )
+            stats = engine._reconcile_lora_assets(["existing.safetensors"])
+            self.assertEqual(stats["registered"], 0)
+            rec = engine.lora_asset_store.get("illustrious", "existing.safetensors")
+            self.assertEqual(rec.source, "local")
+            self.assertNotEqual(rec.comfy_key, "models/loras/existing.safetensors")
+            engine.db.close()
+
+    def test_reconcile_marks_missing_and_clears(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="winefox_reconcile_") as temp:
+            engine = self._engine(Path(temp))
+            engine._reconcile_lora_assets(["a.safetensors"])
+            # 文件从 inventory 消失 -> 标记 file_missing
+            stats = engine._reconcile_lora_assets([])
+            self.assertEqual(stats["marked_missing"], 1)
+            rec = engine.lora_asset_store.get("illustrious", "a.safetensors")
+            self.assertTrue(rec.info.get("file_missing"))
+            self.assertIn(normalize_lora_key("a.safetensors"), engine._disabled_lora_keys)
+            # 文件重新出现 -> 清除标记
+            stats2 = engine._reconcile_lora_assets(["a.safetensors"])
+            self.assertEqual(stats2["cleared_missing"], 1)
+            rec = engine.lora_asset_store.get("illustrious", "a.safetensors")
+            self.assertFalse(rec.info.get("file_missing"))
+            self.assertNotIn(normalize_lora_key("a.safetensors"), engine._disabled_lora_keys)
+            engine.db.close()
+
+    def test_unavailable_key_reload_includes_quarantined_assets(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="winefox_reconcile_") as temp:
+            engine = self._engine(Path(temp))
+            rec = engine.lora_asset_store.register(
+                "illustrious", "quarantined.safetensors",
+                comfy_key="models/loras/quarantined.safetensors",
+                display_name="Quarantined", source="local",
+            )
+            engine.lora_asset_store.quarantine(rec.id, ".winefox-quarantine/q.safetensors")
+            engine._reload_disabled_lora_keys()
+            self.assertIn(
+                normalize_lora_key("quarantined.safetensors"),
+                engine._disabled_lora_keys,
+            )
+            engine.db.close()
+
+    def test_reconcile_skips_local_source_for_missing_mark(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="winefox_reconcile_") as temp:
+            engine = self._engine(Path(temp))
+            engine.lora_asset_store.register(
+                "illustrious", "local_a.safetensors", comfy_key="local_a.safetensors",
+                display_name="Local A", source="local",
+            )
+            # 本地下载文件位于 local_dir，不在 ComfyUI inventory，不应标记缺失
+            stats = engine._reconcile_lora_assets([])
+            self.assertEqual(stats["marked_missing"], 0)
+            rec = engine.lora_asset_store.get("illustrious", "local_a.safetensors")
+            self.assertFalse(rec.info.get("file_missing"))
+            engine.db.close()
+
+
+class DesktopAutoLoraConfirmationTests(unittest.IsolatedAsyncioTestCase):
+    """模块 G #9：前端确认的 auto 命中组装（_apply_auto_lora_confirmations）。"""
+
+    def _engine(self, root: Path) -> "DesktopEngine":
+        from winefox_core.storage import Database, LoraProfileStore
+
+        db = Database(root / "winefox.db")
+        db.initialize()
+        engine = object.__new__(DesktopEngine)
+        engine.data_root = root
+        engine.config = _MetadataConfig("http://127.0.0.1:8188")
+        engine.db = db
+        engine.lora_profile_store = LoraProfileStore(db)
+        engine._reload_lora_profiles()
+        engine._disabled_lora_keys = set()
+        return engine
+
+    def test_confirmations_build_resolution_with_profile_triggers(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="winefox_confirm_") as temp:
+            engine = self._engine(Path(temp))
+            engine.lora_profile_store.save("illustrious", "hoshino mirai", {
+                "lora": "hoshino_mirai.safetensors",
+                "character": "Hoshino Mirai",
+                "aliases": ["hoshino"],
+                "trigger_words": ["hoshino"],
+                "strength_model": 0.72,
+                "strength_clip": 0.68,
+                "source": "local",
+            })
+            engine._reload_lora_profiles()
+            resolved = engine._apply_auto_lora_confirmations(
+                [{"name": "hoshino_mirai.safetensors", "strength": 0.9}],
+                "illustrious",
+                ["models/loras/hoshino_mirai.safetensors"],
+            )
+            self.assertIsNotNone(resolved)
+            assert resolved is not None
+            self.assertEqual(len(resolved.loras), 1)
+            self.assertEqual(resolved.loras[0]["name"], "models/loras/hoshino_mirai.safetensors")
+            self.assertEqual(resolved.loras[0]["strength_model"], 0.72)
+            self.assertEqual(resolved.loras[0]["strength_clip"], 0.68)
+            self.assertIn("hoshino", resolved.triggers)
+            self.assertEqual(resolved.metadata["source"], "confirmed")
+            engine.db.close()
+
+    def test_confirmations_empty_list_returns_none(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="winefox_confirm_") as temp:
+            engine = self._engine(Path(temp))
+            resolved = engine._apply_auto_lora_confirmations([], "illustrious", ["a.safetensors"])
+            self.assertIsNone(resolved)
+            engine.db.close()
+
+    def test_confirmations_skips_disabled_and_absent(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="winefox_confirm_") as temp:
+            engine = self._engine(Path(temp))
+            engine.lora_profile_store.save("illustrious", "mizuki", {
+                "lora": "mizuki.safetensors",
+                "character": "Mizuki",
+                "trigger_words": ["mizuki"],
+                "source": "local",
+            })
+            engine._reload_lora_profiles()
+            engine._disabled_lora_keys = {normalize_lora_key("mizuki.safetensors")}
+            # mizuki 已禁用、ghost 不在 inventory -> 全部无效
+            resolved = engine._apply_auto_lora_confirmations(
+                [{"name": "mizuki.safetensors", "strength": 0.8}, {"name": "ghost.safetensors", "strength": 0.8}],
+                "illustrious",
+                ["models/loras/mizuki.safetensors"],
+            )
+            self.assertIsNone(resolved)
+            engine.db.close()
+
+    def test_confirmations_strength_fallback_without_profile(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="winefox_confirm_") as temp:
+            engine = self._engine(Path(temp))
+            resolved = engine._apply_auto_lora_confirmations(
+                [{"name": "naked.safetensors", "strength": 0.65}],
+                "illustrious",
+                ["naked.safetensors"],
+            )
+            self.assertIsNotNone(resolved)
+            assert resolved is not None
+            self.assertEqual(resolved.loras[0]["strength_model"], 0.65)
+            engine.db.close()
 
 
 if __name__ == "__main__":

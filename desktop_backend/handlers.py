@@ -189,7 +189,17 @@ async def handle_lora_search(request: web.Request) -> web.Response:
         raise ValidationError("LoRA 搜索词长度必须为 1-120 个字符")
     if family not in {"anima", "illustrious"}:
         raise ValidationError("模型族必须是 anima 或 illustrious")
-    return _json(await engine.search_loras(query, family=family, limit=max(1, min(limit, 20))))
+    sources = [s.strip().lower() for s in request.query.getall("source", []) if s.strip()] or None
+    adult_consent = str(request.query.get("adult_consent") or "").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+    return _json(await engine.search_loras(
+        query,
+        family=family,
+        limit=max(1, min(limit, 20)),
+        sources=sources,
+        adult_consent=adult_consent,
+    ))
 
 
 async def handle_start_lora_download(request: web.Request) -> web.Response:
@@ -201,11 +211,13 @@ async def handle_start_lora_download(request: web.Request) -> web.Response:
         raise ValidationError("LoRA 下载请求体必须是 JSON 对象")
     result_id = str(body.get("result_id") or "").strip()
     alias = str(body.get("alias") or "").strip()
+    # JSON 接口只接受真正的 boolean true；"false" 等非空字符串不能绕过门禁。
+    adult_consent = body.get("adult_consent") is True
     if not re.fullmatch(r"[0-9a-f]{32}", result_id):
         raise ValidationError("搜索结果 ID 无效，请重新搜索")
     if len(alias) > 80:
         raise ValidationError("中文别称不能超过 80 个字符")
-    return _json(await engine.start_lora_download(result_id, alias=alias), status=202)
+    return _json(await engine.start_lora_download(result_id, alias=alias, adult_consent=adult_consent), status=202)
 
 
 async def handle_get_lora_download(request: web.Request) -> web.Response:
@@ -277,7 +289,22 @@ async def handle_lora_library_list(request: web.Request) -> web.Response:
     family = str(request.query.get("family") or "").strip().lower() or None
     if family is not None and family not in {"anima", "illustrious"}:
         raise ValidationError("模型族必须是 anima 或 illustrious")
-    return _json({"items": engine.lora_library_list(family)})
+    include_quarantined = str(request.query.get("include_quarantined") or "").strip().lower() in {"1", "true", "yes", "on"}
+    return _json({"items": engine.lora_library_list(family, include_quarantined=include_quarantined)})
+
+
+async def handle_lora_profiles_import_json(request: web.Request) -> web.Response:
+    engine = _ctx(request).get("engine")
+    if engine is None or not hasattr(engine, "lora_profiles_import_json"):
+        raise AppError(503, "lora_library_not_configured", "LoRA 档案服务未配置")
+    return _json(engine.lora_profiles_import_json())
+
+
+async def handle_lora_profiles_export_json(request: web.Request) -> web.Response:
+    engine = _ctx(request).get("engine")
+    if engine is None or not hasattr(engine, "lora_profiles_export_json"):
+        raise AppError(503, "lora_library_not_configured", "LoRA 档案服务未配置")
+    return _json(engine.lora_profiles_export_json())
 
 
 async def handle_lora_library_get(request: web.Request) -> web.Response:
@@ -318,11 +345,12 @@ async def handle_lora_library_update(request: web.Request) -> web.Response:
 
 
 async def handle_lora_library_delete(request: web.Request) -> web.Response:
-    engine = _ctx(request).get("engine")
-    if engine is None or not hasattr(engine, "lora_library_delete"):
-        raise AppError(503, "lora_library_not_configured", "本地 LoRA 库服务未配置")
-    engine.lora_library_delete(_library_id(request))
-    return _json({"ok": True})
+    """Compatibility handler kept for direct callers; no DELETE route is registered."""
+    raise AppError(
+        405,
+        "LORA_PERMANENT_DELETE_DISABLED",
+        "永久删除已禁用；请使用隔离功能，以便之后恢复",
+    )
 
 
 async def handle_lora_library_quarantine(request: web.Request) -> web.Response:
@@ -732,10 +760,11 @@ def register_routes(app: web.Application) -> None:
     app.router.add_get("/api/v1/lora/library", handle_lora_library_list)
     app.router.add_get("/api/v1/lora/library/{id}", handle_lora_library_get)
     app.router.add_patch("/api/v1/lora/library/{id}", handle_lora_library_update)
-    app.router.add_delete("/api/v1/lora/library/{id}", handle_lora_library_delete)
     app.router.add_post("/api/v1/lora/library/{id}/quarantine", handle_lora_library_quarantine)
     app.router.add_post("/api/v1/lora/library/{id}/restore", handle_lora_library_restore)
     app.router.add_post("/api/v1/lora/library/match-preview", handle_lora_library_match_preview)
+    app.router.add_post("/api/v1/lora/profiles/import-json", handle_lora_profiles_import_json)
+    app.router.add_get("/api/v1/lora/profiles/export-json", handle_lora_profiles_export_json)
     app.router.add_post("/api/v1/uploads", handle_upload)
     app.router.add_get("/api/v1/uploads/{id}", handle_get_upload)
     app.router.add_post("/api/v1/jobs", handle_submit_job)

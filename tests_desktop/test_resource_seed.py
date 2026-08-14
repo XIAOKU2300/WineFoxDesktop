@@ -34,7 +34,7 @@ class BridgeSourceResolutionTests(unittest.TestCase):
         src = resolve_bridge_source()
         self.assertTrue(src.is_dir())
         version = validate_bridge_dir(src)
-        self.assertEqual(version, "1.4.1")
+        self.assertEqual(version, "1.4.2")
 
     def test_parse_version_from_init(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -71,7 +71,7 @@ class BridgeCopyTests(unittest.TestCase):
             custom_nodes.mkdir()
             result = seed_bridge_source(custom_nodes)
             self.assertTrue((custom_nodes / "ComfyUI-AstrBot-LoraBridge" / "__init__.py").is_file())
-            self.assertEqual(result.version, "1.4.1")
+            self.assertEqual(result.version, "1.4.2")
 
     def test_seed_refuses_overwrite(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

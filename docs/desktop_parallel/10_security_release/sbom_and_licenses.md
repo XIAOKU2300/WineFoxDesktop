@@ -22,7 +22,7 @@
 | Rust/Tauri（桌面层） | 不在本仓库（Agent 01/09 产物） | TBD（合并后补齐） | 发布前必须补入 SBOM，GATE |
 | Node 前端（桌面层） | 不在本仓库（Agent 08 产物） | TBD | 发布前必须补入 SBOM（`npm license` 汇总），GATE |
 | 工作流 JSON | `workflow/*.json`（17 个） | 随插件 MIT | 工作流为随插件分发的配置数据，随主 LICENSE |
-| 自定义节点 Bridge | `comfyui_custom_nodes/ComfyUI-AstrBot-LoraBridge` | 随插件 MIT | v1.4.1；含 Token 鉴权（见 security_gate G04） |
+| 自定义节点 Bridge | `comfyui_custom_nodes/ComfyUI-AstrBot-LoraBridge` | 随插件 MIT | v1.4.2；含 Token 鉴权（见 security_gate G04） |
 | 模型权重 | 仓库内**无**任何模型文件 | — | **v1 不捆绑模型**；nsfw 审核模型（nsfw_mobilenet_v2_140_224.zip）运行时按需下载，下载即提示第三方许可与风险 |
 | 图片素材 | `assets/jiuhu_watermark_huizhi.png` | 插件自有 | 水印素材，随主 LICENSE |
 

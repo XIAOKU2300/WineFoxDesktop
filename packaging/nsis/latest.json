@@ -1,12 +1,12 @@
 {
-  "version": "8.6.6",
-  "notes": "WineFox Desktop 首个公开正式版：修复自动更新并发、安装器自终止、任务状态同步与更新清单一致性；简化项目说明，并移除内置公开凭据。",
-  "pub_date": "2026-08-12T04:49:13.692515+00:00",
+  "version": "8.6.7",
+  "notes": "LoRA 侧边栏完整移植：搜索下载、本地整理、SQLite 档案、自动匹配引用与 Bridge 1.4.2 安全加固。",
+  "pub_date": "2026-08-14T16:45:48.537017+00:00",
   "platforms": {
     "windows-x86_64": {
-      "url": "https://github.com/XIAOKU2300/WineFoxDesktop/releases/download/v8.6.6/WineFox-Setup-8.6.6-x64.exe",
-      "signature": "6IjXVKCcOoKSD7yx1L0nZBbzKdoe5BZB7hw26LDSV8ey8sdIhm0H/hjjDUuK2sU8gHzwUlCp8db2Vm3ZXxX0AA==",
-      "size": 19802587
+      "url": "https://github.com/XIAOKU2300/WineFoxDesktop/releases/download/v8.6.7/WineFox-Setup-8.6.7-x64.exe",
+      "signature": "8gQoGogQdUYuSraCiOosIKo/vJkb6vOTzcgk98TOP7GtN1mc/1WhKOnuHIr2rTf7LHn5+FUGj26zZQUvUHE7BA==",
+      "size": 20045071
     }
   }
 }

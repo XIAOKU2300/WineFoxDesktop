@@ -47,7 +47,7 @@ def small_manifest(base_url: str, *, allow_host: bool = True, model_url: str | N
         "bridge": {
             "source": "comfyui_custom_nodes/ComfyUI-AstrBot-LoraBridge",
             "dest_folder": "ComfyUI-AstrBot-LoraBridge",
-            "version": "1.4.1",
+            "version": "1.4.2",
             "allow_local_requests_without_token": False,
             "allowed_hosts": ["127.0.0.1"] if allow_host else ["huggingface.co"],
             "config_defaults": dict(_BRIDGE_DEFAULTS),

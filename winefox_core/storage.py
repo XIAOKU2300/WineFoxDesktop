@@ -399,6 +399,7 @@ def _row_to_lora_profile(row: sqlite3.Row) -> LoraProfileRecord:
         display_key=row["display_key"],
         profile=json_loads(row["profile"], {}),
         updated_at=row["updated_at"],
+        revision=int(row["revision"] or 0),
     )
 
 
@@ -906,10 +907,11 @@ class LoraProfileStore:
         with self.db.transaction():
             conn.execute(
                 "INSERT INTO lora_profiles (model_family, normalized_key, display_key,"
-                " profile, updated_at) VALUES (?, ?, ?, ?, ?)"
+                " profile, updated_at, revision) VALUES (?, ?, ?, ?, ?, 1)"
                 " ON CONFLICT(model_family, normalized_key) DO UPDATE SET"
                 " display_key=excluded.display_key, profile=excluded.profile,"
-                " updated_at=excluded.updated_at",
+                " updated_at=excluded.updated_at,"
+                " revision=lora_profiles.revision + 1",
                 (family, normalized, str(key or "").strip(), json_dumps(profile), now),
             )
             row = _fetch_one(

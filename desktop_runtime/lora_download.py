@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import ipaddress
 import json
 import logging
 import os
@@ -27,14 +28,23 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
-from civitai_api import CivitaiClient, LoraProfileStore, safe_filename
+from civitai_api import (
+    CivitaiClient,
+    CivitaiRedClient,
+    HuggingFaceClient,
+    LoraProfileStore,
+    safe_filename,
+)
 from desktop_backend.errors import AppError
 from winefox_core.comfyui_transport import ComfyUITransport
+from winefox_core.lora_service import normalize_lora_key
 from winefox_core.storage import Database, LoraAssetStore, LoraDownloadJobStore
 from winefox_core.storage import LoraProfileStore as SqlLoraProfileStore
 from winefox_core.storage_models import DOWNLOAD_TERMINAL_STATES, LoraDownloadState
+
+from .setup_verify import VerifyFailure, verify_safetensors
 
 logger = logging.getLogger("winefox.runtime.lora_download")
 
@@ -48,8 +58,24 @@ except Exception:  # pragma: no cover - 缺失时的回退路径
     _LORA_SEARCH_AVAILABLE = False
 
 _SEARCH_CACHE_TTL = 30 * 60
-_ALLOWED_SUFFIXES = {".safetensors", ".ckpt", ".pt"}
-_ALLOWED_DOWNLOAD_HOSTS = {"civitai.com", "www.civitai.com", "civitai.red", "www.civitai.red"}
+_ALLOWED_SUFFIXES = {".safetensors"}
+_ALLOWED_DOWNLOAD_HOSTS = {
+    "civitai.com",
+    "www.civitai.com",
+    "civitai.red",
+    "www.civitai.red",
+    "huggingface.co",
+    "www.huggingface.co",
+    "hf.co",
+    "www.hf.co",
+}
+#: 各下载来源允许的下载主机白名单（hostname 精确匹配，禁止 IP/前缀逃逸）。
+_SOURCE_DOWNLOAD_HOSTS = {
+    "civitai": {"civitai.com", "www.civitai.com"},
+    "civitai_red": {"civitai.red", "www.civitai.red"},
+    "huggingface": {"huggingface.co", "www.huggingface.co", "hf.co", "www.hf.co"},
+}
+_ADULT_SOURCES = frozenset({"civitai_red"})
 _FAMILY_BASE_MODELS = {
     "anima": ["Anima"],
     "illustrious": ["Illustrious"],
@@ -72,6 +98,18 @@ def _bounded_text(value: Any, limit: int) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip())[:limit]
 
 
+def _public_text(value: Any, limit: int = 200) -> str:
+    """脱敏公开文本：命中 URL/凭据/绝对路径/穿越/网络路径模式的字符串一律置空。"""
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    if not text:
+        return ""
+    if re.search(r"(?i)https?://|www\.|ftp://|file://|token=|api[_-]?key|authorization|cookie", text):
+        return ""
+    if re.search(r"(?i)(?:[a-z]:[\\/]|\\\\|^[\\/]|\.\.|//)", text):
+        return ""
+    return text[:limit]
+
+
 def _safe_error(value: Any) -> str:
     text = str(value or "LoRA 下载失败")
     text = re.sub(r"(?i)(token=)[^&\s]+", r"\1[REDACTED]", text)
@@ -92,6 +130,85 @@ def _json_response(raw: bytes, *, label: str, max_bytes: int = 1024 * 1024) -> d
     return value
 
 
+def _require_trusted_download_url(download_url: str, source: str) -> str:
+    """校验下载 URL 属于来源白名单的主机且仅 https；返回原 URL。"""
+    url = str(download_url or "").strip()
+    if not url:
+        raise RuntimeError("下载源未提供下载地址")
+    parsed = urlparse(url)
+    allowed = _SOURCE_DOWNLOAD_HOSTS.get(str(source or "civitai").strip().lower(), _ALLOWED_DOWNLOAD_HOSTS)
+    if parsed.scheme != "https" or (parsed.hostname or "").lower() not in allowed:
+        raise RuntimeError("下载源返回了不受信任的下载地址")
+    return url
+
+
+async def _require_public_redirect_url(download_url: str) -> bool:
+    """Validate every redirect target before aiohttp follows it.
+
+    The first URL is source-host allowlisted separately. Redirects may use a
+    vendor CDN, so they are accepted only when HTTPS, credential-free, on the
+    default port, and every resolved address is public.
+    """
+    url = str(download_url or "").strip()
+    try:
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").strip().lower()
+        port = parsed.port
+    except ValueError as exc:
+        raise RuntimeError("下载重定向地址无效") from exc
+    if (
+        parsed.scheme != "https"
+        or not host
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in (None, 443)
+    ):
+        raise RuntimeError("下载重定向到了不安全的地址")
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        literal = None
+    if literal is not None:
+        raise RuntimeError("下载重定向不允许使用 IP 地址")
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(
+            host, port or 443, type=0
+        )
+    except OSError as exc:
+        raise RuntimeError("下载重定向主机无法解析") from exc
+    if not infos:
+        raise RuntimeError("下载重定向主机无法解析")
+    for info in infos:
+        try:
+            address = ipaddress.ip_address(info[4][0])
+        except ValueError as exc:
+            raise RuntimeError("下载重定向主机解析结果无效") from exc
+        if not address.is_global:
+            raise RuntimeError("下载重定向到了非公网地址")
+    return True
+
+
+def _optional_int(value: Any) -> int | None:
+    text = str(value or "").strip()
+    return int(text) if text.isdigit() else None
+
+
+def _safe_hf_file_ref(value: Any) -> str:
+    """保留 Hugging Face 仓库内相对路径，同时拒绝本地路径/穿越。"""
+    raw = str(value or "").strip().replace("\\", "/")
+    if not raw or raw.startswith("/") or "\x00" in raw or len(raw) > 500:
+        return ""
+    parts = raw.split("/")
+    if any(part in {"", ".", ".."} or ":" in part for part in parts):
+        return ""
+    return "/".join(parts)
+
+
+def _safe_hf_repo_id(value: Any) -> str:
+    raw = str(value or "").strip().strip("/")
+    return raw if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", raw) else ""
+
+
 class LoraDownloadService:
     """持久化 LoRA 下载服务（SQLite 状态机 + 哈希校验 + 冲突改名 + bridge 探测）。"""
 
@@ -104,7 +221,10 @@ class LoraDownloadService:
         connection_factory: Callable[[], Any],
         on_installed: Callable[[], Awaitable[None] | None] | None = None,
         client_factory: Callable[..., Any] = CivitaiClient,
+        red_client_factory: Callable[..., Any] = CivitaiRedClient,
+        hf_client_factory: Callable[..., Any] = HuggingFaceClient,
         search_service_factory: Callable[..., Any] | None = None,
+        preview_service: Any = None,
     ) -> None:
         self._db = db
         self.config = config
@@ -112,6 +232,9 @@ class LoraDownloadService:
         self.connection_factory = connection_factory
         self.on_installed = on_installed
         self.client_factory = client_factory
+        self.red_client_factory = red_client_factory
+        self.hf_client_factory = hf_client_factory
+        self._preview_service = preview_service
         self._search_cache: dict[str, dict[str, Any]] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._download_lock = asyncio.Lock()
@@ -127,9 +250,9 @@ class LoraDownloadService:
         value = snapshot.get("lora_download")
         return dict(value) if isinstance(value, Mapping) else {}
 
-    def _client(self):
+    def _client(self, source: str = "civitai"):
         settings = self._settings()
-        return self.client_factory(
+        kwargs = dict(
             api_token=self.config.get_secret("civitai_api_token") or "",
             cookie=self.config.get_secret("civitai_cookie") or "",
             proxy=str(settings.get("proxy") or "").strip(),
@@ -137,7 +260,19 @@ class LoraDownloadService:
             downloader="multithread",
             split=max(1, min(int(settings.get("split") or 4), 8)),
             network_max_retries=2,
+            download_redirect_validator=_require_public_redirect_url,
         )
+        source = str(source or "civitai").strip().lower()
+        if source == "civitai_red":
+            kwargs.pop("cookie", None)
+            # 不向独立的 civitai.red 域发送 civitai.com Bearer token。
+            kwargs["api_token"] = ""
+            return self.red_client_factory(**kwargs)
+        if source == "huggingface":
+            kwargs.pop("cookie", None)
+            kwargs["api_token"] = self.config.get_secret("huggingface_api_token") or ""
+            return self.hf_client_factory(**kwargs)
+        return self.client_factory(**kwargs)
 
     def capabilities(self) -> dict[str, Any]:
         settings = self._settings()
@@ -146,11 +281,12 @@ class LoraDownloadService:
             mode = "auto"
         return {
             "enabled": True,
-            "sources": ["civitai"],
+            "sources": ["civitai", "huggingface"],
             "mode": mode,
             "local_configured": bool(str(settings.get("local_dir") or "").strip()),
             "bridge_configured": bool(str(settings.get("bridge_endpoint") or "/astrbot/lora").strip()),
             "civitai_token_configured": bool(self.config.get_secret("civitai_api_token")),
+            "huggingface_token_configured": bool(self.config.get_secret("huggingface_api_token")),
             "bridge_token_configured": bool(self.config.get_secret("comfyui_bridge_token")),
         }
 
@@ -167,7 +303,15 @@ class LoraDownloadService:
 
     # -- 搜索 ---------------------------------------------------------------
 
-    async def search(self, query: str, *, family: str = "illustrious", limit: int = 12) -> dict[str, Any]:
+    async def search(
+        self,
+        query: str,
+        *,
+        family: str = "illustrious",
+        limit: int = 12,
+        sources: list[str] | None = None,
+        adult_consent: bool = False,
+    ) -> dict[str, Any]:
         query = _bounded_text(query, 120)
         if not query:
             raise AppError(422, "LORA_SEARCH_INVALID", "请输入 LoRA 名称、角色名或中文别称")
@@ -175,6 +319,15 @@ class LoraDownloadService:
         if family not in _FAMILY_BASE_MODELS:
             raise AppError(422, "LORA_SEARCH_INVALID", f"不支持的模型族: {family}")
         limit = max(1, min(int(limit or 12), 20))
+        requested_sources = {
+            str(source or "").strip().lower() for source in (sources or [])
+        }
+        if requested_sources & _ADULT_SOURCES and not adult_consent:
+            raise AppError(
+                403,
+                "LORA_R18_REQUIRES_CONSENT",
+                "搜索成人内容源前必须先确认年龄与内容提示",
+            )
         self._cleanup()
         service = self._search_service
         if _LORA_SEARCH_AVAILABLE and not self._search_service_failed:
@@ -183,9 +336,19 @@ class LoraDownloadService:
                 self._search_service = service
             if service is not None:
                 try:
-                    result = await service.search(query, family=family, limit=limit)
+                    result = await service.search(query, family=family, limit=limit, sources=sources)
                     raw_items = result.get("items") or []
                     items = list(raw_items) if isinstance(raw_items, list) else []
+                    nsfw_hidden = 0
+                    if not adult_consent:
+                        nsfw_hidden = sum(
+                            1 for item in items
+                            if isinstance(item, Mapping) and bool(item.get("nsfw"))
+                        )
+                        items = [
+                            item for item in items
+                            if not (isinstance(item, Mapping) and bool(item.get("nsfw")))
+                        ]
                     for item in items:
                         if isinstance(item, Mapping):
                             self._cache_result(
@@ -194,14 +357,31 @@ class LoraDownloadService:
                                 source=str(item.get("source") or "civitai"),
                                 model_id=item.get("model_id"),
                                 version_id=item.get("version_id"),
+                                file_name=item.get("file_name"),
                                 query=query,
+                                nsfw=bool(item.get("nsfw")),
                             )
-                    return {"query": query, "family": family, "items": items}
+                    return {
+                        "query": query,
+                        "family": family,
+                        "items": items,
+                        "nsfw_hidden": nsfw_hidden,
+                    }
                 except AppError:
                     raise
                 except Exception as exc:
                     logger.warning("LoraSearchService 搜索失败，回退 Civitai 直查: %s", _safe_error(exc))
-        return await self._search_fallback(query, family, limit)
+        result = await self._search_fallback(query, family, limit)
+        if not adult_consent:
+            items = list(result.get("items") or [])
+            result["nsfw_hidden"] = sum(
+                1 for item in items if isinstance(item, Mapping) and bool(item.get("nsfw"))
+            )
+            result["items"] = [
+                item for item in items
+                if not (isinstance(item, Mapping) and bool(item.get("nsfw")))
+            ]
+        return result
 
     def _build_search_service(self) -> Any:
         try:
@@ -222,9 +402,17 @@ class LoraDownloadService:
         model_id: Any,
         version_id: Any,
         query: str,
+        file_name: Any = None,
+        nsfw: bool = False,
     ) -> None:
         if not result_id:
             return
+        source = str(source or "civitai").strip().lower()
+        cached_file_name = (
+            _safe_hf_file_ref(file_name)
+            if source == "huggingface"
+            else (safe_filename(str(file_name or "")) if str(file_name or "").strip() else "")
+        )
         self._search_cache[result_id] = {
             "created_at": time.time(),
             "query": query,
@@ -232,6 +420,8 @@ class LoraDownloadService:
             "source": source,
             "model_id": str(model_id or "").strip(),
             "version_id": str(version_id or "").strip(),
+            "file_name": cached_file_name,
+            "nsfw": bool(nsfw),
         }
 
     async def _search_fallback(self, query: str, family: str, limit: int) -> dict[str, Any]:
@@ -264,17 +454,18 @@ class LoraDownloadService:
                 model_id=model_id,
                 version_id=version_id,
                 query=query,
+                nsfw=bool(raw.get("nsfw")),
             )
             public.append({
                 "id": result_id,
                 "source": "civitai",
                 "model_id": model_id,
                 "version_id": version_id,
-                "name": _bounded_text(raw.get("name") or "Civitai LoRA", 160),
-                "version_name": _bounded_text(raw.get("version_name"), 100),
-                "base_model": _bounded_text(raw.get("base_model"), 80),
-                "trained_words": [_bounded_text(item, 100) for item in (raw.get("trained_words") or [])[:12] if _bounded_text(item, 100)],
-                "tags": [_bounded_text(item, 60) for item in (raw.get("tags") or [])[:12] if _bounded_text(item, 60)],
+                "name": _public_text(raw.get("name") or "Civitai LoRA", 160),
+                "version_name": _public_text(raw.get("version_name"), 100),
+                "base_model": _public_text(raw.get("base_model"), 80),
+                "trained_words": [_public_text(item, 100) for item in (raw.get("trained_words") or [])[:12] if _public_text(item, 100)],
+                "tags": [_public_text(item, 60) for item in (raw.get("tags") or [])[:12] if _public_text(item, 60)],
                 "download_count": int(raw.get("download_count") or 0),
                 "heart_count": int(raw.get("heart_count") or 0),
                 "nsfw": bool(raw.get("nsfw")),
@@ -286,7 +477,7 @@ class LoraDownloadService:
 
     # -- 任务调度 -----------------------------------------------------------
 
-    def start_download(self, result_id: str, *, alias: str = "") -> dict[str, Any]:
+    def start_download(self, result_id: str, *, alias: str = "", adult_consent: bool = False) -> dict[str, Any]:
         self._cleanup()
         result_id = str(result_id or "").strip()
         if not result_id:
@@ -306,16 +497,27 @@ class LoraDownloadService:
             cached = self._search_cache.get(result_id)
             if cached is None:
                 raise AppError(404, "LORA_SEARCH_RESULT_EXPIRED", "搜索结果已过期，请重新搜索")
+            if bool(cached.get("nsfw")) and not adult_consent:
+                raise AppError(400, "LORA_R18_REQUIRES_CONSENT", "该 LoRA 含敏感内容，请先确认年龄")
+            cached_source = str(cached.get("source") or "civitai").strip().lower()
+            cached_file_name = (
+                _safe_hf_file_ref(cached.get("file_name"))
+                if cached_source == "huggingface"
+                else safe_filename(str(cached.get("file_name") or ""))
+            )
             self._store.enqueue(
                 result_id,
                 family=str(cached.get("family") or "illustrious"),
                 alias=_bounded_text(alias, 80),
-                source=str(cached.get("source") or "civitai"),
+                source=cached_source,
                 source_ref={
-                    "source": str(cached.get("source") or "civitai"),
+                    "source": cached_source,
                     "family": str(cached.get("family") or "illustrious"),
                     "model_id": str(cached.get("model_id") or ""),
                     "version_id": str(cached.get("version_id") or ""),
+                    "file_name": cached_file_name,
+                    "adult_consent": bool(adult_consent),
+                    "nsfw": bool(cached.get("nsfw")),
                 },
                 request_timeout=max(10, min(int(self._settings().get("request_timeout") or 60), 180)),
             )
@@ -401,37 +603,67 @@ class LoraDownloadService:
     def _unique_local_target(self, local_dir: str, filename: str) -> tuple[Path, bool]:
         """同名已安装文件存在时改名为 ``name (N).safetensors``，避免覆盖。"""
         base = self._local_target(local_dir, filename)
-        if not self._is_installed_file(base):
+        # 任何已存在路径都不得覆盖，包括小于 1 KiB 的损坏/未完成文件与目录。
+        # `_is_installed_file` 只适合状态展示，不能作为防覆盖判断。
+        if not base.exists():
             return base, False
         stem = base.stem
         suffix = base.suffix or ".safetensors"
         for index in range(1, 1000):
             candidate = base.with_name(f"{stem} ({index}){suffix}")
-            if not self._is_installed_file(candidate):
+            if not candidate.exists():
                 return candidate, True
         raise RuntimeError("无法为同名 LoRA 生成唯一文件名")
 
-    async def _install_local(self, client: Any, summary: dict[str, Any], settings: dict[str, Any], result_id: str) -> dict[str, Any]:
+    async def _install_local(self, client: Any, summary: dict[str, Any], settings: dict[str, Any], result_id: str, *, source: str = "civitai") -> dict[str, Any]:
         filename = safe_filename(summary.get("file_name"))
         if Path(filename).suffix.lower() not in _ALLOWED_SUFFIXES:
-            raise RuntimeError("只允许安装 safetensors/ckpt/pt 格式的 LoRA")
+            raise RuntimeError("只允许安装 safetensors 格式的 LoRA")
+        download_url = _require_trusted_download_url(str(summary.get("download_url") or ""), source)
         target, conflict_renamed = self._unique_local_target(str(settings.get("local_dir") or ""), filename)
         free = shutil.disk_usage(target.parent).free
         if free < 512 * 1024 * 1024:
             raise RuntimeError("目标磁盘可用空间不足 512 MB")
+        # 先下载到同目录临时文件，校验通过后由调用方原子改名落盘，失败不污染最终目录。
+        tmp = target.with_name(f".{target.name}.part")
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
 
         async def progress(done: int, total: int) -> None:
             self._set_progress(result_id, done, total)
 
-        await client.download_file(str(summary.get("download_url") or ""), target, progress_cb=progress)
-        if not target.is_file() or target.stat().st_size <= 1024:
+        try:
+            await client.download_file(download_url, tmp, progress_cb=progress)
+        except BaseException:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
+        if not tmp.is_file() or tmp.stat().st_size <= 1024:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
             raise RuntimeError("下载完成但 LoRA 文件为空或异常")
+        try:
+            await asyncio.to_thread(verify_safetensors, tmp)
+        except VerifyFailure as exc:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise RuntimeError(f"下载文件不是有效的 safetensors：{exc}") from exc
         return {
-            "filename": target.name,
+            "filename": filename,
             "mode": "local",
             "already_exists": False,
             "conflict_renamed": bool(conflict_renamed),
-            "bytes": target.stat().st_size,
+            "bytes": tmp.stat().st_size,
+            "tmp_path": tmp,
+            "target_path": target,
         }
 
     @staticmethod
@@ -465,11 +697,8 @@ class LoraDownloadService:
         except Exception as exc:
             return {"ok": False, "installed": False, "message": _safe_error(exc)}
 
-    async def _install_bridge(self, client: Any, summary: dict[str, Any], settings: dict[str, Any], result_id: str) -> dict[str, Any]:
-        download_url = str(summary.get("download_url") or "").strip()
-        parsed = urlparse(download_url)
-        if parsed.scheme != "https" or (parsed.hostname or "").lower() not in _ALLOWED_DOWNLOAD_HOSTS:
-            raise RuntimeError("Civitai 返回了不受信任的下载地址")
+    async def _install_bridge(self, client: Any, summary: dict[str, Any], settings: dict[str, Any], result_id: str, *, source: str = "civitai") -> dict[str, Any]:
+        download_url = _require_trusted_download_url(str(summary.get("download_url") or ""), source)
         endpoint = self._bridge_endpoint(settings)
         bridge_token = self.config.get_secret("comfyui_bridge_token") or ""
         external_headers = {
@@ -530,8 +759,16 @@ class LoraDownloadService:
 
     @staticmethod
     def _build_reference(source_ref: Mapping[str, Any]) -> str:
+        source = str(source_ref.get("source") or "civitai").strip().lower()
         model_id = str(source_ref.get("model_id") or "").strip()
         version_id = str(source_ref.get("version_id") or "").strip()
+        if source == "huggingface":
+            repo_id = _safe_hf_repo_id(model_id)
+            file_name = _safe_hf_file_ref(source_ref.get("file_name"))
+            if not repo_id:
+                return ""
+            query = f"?{urlencode({'file': file_name})}" if file_name else ""
+            return f"https://huggingface.co/{repo_id}{query}"
         if model_id.isdigit() and version_id.isdigit():
             return f"https://civitai.com/models/{model_id}?modelVersionId={version_id}"
         if model_id.isdigit():
@@ -552,7 +789,10 @@ class LoraDownloadService:
             version_id = summary.get("version_id")
             if version_id is None:
                 return ""
-            version = await client.get_model_version(int(version_id))
+            numeric_version = _optional_int(version_id)
+            if numeric_version is None:
+                return ""
+            version = await client.get_model_version(numeric_version)
             files = [f for f in (version.get("files") or []) if isinstance(f, Mapping)]
             target = str(summary.get("file_name") or "").strip().lower()
             for file_info in files:
@@ -600,24 +840,53 @@ class LoraDownloadService:
         summary = dict(summary)
         summary["file_name"] = safe_filename(filename)
         summary["search_query"] = _bounded_text(summary.get("search_query"), 120)
-        profile_name = "lora_profiles.json" if family == "anima" else "lora_profiles_illustrious.json"
-        path = self.data_root / "lora_profiles" / profile_name
-        store = LoraProfileStore(path)
-        profile = await asyncio.to_thread(store.upsert_from_civitai, summary, alias, 0.8, 0.8)
-        self._save_sqlite_profile(family, profile)
+        # 仅用临时文件承载档案计算（load 为 {}），正常写入路径只有 SQLite。
+        scratch_dir = self.data_root / ".tmp"
+        scratch = scratch_dir / f"lora_profile_{uuid.uuid4().hex}.json"
+        try:
+            scratch_dir.mkdir(parents=True, exist_ok=True)
+            store = LoraProfileStore(scratch)
+            profile = await asyncio.to_thread(store.upsert_from_civitai, summary, alias, 0.8, 0.8)
+        finally:
+            try:
+                scratch.unlink(missing_ok=True)
+            except OSError:
+                pass
+        profile = self._save_sqlite_profile(family, profile)
         return {
             "character": _bounded_text(profile.get("character"), 100),
             "aliases": [_bounded_text(item, 100) for item in (profile.get("aliases") or [])[:12]],
             "trigger_words": [_bounded_text(item, 100) for item in (profile.get("activation_tags") or [])[:12]],
         }
 
-    def _save_sqlite_profile(self, family: str, profile: dict[str, Any]) -> None:
-        try:
-            sql_store = SqlLoraProfileStore(self._db)
-            key = str(profile.get("character") or "").strip() or Path(str(profile.get("lora") or "")).stem
-            sql_store.save(family, key, dict(profile))
-        except Exception as exc:
-            logger.warning("SQLite LoRA 档案写入失败 family=%s: %s", family, _safe_error(exc))
+    def _save_sqlite_profile(self, family: str, profile: dict[str, Any]) -> dict[str, Any]:
+        """只新增下载档案，不覆盖 SQLite 中已有的用户维护档案。
+
+        同一 LoRA 文件已有档案时直接复用；角色名键冲突但文件不同则改用
+        文件名键，避免一次重新下载抹掉用户编辑过的别名/触发词。
+        """
+        sql_store = SqlLoraProfileStore(self._db)
+        incoming = dict(profile)
+        incoming_lora = normalize_lora_key(
+            incoming.get("lora") or incoming.get("lora_name") or ""
+        )
+        for record in sql_store.get_family(family):
+            existing_profile = dict(record.profile or {})
+            existing_lora = normalize_lora_key(
+                existing_profile.get("lora") or existing_profile.get("lora_name") or ""
+            )
+            if incoming_lora and incoming_lora == existing_lora:
+                return existing_profile
+        key = str(profile.get("character") or "").strip() or Path(str(profile.get("lora") or "")).stem
+        if sql_store.get(family, key) is not None:
+            filename_key = Path(str(profile.get("lora") or "lora")).stem or "lora"
+            key = filename_key
+            if sql_store.get(family, key) is not None:
+                digest = hashlib.sha256(
+                    str(profile.get("lora") or key).encode("utf-8")
+                ).hexdigest()[:8]
+                key = f"{filename_key}-{digest}"
+        return dict(sql_store.save(family, key, incoming).profile or incoming)
 
     def _register_asset(
         self,
@@ -629,24 +898,50 @@ class LoraDownloadService:
         try:
             model_id = summary.get("model_id")
             version_id = summary.get("version_id")
+            preview_key = ""
+            preview_url = str(summary.get("preview_url") or "").strip()
+            if preview_url and self._preview_service is not None:
+                accepted = self._preview_service.register(
+                    "",
+                    preview_url,
+                    source=str(summary.get("source") or "civitai"),
+                )
+                if accepted:
+                    preview_key = str(accepted)
+                    # 尽快把预览落到稳定 token 对应的磁盘缓存，使应用重启后仍
+                    # 能展示图片；失败不影响已经完成的 LoRA 安装。
+                    try:
+                        task = asyncio.create_task(self._preview_service.fetch(preview_key))
+                        task.add_done_callback(
+                            lambda done: done.exception() if not done.cancelled() else None
+                        )
+                    except RuntimeError:
+                        pass
+            source = str(summary.get("source") or "civitai").strip().lower()
             record = LoraAssetStore(self._db).register(
                 model_family=family,
                 filename=str(installed.get("filename") or ""),
                 comfy_key=str(installed.get("filename") or ""),
                 display_name=_bounded_text(summary.get("model_name"), 160),
-                source=str(installed.get("mode") or summary.get("source") or "civitai"),
-                model_id=int(model_id) if model_id is not None else None,
-                version_id=int(version_id) if version_id is not None else None,
+                source=str(installed.get("mode") or "local"),
+                model_id=_optional_int(model_id),
+                version_id=_optional_int(version_id),
+                preview_key=preview_key or None,
                 info={
                     "sha256": sha256 or "",
                     "size_bytes": int(installed.get("bytes") or 0),
                     "mode": str(installed.get("mode") or ""),
+                    "origin": source,
+                    "remote_model_id": _public_text(model_id, 160),
+                    "remote_version_id": _public_text(version_id, 160),
+                    "nsfw": bool(summary.get("nsfw")),
+                    "preview_key": preview_key,
                 },
             )
             return record.id
         except Exception as exc:
             logger.warning("LoRA 资产登记失败 filename=%s: %s", installed.get("filename"), _safe_error(exc))
-            return None
+            raise RuntimeError("LoRA 已下载，但本地库登记失败") from exc
 
     # -- 下载流程 -----------------------------------------------------------
 
@@ -659,11 +954,18 @@ class LoraDownloadService:
                 family = record.family
                 source_ref = dict(record.source_ref or {})
                 self._store.update_state(result_id, LoraDownloadState.RESOLVING)
-                client = self._client()
+                source = str(source_ref.get("source") or "civitai").strip().lower()
+                client = self._client(source)
                 summary = await client.resolve_model(
                     self._build_reference(source_ref),
                     base_models=_FAMILY_BASE_MODELS.get(family, ["Illustrious"]),
                 )
+                if bool(summary.get("nsfw")) and not bool(source_ref.get("adult_consent")):
+                    raise AppError(
+                        403,
+                        "LORA_R18_REQUIRES_CONSENT",
+                        "下载源解析出的内容为成人/敏感内容，请重新确认后下载",
+                    )
                 summary["search_query"] = _bounded_text(alias or str(source_ref.get("query") or ""), 120)
                 mode, settings = self._mode()
                 if mode == "comfyui_bridge":
@@ -676,34 +978,52 @@ class LoraDownloadService:
                             raise RuntimeError(f"ComfyUI LoRA Bridge 不可用：{probe.get('message') or '未就绪'}")
 
                 self._store.update_state(result_id, LoraDownloadState.DOWNLOADING)
+                pending_tmp = None
                 if mode == "local":
-                    installed = await self._install_local(client, summary, settings, result_id)
+                    installed = await self._install_local(client, summary, settings, result_id, source=source)
+                    pending_tmp = installed.get("tmp_path")
                 else:
-                    installed = await self._install_bridge(client, summary, settings, result_id)
+                    installed = await self._install_bridge(client, summary, settings, result_id, source=source)
 
                 expected_hash = await self._expected_hash(client, summary)
                 local_hash = ""
-                if expected_hash:
-                    local_path = self._installed_local_path(settings, installed)
-                    if local_path is not None:
-                        local_hash = await self._sha256_async(local_path)
-                        if local_hash and local_hash.lower() != expected_hash.lower():
-                            raise RuntimeError(
-                                f"LoRA 哈希校验失败：Civitai 期望 {expected_hash[:12]}…，实际 {local_hash[:12]}…"
-                            )
+                try:
+                    if mode == "local":
+                        tmp_path = installed.get("tmp_path")
+                        target_path = installed.get("target_path")
+                        if tmp_path is not None and target_path is not None:
+                            local_hash = await self._sha256_async(tmp_path)
+                            if local_hash and expected_hash and local_hash.lower() != expected_hash.lower():
+                                raise RuntimeError(
+                                    f"LoRA 哈希校验失败：Civitai 期望 {expected_hash[:12]}…，实际 {local_hash[:12]}…"
+                                )
+                            # 哈希/大小校验通过后原子落盘
+                            os.replace(str(tmp_path), str(target_path))
+                            pending_tmp = None
+                except BaseException:
+                    try:
+                        if pending_tmp is not None:
+                            pending_tmp.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    raise
 
                 self._store.update_state(result_id, LoraDownloadState.PROFILING)
                 profile = await self._write_profile(summary, installed["filename"], family, alias)
                 asset_id = self._register_asset(summary, installed, family, local_hash)
                 result = {
-                    **installed,
+                    key: value
+                    for key, value in installed.items()
+                    if key not in {"tmp_path", "target_path"}
+                }
+                result.update({
                     "model_name": _bounded_text(summary.get("model_name"), 160),
                     "base_model": _bounded_text(summary.get("base_model"), 80),
                     "profile": profile,
                     "hash": local_hash or None,
                     "expected_hash": expected_hash or None,
                     "conflict_renamed": bool(installed.get("conflict_renamed", False)),
-                }
+                })
                 if asset_id is not None:
                     result["asset_id"] = asset_id
 

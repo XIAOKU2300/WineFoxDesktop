@@ -68,7 +68,12 @@ def verify_safetensors(path: Path) -> None:
         if not isinstance(offsets, list) or len(offsets) != 2:
             raise VerifyFailure(f"{path.name} tensor {key!r} 缺少 data_offsets")
         start, end = offsets
-        if not (isinstance(start, int) and isinstance(end, int)):
+        if not (
+            isinstance(start, int)
+            and not isinstance(start, bool)
+            and isinstance(end, int)
+            and not isinstance(end, bool)
+        ):
             raise VerifyFailure(f"{path.name} tensor {key!r} offsets 非整数")
         if start < 0 or end < start or end > data_len:
             raise VerifyFailure(f"{path.name} tensor {key!r} 偏移越界 ({start},{end})")

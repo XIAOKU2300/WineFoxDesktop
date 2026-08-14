@@ -450,8 +450,16 @@ def resolve_prompt_loras(
     text: str,
     family: str,
     inventory: Iterable[str],
+    excluded_keys: Iterable[str] = (),
 ) -> AutoLoraResolution:
-    available = {normalize_lora_key(name): str(name) for name in inventory if normalize_lora_key(name)}
+    excluded = {
+        normalize_lora_key(key) for key in excluded_keys if normalize_lora_key(key)
+    }
+    available = {
+        normalize_lora_key(name): str(name)
+        for name in inventory
+        if normalize_lora_key(name) and normalize_lora_key(name) not in excluded
+    }
     matched = service.match(text, family=family, limit=3)
     candidates = matched.matches if matched.multi else matched.matches[:1]
     selected: list[dict[str, Any]] = []
@@ -490,12 +498,17 @@ def resolve_selected_lora_triggers(
     service: LoraService,
     family: str,
     selections: Iterable[dict[str, Any]],
+    excluded_keys: Iterable[str] = (),
 ) -> tuple[str, ...]:
     """Return trigger tags for LoRAs explicitly selected by the desktop UI."""
+    excluded = {
+        normalize_lora_key(key) for key in excluded_keys if normalize_lora_key(key)
+    }
     profiles = {
         normalize_lora_key(profile.lora_name): profile
         for profile in service.profiles_for(family).values()
         if normalize_lora_key(profile.lora_name)
+        and normalize_lora_key(profile.lora_name) not in excluded
     }
     triggers: list[str] = []
     seen: set[str] = set()
@@ -526,6 +539,32 @@ def merge_prompt_tags(prompt: str, tags: Iterable[str]) -> str:
     return ", ".join(parts)
 
 
+#: JSON 一次性迁移版本与事件类型（源摘要不变则跳过整体导入）
+_LORA_JSON_MIGRATION_VERSION = "v1"
+_LORA_JSON_MIGRATION_EVENT = "lora.profiles.migrated"
+
+
+def _profiles_digest(profiles: dict[str, dict[str, dict[str, Any]]]) -> str:
+    canonical = json.dumps(profiles, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _last_migration_digest(app_events: Any) -> str:
+    if app_events is None:
+        return ""
+    try:
+        events = app_events.list_events(
+            event_type=_LORA_JSON_MIGRATION_EVENT, limit=50
+        )
+    except Exception:  # pragma: no cover - 事件读取失败按无记录处理
+        return ""
+    for event in reversed(events):
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        if str(payload.get("version") or "") == _LORA_JSON_MIGRATION_VERSION:
+            return str(payload.get("digest") or "")
+    return ""
+
+
 def import_lora_profiles_into_db(
     db: Any,
     data_root: Path,
@@ -534,37 +573,62 @@ def import_lora_profiles_into_db(
     auto_cache_key: str = "",
     app_events: Any | None = None,
 ) -> int:
-    """把 JSON LoRA 档案幂等导入 SQLite（lora_profiles 作为唯一真相源）。
+    """把原插件 JSON LoRA 档案一次性迁移进 SQLite（lora_profiles 唯一真相源）。
 
-    复用 :func:`load_lora_profiles` 的合并语义（含别名/角色提示词/生成缓存），
-    按 (model_family, normalized_key) upsert；重复运行不产生重复行。
-    返回导入/更新的条目数。
+    - 只插入不存在的档案，绝不覆盖已有（含用户编辑）；重复运行幂等。
+    - 记录迁移版本 + 源 JSON 摘要（digest）；源摘要未变时跳过整体导入。
+    返回本次处理的档案条目数（0 表示源未变已跳过）。
     """
     from winefox_core.storage import LoraProfileStore
 
+    previous = _last_migration_digest(app_events)
     loaded = load_lora_profiles(Path(data_root), env, auto_cache_key=auto_cache_key)
+    digest = _profiles_digest(loaded.profiles)
+    if previous and previous == digest:
+        return 0
     store = LoraProfileStore(db)
     imported = 0
     added = 0
     for family, items in loaded.profiles.items():
+        existing_loras = {
+            normalize_lora_key(
+                (record.profile or {}).get("lora")
+                or (record.profile or {}).get("lora_name")
+                or ""
+            )
+            for record in store.get_family(family)
+        }
+        existing_loras.discard("")
         for key, profile in items.items():
             if not isinstance(profile, dict):
                 continue
+            imported += 1
+            if store.get(family, str(key)) is not None:
+                continue  # 已有档案（含用户编辑）绝不覆盖
+            incoming_lora = normalize_lora_key(
+                profile.get("lora") or profile.get("lora_name") or ""
+            )
+            if incoming_lora and incoming_lora in existing_loras:
+                continue  # 同一文件但 JSON display key 不同，也不能制造第二真源
             try:
-                if store.get(family, str(key)) is None:
-                    added += 1
                 store.save(family, str(key), profile)
-                imported += 1
+                added += 1
+                if incoming_lora:
+                    existing_loras.add(incoming_lora)
             except Exception as exc:  # 单条坏数据不阻断整体导入
                 logger.warning(
                     "LoRA 档案导入失败 family=%s key=%s: %s", family, key, exc
                 )
-    # 只在真正新增（非稳态重复导入）时记录事件，避免每次启动刷事件
-    if added and app_events is not None:
+    if app_events is not None:
         try:
             app_events.record(
-                "lora.profiles.imported", {"count": imported, "added": added}
+                _LORA_JSON_MIGRATION_EVENT,
+                {
+                    "version": _LORA_JSON_MIGRATION_VERSION,
+                    "digest": digest,
+                    "added": added,
+                },
             )
         except Exception:  # pragma: no cover - 事件写入失败不应阻断导入
-            logger.warning("LoRA 档案导入事件写入失败", exc_info=True)
+            logger.warning("LoRA 档案迁移事件写入失败", exc_info=True)
     return imported

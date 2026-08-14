@@ -4,11 +4,13 @@ import json
 import os
 import re
 import secrets
+import socket
+import struct
 import tempfile
 import time
 import uuid
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import aiohttp
 from aiohttp import web
@@ -21,7 +23,7 @@ except Exception:
     PromptServer = None
 
 
-BRIDGE_VERSION = "1.4.1"
+BRIDGE_VERSION = "1.4.2"
 CONFIG_PATH = Path(__file__).with_name("config.json")
 DEFAULT_ALLOWED_HOSTS = [
     "civitai.com",
@@ -35,7 +37,7 @@ DEFAULT_ALLOWED_HOSTS = [
     "github-releases.githubusercontent.com",
     "release-assets.githubusercontent.com",
 ]
-ALLOWED_SUFFIXES = {".safetensors", ".ckpt", ".pt", ".pth", ".bin", ".onnx", ".gguf", ".zip"}
+ALLOWED_SUFFIXES = {".safetensors"}
 SAFE_HEADER_NAMES = {"authorization", "cookie", "referer", "user-agent"}
 MODEL_TARGET_ALIASES = {
     "loras": ("loras", "lora"),
@@ -120,6 +122,56 @@ def _safe_image_filename(value: str) -> str:
     return name[:180]
 
 
+def _verify_safetensors_file(path: Path) -> None:
+    """校验 safetensors 文件头：前 8 字节 little-endian 头长度 + 可解析的 JSON 头。
+
+    不解析张量数据，只确认头部结构合法，防止空文件/非 safetensors 文件落地。
+    """
+    size = path.stat().st_size
+    if size < 16:
+        raise RuntimeError("safetensors 文件过小，文件头无效")
+    with path.open("rb") as fp:
+        header_len = struct.unpack("<Q", fp.read(8))[0]
+    if header_len < 2 or header_len > 128 * 1024 * 1024 or 8 + header_len > size:
+        raise RuntimeError("safetensors 文件头长度异常")
+    with path.open("rb") as fp:
+        fp.seek(8)
+        header_bytes = fp.read(header_len)
+    try:
+        header = json.loads(header_bytes.decode("utf-8", errors="strict"))
+    except (ValueError, UnicodeDecodeError):
+        raise RuntimeError("safetensors 文件头不是合法 JSON") from None
+    if not isinstance(header, dict):
+        raise RuntimeError("safetensors 文件头结构无效")
+    data_len = size - 8 - header_len
+    max_end = 0
+    tensor_count = 0
+    for key, info in header.items():
+        if key == "__metadata__":
+            continue
+        if not isinstance(info, dict):
+            raise RuntimeError(f"safetensors tensor {key!r} 元数据无效")
+        offsets = info.get("data_offsets")
+        if not isinstance(offsets, list) or len(offsets) != 2:
+            raise RuntimeError(f"safetensors tensor {key!r} 缺少 data_offsets")
+        start, end = offsets
+        if not (
+            isinstance(start, int)
+            and not isinstance(start, bool)
+            and isinstance(end, int)
+            and not isinstance(end, bool)
+        ):
+            raise RuntimeError(f"safetensors tensor {key!r} 偏移不是整数")
+        if start < 0 or end < start or end > data_len:
+            raise RuntimeError(f"safetensors tensor {key!r} 数据偏移越界")
+        tensor_count += 1
+        max_end = max(max_end, end)
+    if tensor_count < 1:
+        raise RuntimeError("safetensors 文件不含任何 tensor")
+    if max_end != data_len:
+        raise RuntimeError("safetensors 数据区末尾不匹配")
+
+
 def _load_config() -> dict:
     default = {
         "token": secrets.token_urlsafe(32),
@@ -166,12 +218,8 @@ def _download_semaphore():
 
 
 def _request_token(request, payload: dict = None) -> str:
-    payload = payload if isinstance(payload, dict) else {}
-    return (
-        request.headers.get("X-AstrBot-Bridge-Token")
-        or request.query.get("token")
-        or str(payload.get("token") or "")
-    ).strip()
+    # Credentials must not enter URLs, request bodies, access logs, or task state.
+    return str(request.headers.get("X-AstrBot-Bridge-Token") or "").strip()
 
 
 def _request_remote_host(request) -> str:
@@ -196,7 +244,7 @@ def _request_is_local_or_private(request) -> bool:
         ip = ipaddress.ip_address(host)
     except Exception:
         return False
-    return bool(ip.is_loopback or ip.is_private or ip.is_link_local)
+    return bool(ip.is_loopback)
 
 
 def _check_auth(request, payload: dict = None) -> bool:
@@ -319,16 +367,81 @@ def _resolve_download_target(payload: dict, filename: str) -> tuple:
 
 
 def _host_allowed(url: str) -> bool:
-    parsed = urlparse(str(url or "").strip())
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+    try:
+        parsed = urlparse(str(url or "").strip())
+        host = (parsed.hostname or "").strip().lower()
+        port = parsed.port
+    except ValueError:
         return False
-    host = (parsed.hostname or "").strip().lower()
+    if (
+        parsed.scheme != "https"
+        or not parsed.netloc
+        or not host
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in (None, 443)
+    ):
+        return False
     allowed = CONFIG.get("allowed_hosts") or DEFAULT_ALLOWED_HOSTS
     for item in allowed:
         item = str(item or "").strip().lower()
         if item and (host == item or host.endswith(f".{item}")):
             return True
     return False
+
+
+def _host_resolves_public(url: str, *, require_allowlisted: bool = True) -> bool:
+    if require_allowlisted and not _host_allowed(url):
+        return False
+    try:
+        parsed = urlparse(str(url or "").strip())
+        host = (parsed.hostname or "").strip().lower()
+        port = parsed.port
+    except ValueError:
+        return False
+    if (
+        parsed.scheme != "https"
+        or not host
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in (None, 443)
+    ):
+        return False
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        return False
+    try:
+        infos = socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)
+    except (socket.gaierror, OSError):
+        return False
+    if not infos:
+        return False
+    for info in infos:
+        try:
+            address = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return False
+        if not address.is_global:
+            return False
+    return True
+
+
+def _redirect_trace_configs(*, require_allowlisted: bool = False) -> list:
+    trace = aiohttp.TraceConfig()
+
+    async def validate_redirect(_session, _context, params):
+        location = str(params.response.headers.get("Location") or "").strip()
+        target = urljoin(str(params.url), location)
+        if not _host_resolves_public(
+            target, require_allowlisted=require_allowlisted
+        ):
+            raise RuntimeError("download redirect host is not allowed")
+
+    trace.on_request_redirect.append(validate_redirect)
+    return [trace]
 
 
 def _safe_proxy(value: str) -> str:
@@ -471,7 +584,11 @@ async def _download_worker(task_id: str, url: str, target: Path, headers: dict, 
             chunk_size = max(int(CONFIG.get("chunk_size_mb") or 1), 1) * 1024 * 1024
             proxy = _safe_proxy(proxy) or _safe_proxy(CONFIG.get("proxy")) or None
             _check_proxy_circuit(proxy)
-            async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+            async with aiohttp.ClientSession(
+                timeout=timeout,
+                headers=headers,
+                trace_configs=_redirect_trace_configs(),
+            ) as session:
                 async with session.get(url, allow_redirects=True, proxy=proxy) as resp:
                     _mark_proxy_success(proxy)
                     if resp.status >= 400:
@@ -489,6 +606,7 @@ async def _download_worker(task_id: str, url: str, target: Path, headers: dict, 
                             task.update({"done": done, "updated_at": time.time()})
             if not tmp_path.exists() or tmp_path.stat().st_size <= 0:
                 raise RuntimeError("download produced an empty file")
+            _verify_safetensors_file(tmp_path)
             tmp_path.replace(target)
             try:
                 os.utime(target, None)
@@ -506,7 +624,7 @@ async def _download_worker(task_id: str, url: str, target: Path, headers: dict, 
         if proxy and _looks_like_proxy_failure(exc):
             _mark_proxy_failure(proxy, exc)
         try:
-            if tmp_path.exists() and tmp_path.stat().st_size <= 0:
+            if tmp_path.exists():
                 tmp_path.unlink()
         except Exception:
             pass
@@ -515,7 +633,7 @@ async def _download_worker(task_id: str, url: str, target: Path, headers: dict, 
 
 async def _fetch_url(payload: dict) -> dict:
     url = str(payload.get("url") or "").strip()
-    if not _host_allowed(url):
+    if not _host_resolves_public(url):
         raise RuntimeError("fetch host is not allowed")
     method = str(payload.get("method") or "GET").upper()
     if method not in {"GET", "POST"}:
@@ -539,7 +657,11 @@ async def _fetch_url(payload: dict) -> dict:
     size = 0
     try:
         _check_proxy_circuit(proxy)
-        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+        async with aiohttp.ClientSession(
+            timeout=timeout,
+            headers=headers,
+            trace_configs=_redirect_trace_configs(require_allowlisted=True),
+        ) as session:
             request_kwargs = {"allow_redirects": True, "proxy": proxy}
             if method == "POST":
                 request_kwargs["json"] = payload.get("json") if isinstance(payload.get("json"), dict) else {}
@@ -810,7 +932,7 @@ if PromptServer is not None:
         if not _check_auth(request, payload=payload):
             return _json_error("invalid AstrBot bridge token", status=401)
         url = str(payload.get("url") or "").strip()
-        if not _host_allowed(url):
+        if not _host_resolves_public(url):
             return _json_error("download host is not allowed", status=400)
         proxy = str(payload.get("proxy") or "").strip()
         if proxy and not _safe_proxy(proxy):
@@ -834,6 +956,13 @@ if PromptServer is not None:
             "updated_at": time.time(),
         }
         if target.exists() and target.stat().st_size > 0:
+            try:
+                _verify_safetensors_file(target)
+            except Exception:
+                return _json_error(
+                    "existing target is not a valid safetensors file",
+                    status=409,
+                )
             TASKS[task_id].update({
                 "status": "done",
                 "done": target.stat().st_size,

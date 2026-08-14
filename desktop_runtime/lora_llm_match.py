@@ -21,7 +21,7 @@ from .llm_client import OpenAICompatibleLLMClient, resolve_provider
 
 logger = logging.getLogger("winefox.runtime.lora_llm_match")
 
-_MATCH_CACHE_VERSION = 2
+_MATCH_CACHE_VERSION = 3
 _CONFIDENCE_THRESHOLD = 0.92
 _CACHE_DIR_NAME = "lora_llm_cache"
 _FAMILIES = frozenset({"anima", "illustrious"})
@@ -72,9 +72,9 @@ def _safe_text(value: Any, limit: int = 120) -> str:
     text = re.sub(r"\s+", " ", str(value or "")).strip()
     if not text:
         return ""
-    if re.search(r"(?i)https?://|www\.|token=|api[_-]?key|authorization|cookie", text):
+    if re.search(r"(?i)https?://|www\.|ftp://|file://|token=|api[_-]?key|authorization|cookie", text):
         return ""
-    if re.search(r"(?i)(?:[a-z]:[\\/]|\\\\|^[\\/])", text):
+    if re.search(r"(?i)(?:[a-z]:[\\/]|\\\\|^[\\/]|\.\.|//)", text):
         return ""
     return text[:limit]
 
@@ -126,6 +126,14 @@ class LoraLlmMatchService:
 
     def llm_enabled(self) -> bool:
         return self._resolve_llm() is not None
+
+    def invalidate(self) -> None:
+        """档案变化后清空磁盘匹配缓存（保守策略，编辑频率低）。"""
+        try:
+            for path in self._cache_dir().glob("*.json"):
+                path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
     # ------------------------------------------------------------------ 候选净化
     @staticmethod
@@ -274,11 +282,12 @@ class LoraLlmMatchService:
     def _cache_path(self, key: str) -> Path:
         return self._cache_dir() / f"{key}.json"
 
-    def _cache_key(self, prompt: str, family: str, fingerprints: list) -> str:
+    def _cache_key(self, prompt: str, family: str, fingerprints: list, revision: int = 0) -> str:
         raw = json.dumps(
             {
                 "matcher_version": _MATCH_CACHE_VERSION,
                 "family": family,
+                "revision": int(revision or 0),
                 "prompt": prompt,
                 "fingerprints": sorted(fingerprints),
             },
@@ -357,8 +366,12 @@ class LoraLlmMatchService:
             terms.extend(candidate.get(list_key) or [])
         return [str(x) for x in terms if str(x or "").strip()]
 
-    async def match(self, *, prompt: str, candidates: list, family: str = "illustrious", limit: int = 5) -> dict | None:
-        """LLM 匹配最贴近 prompt 的本地 LoRA 候选，返回公开结果。"""
+    async def match(self, *, prompt: str, candidates: list, family: str = "illustrious", limit: int = 5, revision: int = 0) -> dict | None:
+        """LLM 匹配最贴近 prompt 的本地 LoRA 候选，返回公开结果。
+
+        revision 为当前 family 档案聚合版本，纳入缓存键；档案被编辑后
+        即使候选内容未变也不会命中旧缓存。
+        """
         prompt = str(prompt or "").strip()
         family = self._normalize_family(family)
         if not self.llm_enabled():
@@ -371,7 +384,7 @@ class LoraLlmMatchService:
         if not public_candidates:
             return {"matched": None, "reason": "候选净化后为空", "used_cache": False}
         fingerprints = [p.get("fingerprint") or "" for p in public_candidates]
-        cache_key = self._cache_key(prompt, family, fingerprints)
+        cache_key = self._cache_key(prompt, family, fingerprints, revision)
 
         async with self._cache_lock:
             cached = self._read_cache(cache_key)
@@ -381,7 +394,16 @@ class LoraLlmMatchService:
                     return {"matched": None, "reason": str(cached.get("reason") or "缓存无匹配"), "used_cache": True}
                 matched = self._find_candidate(candidates, public_candidates, matched_key)
                 if matched is not None:
-                    return {"matched": matched, "reason": str(cached.get("reason") or "命中缓存"), "used_cache": True}
+                    try:
+                        cached_confidence = float(cached.get("confidence") or 0)
+                    except (TypeError, ValueError):
+                        cached_confidence = 0.0
+                    return {
+                        "matched": matched,
+                        "reason": str(cached.get("reason") or "命中缓存"),
+                        "confidence": max(0.0, min(cached_confidence, 1.0)),
+                        "used_cache": True,
+                    }
 
         payload = json.dumps(
             {"user_prompt": prompt, "candidates": public_candidates},
@@ -403,7 +425,7 @@ class LoraLlmMatchService:
                 self._write_cache(cache_key, {
                     "version": _MATCH_CACHE_VERSION,
                     "family": family,
-                    "prompt": prompt,
+                    "prompt": _safe_text(prompt, 500),
                     "key": "",
                     "reason": "LLM 未匹配到合适候选",
                     "time": time.time(),
@@ -415,7 +437,7 @@ class LoraLlmMatchService:
                 self._write_cache(cache_key, {
                     "version": _MATCH_CACHE_VERSION,
                     "family": family,
-                    "prompt": prompt,
+                    "prompt": _safe_text(prompt, 500),
                     "key": "",
                     "reason": "LLM 匹配文本未通过校验",
                     "time": time.time(),
@@ -428,13 +450,19 @@ class LoraLlmMatchService:
             self._write_cache(cache_key, {
                 "version": _MATCH_CACHE_VERSION,
                 "family": family,
-                "prompt": prompt,
+                "prompt": _safe_text(prompt, 500),
                 "key": matched_key,
                 "reason": reason,
+                "confidence": max(0.0, min(confidence, 1.0)),
                 "time": time.time(),
             })
         logger.info("LoRA LLM 匹配: %s confidence=%.2f", matched_key, confidence)
-        return {"matched": matched, "reason": reason, "used_cache": False}
+        return {
+            "matched": matched,
+            "reason": reason,
+            "confidence": max(0.0, min(confidence, 1.0)),
+            "used_cache": False,
+        }
 
 
 __all__ = ["LoraLlmMatchService"]

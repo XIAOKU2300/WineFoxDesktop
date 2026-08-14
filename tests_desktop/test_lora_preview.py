@@ -86,7 +86,7 @@ class _FakeSession:
     async def __aexit__(self, *args):
         return False
 
-    def get(self, url: str, headers: dict | None = None):
+    def get(self, url: str, headers: dict | None = None, allow_redirects: bool = True):
         resp = self._responses[min(self._index, len(self._responses) - 1)]
         self._index += 1
         return _FakeResp(*resp)
@@ -137,13 +137,44 @@ class PreviewServiceFetch(unittest.IsolatedAsyncioTestCase):
         self._tmpdir = tempfile.TemporaryDirectory(prefix="lora_preview_")
         self.tmp = Path(self._tmpdir.name)
         self.service = LoraPreviewService(data_root=self.tmp)
-        self.service.register("tok", "https://example.com/preview.png", source="civitai")
+        # 白名单外主机（example.com）必须被 register 拒绝，用 whitelisted 域名测试下载路径
+        self.service.register("tok", "https://civitai.com/preview.png", source="civitai")
         self.addCleanup(self._tmpdir.cleanup)
+        # 避免真实 DNS 依赖，固定解析为公网可达
+        self._resolve_patch = mock.patch("desktop_runtime.lora_preview._resolve_public", return_value=True)
+        self._resolve_patch.start()
+        self.addCleanup(self._resolve_patch.stop)
 
-    def test_register_rejects_non_https(self):
-        for bad in ("http://example.com/a.png", "ftp://x/y", "", "/local/path.png", "file:///c:/a.png"):
+    def test_register_rejects_bad_scheme(self):
+        for bad in ("ftp://x/y", "", "/local/path.png", "file:///c:/a.png", "javascript:alert(1)", "ws://civitai.com/a.png"):
             self.service.register("tok1", bad, source="civitai")
         self.assertNotIn("tok1", self.service._registry)
+
+    def test_register_accepts_http_from_whitelisted_host(self):
+        # SSRF 策略按 主机+端口 而非强制 https；白名单主机 http(80) 允许
+        self.service.register("tok2", "http://civitai.com/a.png", source="civitai")
+        self.assertIn("tok2", self.service._registry)
+
+    def test_register_rejects_non_whitelisted_host(self):
+        for bad in ("https://example.com/a.png", "http://127.0.0.1/a.png", "https://169.254.169.254/meta", "https://10.0.0.1/x.png", "https://evil-civitai.com/x.png", "https://civitai.com:8080/a.png"):
+            self.assertIsNone(self.service.register("tok1", bad, source="civitai"))
+        self.assertNotIn("tok1", self.service._registry)
+
+    async def test_stable_token_reads_valid_disk_cache_after_restart(self):
+        url = "https://civitai.com/stable-preview.png"
+        token = self.service.register("", url, source="civitai")
+        self.assertRegex(token or "", r"^[0-9a-f]{24}$")
+        data = _png_bytes(64, 64)
+        with mock.patch(
+            "aiohttp.ClientSession",
+            lambda timeout: _FakeSession([(200, "image/png", [data])]),
+        ):
+            first = await self.service.fetch(token)
+        self.assertEqual(first, ("image/png", data))
+
+        restarted = LoraPreviewService(data_root=self.tmp)
+        second = await restarted.fetch(token)
+        self.assertEqual(second, ("image/png", data))
 
     def test_fetch_unregistered_token_returns_none(self):
         result = asyncio.run(self.service.fetch("no_such_token"))
@@ -201,7 +232,7 @@ class PreviewServiceFetch(unittest.IsolatedAsyncioTestCase):
 
     async def test_register_evicts_oldest_over_cap(self):
         for index in range(600):
-            self.service.register(f"tok{index}", f"https://example.com/{index}.png", source="civitai")
+            self.service.register(f"tok{index}", f"https://civitai.com/{index}.png", source="civitai")
         self.assertLessEqual(len(self.service._registry), 512)
         # 最早登记的应被逐出
         self.assertNotIn("tok0", self.service._registry)
