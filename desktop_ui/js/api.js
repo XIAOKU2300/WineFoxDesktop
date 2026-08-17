@@ -13,7 +13,9 @@
 export const API_BASE = "/api/v1";
 
 export function loraPreviewUrl(token) {
-  return `${API_BASE}/lora/preview?token=${encodeURIComponent(String(token || "").trim())}`;
+  const value = String(token || "").trim();
+  if (globalThis.__WINEFOX_DEV_MOCK__ === true && value.startsWith("data:image/")) return value;
+  return `${API_BASE}/lora/preview?token=${encodeURIComponent(value)}`;
 }
 
 export class ApiError extends Error {

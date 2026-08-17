@@ -67,6 +67,36 @@ class UiPerformanceContractTests(unittest.TestCase):
         self.assertIn("state.sentinel.before(fragment)", load_more)
         self.assertNotIn("this.renderBody()", load_more)
 
+    def test_lora_workspace_is_the_only_lora_management_surface(self) -> None:
+        app = self.source("desktop_ui/js/app.js")
+        models = self.source("desktop_ui/js/views/models.js")
+        lora = self.source("desktop_ui/js/views/lora.js")
+
+        self.assertIn('{ id: "models", label: "模型与环境"', app)
+        self.assertIn('{ id: "lora", label: "LoRA"', app)
+        self.assertNotIn('label: "模型与 LoRA"', app)
+        self.assertNotIn("loraDownloadPanel", models)
+        self.assertNotIn('dataset: { tab: "loras" }', models)
+        self.assertIn('this.workspaceTab("installed"', lora)
+        self.assertIn('this.workspaceTab("discover"', lora)
+        self.assertIn('this.workspaceTab("match"', lora)
+        self.assertIn("api.searchLoras", lora)
+        self.assertIn("api.loraLibraryList", lora)
+        self.assertIn("api.loraLibraryMatchPreview", lora)
+
+    def test_lora_search_cards_open_accessible_details_and_bound_broken_previews(self) -> None:
+        source = self.source("desktop_ui/js/views/lora.js")
+
+        self.assertIn("openOnlineDetail(item)", source)
+        self.assertIn('dataset: { loraDetail: item.id }', source)
+        self.assertIn('role: "button"', source)
+        self.assertIn('tabindex: "0"', source)
+        self.assertIn('["Enter", " "].includes(event.key)', source)
+        self.assertIn('event.key === "Escape"', source)
+        self.assertIn('onerror: showPlaceholder', source)
+        self.assertIn('thumb.replaceChildren(ic(placeholderIcon))', source)
+        self.assertIn('alt: ""', source)
+
     def test_resource_names_hide_absolute_paths(self) -> None:
         source = self.source("desktop_ui/js/utils.js")
 

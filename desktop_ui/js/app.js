@@ -16,8 +16,8 @@ const ROUTES = [
   { id: "generate", label: "生成", icon: "gen", ctor: GenerateView },
   { id: "history", label: "历史", icon: "history", ctor: HistoryView },
   { id: "favorites", label: "收藏", icon: "fav", ctor: FavoritesView },
-  { id: "models", label: "模型与 LoRA", icon: "model", ctor: ModelsView },
-  { id: "lora", label: "LoRA 库", icon: "wand", ctor: LoraLibraryView },
+  { id: "models", label: "模型与环境", icon: "model", ctor: ModelsView },
+  { id: "lora", label: "LoRA", icon: "wand", ctor: LoraLibraryView },
   { id: "settings", label: "设置", icon: "gear", ctor: SettingsView },
   { id: "diagnostics", label: "诊断", icon: "diag", ctor: DiagnosticsView },
 ];
@@ -70,7 +70,7 @@ function buildRail() {
     el("div", { class: "rail-foot" }, [
       el("span", { class: "rail-signature" }, "狐"),
       el("span", { class: "hint" }, "WineFox Desktop"),
-      el("span", { class: "hint" }, "v8.6.7 · 本地创作空间"),
+      el("span", { class: "hint" }, "v8.6.9 · 本地创作空间"),
     ]),
   );
 }

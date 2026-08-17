@@ -109,11 +109,12 @@ class FakePreviewService:
 
 
 class FakeSearchService:
-    def __init__(self, items):
+    def __init__(self, items, **extra):
         self.items = list(items)
+        self.extra = dict(extra)
 
     async def search(self, query: str, *, family: str = "illustrious", limit: int = 12, sources: list[str] | None = None):
-        return {"query": query, "family": family, "items": list(self.items)}
+        return {"query": query, "family": family, "items": list(self.items), **self.extra}
 
 
 class LoraDownloadBase(IsolatedAsyncioTestCase):
@@ -155,6 +156,19 @@ class DownloadSearch(LoraDownloadBase):
         result = await svc.search("test character", family="illustrious", limit=5)
         self.assertEqual(len(result["items"]), 1)
         self.assertIn(item["id"], svc._search_cache)
+
+    async def test_search_preserves_terms_alias_and_partial_source_errors(self):
+        service = FakeSearchService(
+            [],
+            searched_terms=["维里奈", "Verina"],
+            alias="Verina",
+            errors=["Civitai/维里奈: 搜索超时（15 秒）"],
+        )
+        svc = self._make_service(search_factory=lambda **kw: service)
+        result = await svc.search("维里奈", family="illustrious")
+        self.assertEqual(result["searched_terms"], ["维里奈", "Verina"])
+        self.assertEqual(result["alias"], "Verina")
+        self.assertIn("搜索超时", result["errors"][0])
 
     async def test_search_fallback_when_service_unavailable(self):
         def broken_factory(**kw):

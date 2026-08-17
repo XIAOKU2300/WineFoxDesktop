@@ -165,6 +165,16 @@ export class SettingsView {
             this.input("s-lora-dir", l.local_dir || "", { placeholder: "ComfyUI 的 models/loras 目录", autocomplete: "off", spellcheck: "false" }),
             el("span", { class: "hint" }, "必须指向 ComfyUI 实际读取的 models/loras；跨机器建议使用 ComfyUI Bridge，可留空。"),
           ]),
+          el("div", { class: "field" }, [
+            el("label", { for: "s-lora-proxy" }, "搜索与下载代理（可选）"),
+            this.input("s-lora-proxy", l.proxy || "", { placeholder: "例如 http://127.0.0.1:7890", autocomplete: "off", spellcheck: "false" }),
+            el("span", { class: "hint" }, "仅用于 Civitai / Hugging Face 请求；留空则使用系统直连。"),
+          ]),
+          el("div", { class: "field" }, [
+            el("label", { for: "s-lora-timeout" }, "来源请求超时（秒）"),
+            this.input("s-lora-timeout", l.request_timeout ?? 60, { type: "number", min: "10", max: "180", step: "1" }),
+            el("span", { class: "hint" }, "网络较慢时可调高；单次关键词搜索仍会使用更短预算，避免整个页面卡死。"),
+          ]),
         ]),
       ]),
     ];
@@ -677,6 +687,8 @@ export class SettingsView {
       patch.lora_download = {
         mode: val("s-lora-mode") || "auto",
         local_dir: val("s-lora-dir")?.trim() || "",
+        proxy: val("s-lora-proxy")?.trim() || "",
+        request_timeout: Math.max(10, Math.min(parseInt(val("s-lora-timeout"), 10) || 60, 180)),
       };
     } else if (section === "ui") {
       patch.ui = { reduced_motion: checked("s-reduced") };

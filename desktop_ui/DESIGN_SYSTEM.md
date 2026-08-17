@@ -71,7 +71,8 @@ WineFox Desktop
 ├─ 生成  左：模型族/工作流/LoRA/队列 ｜ 中：画布（拖放） ｜ 右：提示词/负面/种子/尺寸/步数/CFG/采样器
 ├─ 历史  cursor 分页 + 搜索 + 状态筛选 + 预览 + 收藏 + 回收站（恢复/彻底删除）
 ├─ 收藏  分类 chip 筛选 + 备注/分类编辑 + 搜索 + 新建
-├─ 模型与 LoRA  checkpoint/LoRA/节点 三页签；ready/missing/incompatible；v1 无在线下载
+├─ 模型与环境    checkpoint/节点/环境配置；ready/missing/incompatible
+├─ LoRA          已安装/发现/匹配测试；本地档案、搜索下载与自动匹配统一入口
 ├─ 设置  ComfyUI 连接 / TLS / 认证与密钥 / 默认参数 / 界面
 └─ 诊断  版本、ComfyUI、节点缺失、配置健康、日志摘要、脱敏导出
 ```

@@ -15,6 +15,18 @@ use tauri::http::{header, Request, Response, StatusCode};
 pub const PANEL_SCHEME: &str = "winefox-panel";
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+// LoRA 多来源搜索会并行访问 Civitai/Hugging Face，并由前端在 45 秒时主动
+// 取消。壳层必须比前端预算更长，否则会在 5 秒时先断开 sidecar，错误地把
+// 正常进行中的搜索包装成 HTTP 502 Bad Gateway。
+const LORA_SEARCH_TIMEOUT: Duration = Duration::from_secs(55);
+
+fn request_timeout(sidecar_path: &str) -> Duration {
+    if sidecar_path.starts_with("/api/v1/lora/search") {
+        LORA_SEARCH_TIMEOUT
+    } else {
+        REQUEST_TIMEOUT
+    }
+}
 
 pub fn handle(state: &AppState, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
     let path = request
@@ -75,7 +87,7 @@ pub fn handle(state: &AppState, request: Request<Vec<u8>>) -> Response<Vec<u8>> 
         &url,
         &extra_headers,
         body,
-        REQUEST_TIMEOUT,
+        request_timeout(&sidecar_path),
     ) {
         Ok(resp) => {
             let mut builder = Response::builder().status(resp.status);
@@ -187,7 +199,7 @@ fn error_response(status: StatusCode, message: &str) -> Response<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_panel_path, resolve_target};
+    use super::{parse_panel_path, request_timeout, resolve_target};
     use crate::state::{AppState, SidecarState};
     use std::io::{Read, Write};
     use std::net::TcpListener;
@@ -216,6 +228,18 @@ mod tests {
         assert_eq!(
             parse_panel_path("/63933/api/status"),
             Some((63933, "/api/status".into()))
+        );
+    }
+
+    #[test]
+    fn lora_search_uses_long_timeout_without_relaxing_other_routes() {
+        assert_eq!(
+            request_timeout("/api/v1/lora/search?q=Verina&family=illustrious"),
+            Duration::from_secs(55)
+        );
+        assert_eq!(
+            request_timeout("/api/v1/settings"),
+            Duration::from_secs(5)
         );
     }
 

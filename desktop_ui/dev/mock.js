@@ -42,6 +42,22 @@ const FAKE_LORAS = [
   { id: "lora_5", label: "Anima 风格", family: "anima", tags: ["画风"], strength: 0.8 },
 ];
 
+const FAKE_LORA_LIBRARY = [
+  { id: "lib_verina", name: "Verina - Resonator", filename: "verina_illustrious_v12.safetensors", family: "illustrious", state: "installed", disabled: false, character: "维里奈", role: "character", aliases: ["维里奈", "Verina"], triggers: ["verina_ww", "blonde hair", "green eyes"], preview: svgImage(31, "Verina", 512, 512) },
+  { id: "lib_jinhsi", name: "Jinhsi Character XL", filename: "jinhsi_character_xl.safetensors", family: "illustrious", state: "installed", disabled: false, character: "今汐", role: "character", aliases: ["今汐", "Jinhsi"], triggers: ["jinhsi_ww", "white hair", "dragon horns"], preview: svgImage(32, "Jinhsi", 512, 512) },
+  { id: "lib_ink", name: "Eastern Ink Wash Style", filename: "eastern_ink_wash_v3.safetensors", family: "illustrious", state: "installed", disabled: true, character: "", role: "style", aliases: ["水墨", "国风水墨"], triggers: ["ink wash", "chinese painting"], preview: svgImage(33, "Ink", 512, 512) },
+  { id: "lib_light", name: "Soft Cinematic Light", filename: "soft_cinematic_light.safetensors", family: "illustrious", state: "installed", disabled: false, character: "", role: "style", aliases: ["电影柔光"], triggers: ["cinematic lighting", "soft rim light"], preview: svgImage(34, "Light", 512, 512) },
+  { id: "lib_old", name: "Legacy Portrait Detail", filename: "legacy_portrait_detail.safetensors", family: "illustrious", state: "quarantined", disabled: true, character: "", role: "detail", aliases: ["旧版细节"], triggers: ["portrait detail"], preview: svgImage(35, "Legacy", 512, 512) },
+  { id: "lib_anima", name: "Anima Pastel Finish", filename: "anima_pastel_finish.safetensors", family: "anima", state: "installed", disabled: false, character: "", role: "style", aliases: ["柔和彩绘"], triggers: ["pastel finish", "soft color"], preview: svgImage(36, "Anima", 512, 512) },
+];
+
+const FAKE_LORA_SEARCH = [
+  { id: "search_verina_1", source: "civitai", name: "Verina | Wuthering Waves", version_name: "Illustrious v1.2", base_model: "Illustrious XL", trained_words: ["verina_ww", "blonde hair", "green eyes"], download_count: 18420, heart_count: 2130, nsfw: false, preview_token: svgImage(41, "Verina", 512, 640) },
+  { id: "search_verina_2", source: "huggingface", name: "Verina Resonator Costume", version_name: "v1.0", base_model: "Illustrious XL", trained_words: ["verina costume", "green dress"], download_count: 4210, heart_count: 380, nsfw: false, preview_token: svgImage(42, "Costume", 512, 640) },
+  { id: "search_ink_1", source: "civitai", name: "Modern Chinese Ink Style", version_name: "v3.1", base_model: "Illustrious XL", trained_words: ["modern ink", "ink wash"], download_count: 12980, heart_count: 1490, nsfw: false, preview_token: svgImage(43, "Ink", 512, 640) },
+  { id: "search_light_1", source: "civitai", name: "Cinematic Character Lighting", version_name: "XL v2", base_model: "Illustrious XL", trained_words: ["cinematic light", "rim light"], download_count: 9050, heart_count: 720, nsfw: false, preview_token: svgImage(44, "Light", 512, 640) },
+];
+
 const FAKE_CHECKPOINTS = [
   { id: "ckpt_1", name: "Illustrious-XL-v2.0.safetensors", family: "illustrious", size: 6925 * 1024 * 1024, compat: "ready" },
   { id: "ckpt_2", name: "perfectdeliberate_v90.safetensors", family: "illustrious", size: 6938 * 1024 * 1024, compat: "ready" },
@@ -66,6 +82,7 @@ const MOCK_PROMPTS = [
 
 let seq = 1;
 const jobs = new Map();
+const loraDownloads = new Map();
 const history = [];
 const favorites = [];
 let historyCursorSeq = 0;
@@ -155,6 +172,7 @@ function json(data, status = 200) {
 }
 
 export function installMock({ scenario = "success" } = {}) {
+  globalThis.__WINEFOX_DEV_MOCK__ = true;
   const sc = SCENARIOS.has(scenario) ? scenario : "success";
   const offline = sc === "offline";
 
@@ -215,7 +233,7 @@ export function installMock({ scenario = "success" } = {}) {
       loras: FAKE_LORAS,
       nodes: FAKE_NODES,
       missing_nodes: FAKE_NODES.filter((n) => !n.installed),
-      download: { enabled: false, reason: "v1 不支持在线下载" },
+      download: { enabled: true, mode: "local", local_configured: true },
     }),
     diagnostics: () => json({
       app: { name: "WineFox Desktop", version: "1.0.0-mock", build: "dev-mock" },
@@ -260,6 +278,73 @@ export function installMock({ scenario = "success" } = {}) {
     if (u.pathname === "/api/v1/comfyui/probe" || u.pathname === "/api/v1/probe") return await wait(600), base.probe();
     if (u.pathname === "/api/v1/catalog") return await wait(150), base.catalog();
     if (u.pathname === "/api/v1/models") return await wait(150), base.models();
+    if (u.pathname === "/api/v1/lora/library/match-preview" && method === "POST") {
+      const body = JSON.parse(opts.body || "{}");
+      const prompt = String(body.prompt || "").toLowerCase();
+      const family = body.family || "illustrious";
+      const candidates = FAKE_LORA_LIBRARY.filter((item) => item.family === family && item.state !== "quarantined" && !item.disabled);
+      let matched = candidates.filter((item) => [item.name, item.character, ...item.aliases, ...item.triggers].some((value) => prompt.includes(String(value || "").toLowerCase())));
+      if (!matched.length && prompt) matched = candidates.slice(0, 2);
+      return await wait(450), json({
+        prompt: body.prompt || "",
+        family,
+        matches: matched.slice(0, Number(body.limit || 10)).map((item, index) => ({ ...item, score: Math.max(0.72, 0.96 - index * 0.11), connector: item.role === "style" ? "with style" : "with character" })),
+      });
+    }
+    if (u.pathname === "/api/v1/lora/library" && method === "GET") {
+      const family = u.searchParams.get("family") || "illustrious";
+      const includeQuarantined = u.searchParams.get("include_quarantined") === "1";
+      const items = FAKE_LORA_LIBRARY.filter((item) => item.family === family && (includeQuarantined || item.state !== "quarantined"));
+      return await wait(220), json({ items, total: items.length });
+    }
+    const loraLibraryMatch = u.pathname.match(/^\/api\/v1\/lora\/library\/([^/]+)(?:\/(quarantine|restore))?$/);
+    if (loraLibraryMatch) {
+      const [, id, action] = loraLibraryMatch;
+      const item = FAKE_LORA_LIBRARY.find((entry) => entry.id === decodeURIComponent(id));
+      if (!item) return json({ error: "LoRA 档案不存在" }, 404);
+      if (method === "PATCH") Object.assign(item, JSON.parse(opts.body || "{}"));
+      if (method === "POST" && action === "quarantine") { item.state = "quarantined"; item.disabled = true; }
+      if (method === "POST" && action === "restore") item.state = "installed";
+      return await wait(180), json(item);
+    }
+    if (u.pathname === "/api/v1/lora/search" && method === "GET") {
+      const query = String(u.searchParams.get("q") || "").toLowerCase();
+      const family = u.searchParams.get("family") || "illustrious";
+      const requestedSources = u.searchParams.getAll("source");
+      let items = FAKE_LORA_SEARCH.filter((item) => !requestedSources.length || requestedSources.includes(item.source));
+      if (query.includes("verina") || query.includes("维里奈")) items = items.filter((item) => item.id.includes("verina"));
+      return await wait(650), json({ query, family, items, searched_terms: [query, query.includes("维里奈") ? "Verina" : query], errors: [] });
+    }
+    if (u.pathname === "/api/v1/lora/bridge/probe" && method === "POST") {
+      return await wait(380), json({ ok: true, mode: "local", message: "本机 LoRA 目录可写，安装通道已就绪" });
+    }
+    if (u.pathname === "/api/v1/lora/downloads" && method === "POST") {
+      const body = JSON.parse(opts.body || "{}");
+      const result = FAKE_LORA_SEARCH.find((item) => item.id === body.result_id);
+      if (!result) return json({ error: "搜索结果已过期" }, 404);
+      const id = "lora_download_" + String(++seq);
+      const job = { id, status: "running", message: "正在读取模型信息", progress: { percent: 12 }, result_id: result.id, alias: body.alias || "", result: null };
+      loraDownloads.set(id, job);
+      return json(job, 202);
+    }
+    const loraDownloadMatch = u.pathname.match(/^\/api\/v1\/lora\/downloads\/([^/]+)$/);
+    if (loraDownloadMatch && method === "GET") {
+      const job = loraDownloads.get(loraDownloadMatch[1]);
+      if (!job) return json({ error: "下载任务不存在" }, 404);
+      const next = Math.min(100, Number(job.progress?.percent || 0) + 34);
+      job.progress = { percent: next };
+      job.message = next < 70 ? "正在下载 LoRA 文件" : next < 100 ? "正在整理预览与触发词" : "安装完成";
+      if (next >= 100) {
+        job.status = "completed";
+        const source = FAKE_LORA_SEARCH.find((item) => item.id === job.result_id);
+        const filename = String(source?.name || "downloaded_lora").replace(/[^0-9a-z]+/gi, "_").replace(/^_|_$/g, "").toLowerCase() + ".safetensors";
+        job.result = { filename };
+        if (!FAKE_LORA_LIBRARY.some((item) => item.filename === filename)) {
+          FAKE_LORA_LIBRARY.unshift({ id: "lib_download_" + String(seq), name: source?.name || "Downloaded LoRA", filename, family: "illustrious", state: "installed", disabled: false, character: job.alias, role: "character", aliases: job.alias ? [job.alias] : [], triggers: source?.trained_words || [], preview: source?.preview_token || "" });
+        }
+      }
+      return json(job);
+    }
     if (u.pathname === "/api/v1/diagnostics/export") return json({ format: "json", content: JSON.stringify({ app: base.diagnostics(), note: "脱敏导出（mock）" }, null, 2) });
     if (u.pathname === "/api/v1/diagnostics") return await wait(150), base.diagnostics();
 

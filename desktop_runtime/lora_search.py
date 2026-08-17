@@ -119,6 +119,15 @@ class LoraSearchService:
             "network_max_retries": 2,
         }
 
+    def _per_source_search_timeout(self) -> float:
+        """单个来源/关键词的时间预算，必须短于前端整次搜索预算。"""
+        settings = self._lora_download_settings()
+        try:
+            request_timeout = max(10, min(int(settings.get("request_timeout") or 60), 180))
+        except (TypeError, ValueError):
+            request_timeout = 60
+        return min(18.0, max(8.0, request_timeout * 0.25))
+
     def _source_client(self, source: str) -> Any:
         source = str(source or "civitai").strip().lower()
         client = self._clients.get(source)
@@ -289,6 +298,12 @@ class LoraSearchService:
                     search_semaphore = asyncio.Semaphore(4)
                     self._search_semaphore = search_semaphore
 
+            # 单个来源/关键词的搜索时间预算：防止慢速网页搜索（Meilisearch 对
+            # CJK 常耗时数十秒且可能空返回）拖住整个响应，导致前端 45s 超时后
+            # 显示“没有结果”。预算较宽松，可被并行吸收；超时会被下方 except 捕获
+            # 并记入 errors，不影响已并行的英文/拉丁词搜索返回。
+            per_search_timeout = self._per_source_search_timeout()
+
             async def execute_search():
                 fetch_limit = max(choice_limit * 3, 12)
                 client = self._source_client(source)
@@ -299,10 +314,16 @@ class LoraSearchService:
             try:
                 if search_semaphore is not None:
                     async with search_semaphore:
-                        return await execute_search()
-                return await execute_search()
+                        return await asyncio.wait_for(execute_search(), timeout=per_search_timeout)
+                return await asyncio.wait_for(execute_search(), timeout=per_search_timeout)
+            except asyncio.TimeoutError:
+                err = f"搜索超时（{per_search_timeout:g} 秒）"
+                label = self._lora_source_label(source)
+                errors.append(f"{label}/{term}: {err}")
+                logger.warning("%s 搜索超时 term=%s budget=%ss", label, term, per_search_timeout)
+                return source, term, index, source_index, []
             except Exception as e:
-                err = _safe_error(e)
+                err = _safe_error(e) or "来源请求失败"
                 label = self._lora_source_label(source)
                 errors.append(f"{label}/{term}: {err}")
                 logger.warning("%s 搜索失败 term=%s: %s", label, term, _bounded_text(err, 200))
@@ -425,7 +446,11 @@ class LoraSearchService:
                 for source, term, index, source_idx, items in await asyncio.gather(*fallback_tasks):
                     absorb_items(source, term, index, source_idx, items)
         if not candidates:
-            rescue_terms = await self._llm_civitai_rescue_search_terms(query, family, search_terms, sources=source_list)
+            try:
+                rescue_terms = await self._llm_civitai_rescue_search_terms(query, family, search_terms, sources=source_list)
+            except Exception as exc:
+                logger.warning("Civitai 搜索词 LLM 补救扩展失败: %s", _safe_error(exc))
+                rescue_terms = []
             if rescue_terms:
                 rescue_start = len(search_terms)
                 for term in rescue_terms:

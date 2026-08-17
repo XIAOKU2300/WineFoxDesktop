@@ -20,6 +20,23 @@ from winefox_core.lora_service import LoraService, normalize_lora_key
 
 
 class DesktopLoraProfileTests(unittest.TestCase):
+    def test_search_seed_terms_resolve_profile_from_selection_key(self) -> None:
+        engine = object.__new__(DesktopEngine)
+        engine.lora_service = LoraService({
+            "illustrious": {
+                "verina_profile": {
+                    "lora": "verina_illustrious_v12.safetensors",
+                    "character": "维里奈",
+                    "official_aliases": ["Verina"],
+                    "search_terms": ["Verina Wuthering Waves"],
+                },
+            },
+        })
+        terms = engine._lora_profile_search_seed_terms("维里奈", "illustrious")
+        self.assertIn("Verina", terms)
+        self.assertIn("Verina Wuthering Waves", terms)
+        self.assertNotIn("维里奈", terms)
+
     def test_metadata_profile_uses_default_family_and_high_confidence_trigger(self) -> None:
         parsed = profile_from_comfy_metadata(
             "Adult_Nahida_from_Genshin_Impact_PDIL.safetensors",

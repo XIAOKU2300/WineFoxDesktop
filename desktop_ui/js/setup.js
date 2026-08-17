@@ -159,7 +159,7 @@ export class EnvSetupView {
   }
 
   renderHeader() {
-    // 此 tab 嵌在「模型与 LoRA」页内，用紧凑的 section 头而非页面级 view-head
+    // 此 tab 嵌在「模型与环境」页内，用紧凑的 section 头而非页面级 view-head
     return el("div", { class: "setup-head" }, [
       el("div", {}, [
         el("h2", { class: "setup-title" }, "环境配置"),
