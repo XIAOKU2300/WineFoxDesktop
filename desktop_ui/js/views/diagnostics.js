@@ -130,7 +130,7 @@ export class DiagnosticsView {
         esc(nodes.detail || "节点数据来自最近一次连接检测"),
       ),
       this.item("工作流", esc(workflowReady), esc(`${catalog.valid_workflows ?? 0} 个结构校验通过`), "仅统计图像工作流"),
-      this.item("模型与 LoRA", esc(`${catalog.checkpoints ?? 0} / ${catalog.loras ?? 0}`), "checkpoint / LoRA", esc(`已载入 ${catalog.lora_profiles ?? 0} 份别名档案`)),
+      this.item("模型资源", esc(`${catalog.checkpoints ?? 0} / ${catalog.loras ?? 0}`), "checkpoint / LoRA", esc(`已载入 ${catalog.lora_profiles ?? 0} 份别名档案`)),
     ]);
     body.append(grid);
 

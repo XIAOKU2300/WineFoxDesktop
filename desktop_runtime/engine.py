@@ -206,7 +206,66 @@ class DesktopEngine:
             config=config,
             data_root=Path(data_root),
             preview_service=self.lora_preview,
+            profile_seed_fn=self._lora_profile_search_seed_terms,
         )
+
+    def _lora_profile_search_seed_terms(self, query: str, family: str) -> list[str]:
+        """从本地角色档案提取搜索种子词（含官方英文名/别名），复现原插件第二套搜索通道。
+
+        原插件在搜索前会用本地角色档案做中→英种子映射（例如「维里奈」→ Verina），
+        让 Civitai 网页/REST 搜索能用官方英文名命中，而不是把原始中文直接丢给
+        Meilisearch（对 CJK 常返回 0 且慢）。桌面端此前未接通该回调，导致中文搜索
+        退化。这里用 LoraService.match 命中本地档案后，把 character / aliases /
+        LoRA 文件名收集为种子词，交由 LoraSearchService 优先并行搜索。
+        """
+        query = str(query or "").strip()
+        if not query or self.lora_service is None:
+            return []
+        family = str(family or "").strip().lower() or "illustrious"
+        try:
+            match = self.lora_service.match(query, family=family, limit=6, include_fuzzy=True)
+        except Exception:
+            return []
+        if not match.matches:
+            return []
+        from winefox_core.lora_service import normalize_match_key
+
+        profiles = self.lora_service.profiles_for(family)
+        profiles_by_lora = {
+            normalize_lora_key(profile.lora_name): profile
+            for profile in profiles.values()
+            if normalize_lora_key(profile.lora_name)
+        }
+        terms: list[str] = []
+        seen: set[str] = set()
+        for selection in match.matches:
+            profile = profiles.get(selection.key)
+            if profile is None:
+                profile = profiles_by_lora.get(normalize_lora_key(selection.lora_name))
+            if profile is None:
+                continue
+            # LoraProfile.aliases 已兼容聚合插件的 official_aliases、
+            # match_terms、search_terms 与 search_query；文件 stem 对应原插件
+            # `_lora_stem_trigger_candidates(profile["lora"])` 的兜底。
+            for item in (
+                profile.key,
+                profile.character,
+                *profile.aliases,
+                Path(profile.lora_name).stem,
+            ):
+                item = str(item or "").strip()
+                if not item:
+                    continue
+                norm = normalize_match_key(item)
+                if not norm or norm in seen:
+                    continue
+                seen.add(norm)
+                terms.append(item)
+        query_key = normalize_match_key(query)
+        kept = [t for t in terms if normalize_match_key(t) != query_key]
+        if kept:
+            logger.info("LoRA 本地档案搜索种子: %s => %s", query, ", ".join(kept[:8]))
+        return kept[:6]
 
     def _reload_lora_profiles(self) -> None:
         """从 SQLite（唯一真相源）构造 LoraService 与档案索引；不再读 JSON。"""

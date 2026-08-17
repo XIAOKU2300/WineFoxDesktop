@@ -366,6 +366,13 @@ class LoraDownloadService:
                         "family": family,
                         "items": items,
                         "nsfw_hidden": nsfw_hidden,
+                        "searched_terms": list(result.get("searched_terms") or [])[:8],
+                        "alias": _bounded_text(result.get("alias"), 120),
+                        "errors": [
+                            _bounded_text(value, 240)
+                            for value in (result.get("errors") or [])[:5]
+                            if _bounded_text(value, 240)
+                        ],
                     }
                 except AppError:
                     raise
@@ -432,7 +439,18 @@ class LoraDownloadService:
                 base_models=_FAMILY_BASE_MODELS[family],
             )
         except Exception as exc:
-            raise AppError(502, "LORA_SEARCH_FAILED", _safe_error(exc), {"retryable": True}) from exc
+            # 不要用笼统的 502 直接打挂整场搜索：把真实原因放回 errors 由前端展示，
+            # 保持 200 响应，页面仍能看到"来源无法连接 + 具体原因"，而非 Bad Gateway。
+            logger.warning("[ComfyUI] Civitai 直查失败: %s", _safe_error(exc))
+            return {
+                "query": query,
+                "family": family,
+                "items": [],
+                "nsfw_hidden": 0,
+                "searched_terms": [query],
+                "alias": "",
+                "errors": [_bounded_text(f"直连 Civitai 失败：{_safe_error(exc)}", 240)],
+            }
 
         public: list[dict[str, Any]] = []
         seen: set[str] = set()

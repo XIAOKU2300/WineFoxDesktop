@@ -23,6 +23,9 @@ _SENSITIVE_KEY_RE = re.compile(
 # 值本身含内嵌凭据（URL userinfo / git 凭据）
 _URL_CREDENTIAL_RE = re.compile(r"^(?P<scheme>[a-zA-Z][a-zA-Z0-9+.-]*://)(?P<user>[^/@\s]+)@")
 _GIT_CREDENTIAL_RE = re.compile(r"^(?P<scheme>https?://)(?P<user>[^/@\s]+):[^/@\s]+@")
+# 纯 URL（无 userinfo 凭据，如 http://127.0.0.1:7890）：本机代理地址应原样回显，
+# 不参与脱敏（否则会把用户填的代理变成 ******** 并在保存时写回坏值）。
+_PLAIN_URL_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://\S+$")
 
 MASK = "********"
 
@@ -39,8 +42,9 @@ def _mask_value(value: str) -> str:
     m = _GIT_CREDENTIAL_RE.match(value)
     if m:
         return f"{m.group('scheme')}{MASK}:{MASK}@{value[m.end():]}"
-    if len(value) <= 4:
-        return MASK
+    # 纯 URL（无内嵌凭据）原样返回，避免把代理地址等打码成 ********
+    if _PLAIN_URL_RE.fullmatch(value):
+        return value
     return MASK
 
 

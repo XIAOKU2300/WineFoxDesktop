@@ -331,7 +331,7 @@ export class Wizard {
     const missing = (cat?.nodes || []).filter((n) => !n.installed);
     return [
       el("h2", { class: "h2" }, "模型与节点"),
-      el("p", { class: "subtitle" }, "以下是检测到的资源；缺失项可在后续「模型与 LoRA」页持续跟踪。"),
+      el("p", { class: "subtitle" }, "以下是检测到的资源；缺失项可在后续「模型与环境」页持续跟踪。"),
       el("div", { class: "summary-table card", style: "overflow:hidden" }, [
         el("table", { class: "summary-table" }, [
           el("tbody", {}, [

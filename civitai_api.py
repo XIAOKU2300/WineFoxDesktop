@@ -793,6 +793,22 @@ class CivitaiClient:
         if cached and float(cached.get("expires_at") or 0) > time.time():
             return dict(cached)
 
+        # Civitai 的公开搜索 host/key 已作为网页搜索兜底随客户端维护。
+        # 旧流程首次搜索会先下载搜索页并逐个扫描最多 28 个前端脚本，实测常耗时
+        # 12 秒以上；随后才回到同一组公开兜底配置。这会让 CJK 搜索在进入快速
+        # REST 回退前就耗尽桌面端的单来源预算。常规 Civitai 直接使用公开配置，
+        # 非官方站点（如 civitai.red，use_web_search_fallback=False）仍执行发现流程。
+        if self.use_web_search_fallback:
+            config = {
+                "host": CIVITAI_SEARCH_FALLBACK_HOST,
+                "key": CIVITAI_SEARCH_FALLBACK_CLIENT_KEY,
+                "index": CIVITAI_SEARCH_INDEX,
+                "source": "fallback",
+                "expires_at": time.time() + 1800,
+            }
+            self._web_search_config = dict(config)
+            return dict(config)
+
         params = {"query": "lora", "sortBy": CIVITAI_SEARCH_INDEX, "type": "LORA"}
         search_url = f"{self.search_page}?{urlencode(params)}"
         config = {}
@@ -818,13 +834,6 @@ class CivitaiClient:
         except Exception as e:
             logger.info(f"[ComfyUI] Civitai 网页搜索配置发现失败，使用内置公开兜底: {e}")
 
-        if not config and self.use_web_search_fallback:
-            config = {
-                "host": CIVITAI_SEARCH_FALLBACK_HOST,
-                "key": CIVITAI_SEARCH_FALLBACK_CLIENT_KEY,
-                "index": CIVITAI_SEARCH_INDEX,
-                "source": "fallback",
-            }
         if not config:
             return {}
         config["expires_at"] = time.time() + (6 * 3600 if config.get("source") == "frontend" else 1800)
@@ -859,20 +868,28 @@ class CivitaiClient:
             "q": query,
             "limit": fetch_limit,
             "offset": 0,
-            "filter": self._build_web_search_filters(base_models=base_models),
+            # 底模过滤交给归一化阶段做“软偏好”（有则优先、无则保留），
+            # 不在 Meilisearch 端写死 baseModel，否则中文名等跨底模命中会被直接清零。
+            "filter": self._build_web_search_filters(base_models=None),
             "attributesToHighlight": [],
             "matchingStrategy": "all",
             "showRankingScore": True,
         }
-        data = await self._post_json(
-            f"{host}/indexes/{index}/search",
-            payload,
-            headers={
-                "Authorization": f"Bearer {key}",
-                "Content-Type": "application/json; charset=utf-8",
-                "Referer": f"{self.site_base}/",
-            },
-            target="Civitai 网页搜索",
+        # Meilisearch 单次查询通常 6-9s（代理节点波动时可达 15s+）。给它一个不超
+        # 整体网页预算的独立窗口，避免内部重试 + 慢响应把整条通道拖出外层 timeout。
+        meili_budget = max(10.0, min(16.0, self._combined_search_timeout() - 2.0))
+        data = await asyncio.wait_for(
+            self._post_json(
+                f"{host}/indexes/{index}/search",
+                payload,
+                headers={
+                    "Authorization": f"Bearer {key}",
+                    "Content-Type": "application/json; charset=utf-8",
+                    "Referer": f"{self.site_base}/",
+                },
+                target="Civitai 网页搜索",
+            ),
+            timeout=meili_budget,
         )
         hits = data.get("hits", []) if isinstance(data, dict) else []
         if not isinstance(hits, list) or not hits:
@@ -890,13 +907,23 @@ class CivitaiClient:
         detail_limit = min(len(hits), max(limit, 12), 24)
         detail_semaphore = asyncio.Semaphore(4)
 
+        # Meilisearch 命中本身已含 version/versions/images/trainedWords/metrics 等完整字段，
+        # 可以直接构造成果卡片。REST 详情补全仅是锦上添花：一旦 REST 不可用（如 503/超时）
+        # 必须立即放弃补全并退回 hit 本身，避免拖垮整个搜索预算。
+        detail_budget = 2.5  # 秒；REST 补全的总体预算
+        detail_deadline = asyncio.get_event_loop().time() + detail_budget
+
         async def fetch_detail(hit: dict):
             model_id = _safe_int((hit or {}).get("id") or (hit or {}).get("modelId"))
             if not model_id:
                 return None
             async with detail_semaphore:
+                remaining = detail_deadline - asyncio.get_event_loop().time()
+                if remaining <= 0:
+                    return None
                 try:
-                    detail = await self.get_model(model_id)
+                    # 为每次补全设定独立短超时，防止累积拖垮预算
+                    detail = await asyncio.wait_for(self.get_model(model_id), timeout=min(remaining, 1.8))
                     if isinstance(detail, dict):
                         version = hit.get("version") if isinstance(hit, dict) else {}
                         detail["_preferred_version_id"] = (version or {}).get("id") or hit.get("modelVersionId")
@@ -906,10 +933,25 @@ class CivitaiClient:
                     logger.info(f"[ComfyUI] Civitai Meilisearch 详情补全失败 model={model_id}: {e}")
             return None
 
-        detail_tasks = [fetch_detail(hit) for hit in hits[:detail_limit] if isinstance(hit, dict)]
-        detail_items = await asyncio.gather(*detail_tasks, return_exceptions=True) if detail_tasks else []
+        detail_tasks = [
+            asyncio.ensure_future(fetch_detail(hit))
+            for hit in hits[:detail_limit]
+            if isinstance(hit, dict)
+        ]
+        if detail_tasks:
+            try:
+                detail_items = await asyncio.wait_for(
+                    asyncio.gather(*detail_tasks, return_exceptions=True), timeout=detail_budget
+                )
+            except Exception:
+                for t in detail_tasks:
+                    t.cancel()
+                await asyncio.gather(*detail_tasks, return_exceptions=True)
+                detail_items = []
+        else:
+            detail_items = []
         details_by_model = {}
-        for item in detail_items:
+        for item in detail_items or []:
             if isinstance(item, dict):
                 model_id = str(item.get("id") or item.get("modelId") or "")
                 if model_id:
@@ -938,19 +980,113 @@ class CivitaiClient:
                 break
         return results
 
+    def _combined_search_timeout(self) -> float:
+        """网页广搜（Meilisearch）+ REST 双通道的等待预算。
+
+        Meilisearch 网页全文是中文命中率最高的通道，但其端点实测常有数秒
+        （甚至 ~9s）网络延迟；预算太紧会把它在完成前掐断，导致 Web 通道
+        永远超时、只剩失败的 REST，最终误报"搜索失败"。因此预算需覆盖一次
+        完整的 Meili 往返（下限 8s），同时给出整体上限避免卡死。
+        """
+        return min(32.0, max(14.0, self.timeout * 0.5))
+
+    @staticmethod
+    def _merge_lora_search_results(*groups, limit: int) -> list:
+        results = []
+        seen = set()
+        for group in groups:
+            for item in group or []:
+                if not isinstance(item, dict):
+                    continue
+                key = str(
+                    item.get("version_id")
+                    or item.get("modelVersionId")
+                    or item.get("model_id")
+                    or item.get("modelId")
+                    or item.get("page_url")
+                    or item.get("name")
+                    or ""
+                ).strip()
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                results.append(item)
+                if len(results) >= limit:
+                    return results
+        return results
+
     async def search_loras(self, query: str = "lora", limit: int = 10, base_models=None) -> list:
-        """Search Civitai LoRA models. CJK queries try web full-text search before REST API."""
+        """Search Civitai LoRAs; CJK queries merge website full-text and REST results."""
         query = str(query or "lora").strip() or "lora"
         limit = max(1, min(int(limit or 10), 60))
         base_models = [str(x).strip() for x in (base_models or ["Anima"]) if str(x).strip()] or ["Anima"]
-        if re.search(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]", query):
-            try:
-                web_results = await self.search_loras_via_web(query=query, limit=limit, base_models=base_models)
-                if web_results:
-                    return web_results
-            except Exception as e:
-                logger.warning(f"[ComfyUI] Civitai 网页搜索异常，回退 REST API: {e}")
-        return await self._search_loras_rest_api(query=query, limit=limit, base_models=base_models)
+        # 中英文统一走"网页全文(Meilisearch) + REST"双通道：
+        # 中文靠 Meili 全文命中，英文名同样受益；REST 503/超时时 Meili 仍可兜底。
+        web_task = asyncio.create_task(self.search_loras_via_web(query=query, limit=limit, base_models=base_models))
+        rest_task = asyncio.create_task(self._search_loras_rest_api(query=query, limit=limit, base_models=base_models))
+        try:
+            # 优先等网页全文通道：它命中即返回，不空等 REST 的 503 重试（REST 常几十秒）。
+            web_done, _ = await asyncio.wait(
+                {web_task}, timeout=self._combined_search_timeout()
+            )
+            web_results: list = []
+            web_error: Exception | None = None
+            if web_task in web_done:
+                try:
+                    web_results = web_task.result() or []
+                except Exception as exc:
+                    web_error = exc
+            if web_results:
+                # 网页结果可用：给 REST 一个很短的红利窗口补充独有结果；
+                # 超过即取消（真实 REST 做 503 重试会很慢），避免拖慢响应。
+                rest_grace = min(2.5, max(0.5, self._combined_search_timeout() * 0.12))
+                rest_done, rest_pending = await asyncio.wait(
+                    {rest_task}, timeout=rest_grace
+                )
+                rest_items: list = []
+                if rest_task in rest_done:
+                    try:
+                        rest_items = rest_task.result() or []
+                    except Exception as exc:
+                        logger.warning("[ComfyUI] Civitai REST 通道失败: %s", exc)
+                if rest_pending:
+                    rest_task.cancel()
+                await asyncio.gather(rest_task, return_exceptions=True)
+                return self._merge_lora_search_results(web_results, rest_items, limit=limit)
+
+            done, pending = await asyncio.wait(
+                {rest_task}, timeout=self._combined_search_timeout()
+            )
+            failures = []
+            if web_error is not None:
+                failures.append(f"网页广搜失败：{web_error}")
+            elif not web_done:
+                failures.append("网页广搜超时")
+            groups = {"网页广搜": web_results, "REST": []}
+            if rest_task in done:
+                try:
+                    groups["REST"] = rest_task.result() or []
+                except Exception as exc:
+                    failures.append(f"REST失败：{exc}")
+            else:
+                rest_task.cancel()
+                failures.append("REST超时")
+            await asyncio.gather(rest_task, return_exceptions=True)
+            merged = self._merge_lora_search_results(
+                groups["网页广搜"], groups["REST"], limit=limit,
+            )
+            if failures:
+                logger.warning("[ComfyUI] Civitai 双通道搜索部分失败: %s", "；".join(failures))
+            if merged:
+                return merged
+            if failures:
+                raise RuntimeError("；".join(failures))
+            return []
+        except BaseException:
+            for task in (web_task, rest_task):
+                task.cancel()
+            await asyncio.gather(web_task, rest_task, return_exceptions=True)
+            raise
 
     async def search_loras_via_web(self, query: str = "lora", limit: int = 10, base_models=None) -> list:
         """Use Civitai's public web search backend for CJK-friendly full-text results."""
@@ -1107,6 +1243,7 @@ class CivitaiClient:
             return any(normalize_key(model) in base_norm for model in base_models)
 
         selected_version = None
+        fallback_version = None
         preferred_version_id = _safe_int(
             item.get("_preferred_version_id")
             or item.get("modelVersionId")
@@ -1123,11 +1260,17 @@ class CivitaiClient:
                     selected_version = version
                     break
         for version in versions:
-            if selected_version is None and isinstance(version, dict) and is_allowed_base(version.get("baseModel") or ""):
+            if not isinstance(version, dict):
+                continue
+            if fallback_version is None:
+                fallback_version = version
+            if selected_version is None and is_allowed_base(version.get("baseModel") or ""):
                 selected_version = version
                 break
-        if selected_version is None and versions and not base_models:
-            selected_version = versions[0] if isinstance(versions[0], dict) else {}
+        if selected_version is None and fallback_version is not None:
+            # 底模过滤是“软偏好”：没有任何版本匹配目标底模时，
+            # 仍保留首个可用版本，避免中文名/跨底模 LoRA 被直接剔除。
+            selected_version = fallback_version
         if selected_version is None:
             return {}
         model_id = item.get("id") or item.get("modelId")

@@ -196,7 +196,7 @@ export class GenerateView {
 
   loraListContent(loras, filtered = this.filteredLoras(loras)) {
     if (!loras.length) {
-      return [el("p", { class: "lora-empty text-xs text-muted" }, "未检测到 LoRA（可在「模型与 LoRA」页查看状态）")];
+      return [el("p", { class: "lora-empty text-xs text-muted" }, "未检测到 LoRA（可在「LoRA」工作台查看状态）")];
     }
     if (!filtered.length) {
       return [el("p", { class: "lora-empty text-xs text-muted" }, "没有匹配项，换一个名称、角色名或别名试试。")];
@@ -721,7 +721,7 @@ export class GenerateView {
         store.set("catalog", await api.catalog());
         s.loraVisible = 40;
         this.render();
-        toast("模型与 LoRA 目录已更新", "ok");
+        toast("模型目录与 LoRA 库已更新", "ok");
       } catch (error) {
         toast("目录刷新失败：" + error.message, "err");
       }

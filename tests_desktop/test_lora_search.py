@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import IsolatedAsyncioTestCase
@@ -21,6 +22,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from desktop_runtime.lora_search import LoraSearchService  # noqa: E402
+from civitai_api import CivitaiClient  # noqa: E402
 
 
 class FakeConfig:
@@ -43,6 +45,20 @@ class FakeCivitaiClient:
     async def search_loras(self, query: str, limit: int = 10, base_models=None):
         self.calls.append((query, limit, tuple(base_models) if base_models else None))
         return list(self.results)
+
+
+class TermAwareCivitaiClient(FakeCivitaiClient):
+    def __init__(self, results_by_term=None, slow_terms=None, **kwargs):
+        super().__init__(**kwargs)
+        self.results_by_term = dict(results_by_term or {})
+        self.slow_terms = set(slow_terms or [])
+
+    async def search_loras(self, query: str, limit: int = 10, base_models=None):
+        self.calls.append((query, limit, tuple(base_models) if base_models else None))
+        if query in self.slow_terms:
+            import asyncio
+            await asyncio.sleep(10)
+        return list(self.results_by_term.get(query) or [])
 
 
 class FakePreview:
@@ -111,6 +127,57 @@ class SearchPublicSafety(IsolatedAsyncioTestCase):
         result = await service.search("")
         self.assertEqual(result["items"], [])
         self.assertEqual(result["query"], "")
+
+    async def test_civitai_public_search_config_skips_slow_script_discovery(self):
+        client = CivitaiClient()
+        page_requests = []
+
+        async def unexpected_page_request(url):
+            page_requests.append(url)
+            raise AssertionError("公开兜底配置可用时不应先抓取搜索页脚本")
+
+        client._get_text = unexpected_page_request
+        config = await client._get_web_search_config()
+        self.assertEqual(config["source"], "fallback")
+        self.assertTrue(config["host"].startswith("https://"))
+        self.assertEqual(page_requests, [])
+
+    async def test_civitai_cjk_search_merges_web_and_rest_channels(self):
+        client = CivitaiClient()
+
+        async def web(*args, **kwargs):
+            return [
+                {"version_id": "1", "name": "web-first"},
+                {"version_id": "2", "name": "web-only"},
+            ]
+
+        async def rest(*args, **kwargs):
+            return [
+                {"version_id": "1", "name": "rest-duplicate"},
+                {"version_id": "3", "name": "rest-only"},
+            ]
+
+        client.search_loras_via_web = web
+        client._search_loras_rest_api = rest
+        items = await client.search_loras("维里奈", limit=5, base_models=["Illustrious"])
+        self.assertEqual([item["name"] for item in items], ["web-first", "web-only", "rest-only"])
+
+    async def test_civitai_cjk_search_keeps_rest_result_when_web_times_out(self):
+        client = CivitaiClient()
+
+        async def slow_web(*args, **kwargs):
+            import asyncio
+            await asyncio.sleep(10)
+            return []
+
+        async def fast_rest(*args, **kwargs):
+            return [{"version_id": "3", "name": "rest-result"}]
+
+        client.search_loras_via_web = slow_web
+        client._search_loras_rest_api = fast_rest
+        client._combined_search_timeout = lambda: 0.03
+        items = await client.search_loras("维里奈", limit=5, base_models=["Illustrious"])
+        self.assertEqual([item["name"] for item in items], ["rest-result"])
 
     async def test_search_returns_public_safe_items(self):
         service = self._make_service(
@@ -259,6 +326,41 @@ class SearchNoLLM(IsolatedAsyncioTestCase):
         self.assertGreaterEqual(len(result["items"]), 1)
         self.assertIn("searched_terms", result)
         self.assertIn("errors", result)
+
+    async def test_profile_seed_searches_cjk_and_official_name_in_parallel(self):
+        client = TermAwareCivitaiClient({
+            "Verina": [_item("Verina | Wuthering Waves")],
+        })
+        service = LoraSearchService(
+            config=FakeConfig(),
+            data_root=self.tmp,
+            client_factory=lambda **kw: client,
+            profile_seed_fn=lambda query, family: ["Verina"] if query == "维里奈" else [],
+        )
+        result = await service.search("维里奈", sources=["civitai"])
+        called_terms = [call[0] for call in client.calls]
+        self.assertIn("维里奈", called_terms)
+        self.assertIn("Verina", called_terms)
+        self.assertIn("Verina", result["searched_terms"])
+        self.assertTrue(any("Verina" in item["name"] for item in result["items"]))
+
+    async def test_slow_cjk_term_times_out_without_losing_fast_alias_result(self):
+        client = TermAwareCivitaiClient(
+            {"Verina": [_item("Verina | Wuthering Waves")]},
+            slow_terms={"维里奈"},
+        )
+        service = LoraSearchService(
+            config=FakeConfig(),
+            data_root=self.tmp,
+            client_factory=lambda **kw: client,
+            profile_seed_fn=lambda query, family: ["Verina"],
+        )
+        service._per_source_search_timeout = lambda: 0.03
+        started = time.monotonic()
+        result = await service.search("维里奈", sources=["civitai"])
+        self.assertLess(time.monotonic() - started, 5.0)
+        self.assertTrue(result["items"])
+        self.assertTrue(any("搜索超时（0.03 秒）" in error for error in result["errors"]))
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 name: astrbot_plugin_comfyui_pro_UltraPlusMax
-version: 8.6.7
+version: 8.6.9
 desc: AstrBot 绘图插件，支持 ComfyUI、图生图、Wan 图生视频、API 1.8 魔法视频、视频额度计费、LoRA/Civitai/Hugging Face 和 GPT 魔法 OpenAI 兼容生图。
 help: 安装后需在配置中填写 ComfyUI 地址；发送 /comfy帮助 查看指令。git 安装可用 酒狐更新画图 自更新。
 author: XIAOKU2300
