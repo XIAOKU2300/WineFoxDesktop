@@ -43,3 +43,5 @@ cargo test --manifest-path desktop_shell\src-tauri\Cargo.toml
 用户数据默认保存在 `%LOCALAPPDATA%\WineFox`。API 密钥由系统凭据存储管理，不写入普通设置文件。
 
 项目使用 [MIT License](LICENSE)。
+
+本项目已在LinuxDO社区进行宣传：https://linux.do/
