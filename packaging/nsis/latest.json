@@ -1,12 +1,12 @@
 {
-  "version": "8.6.11",
-  "notes": "全新应用图标；LoRA 详情动效重做；生成页队列/工作流/日期修复；历史收藏修复；自动更新支持系统代理",
-  "pub_date": "2026-08-22T03:32:00.010770+00:00",
+  "version": "8.6.13",
+  "notes": "提示词转译重做与LoRA全链路修复：画面跟随用户描述；质量基底合并；AI接入模型列表/测试；装机与设置多项修复",
+  "pub_date": "2026-08-22T15:33:46.556584+00:00",
   "platforms": {
     "windows-x86_64": {
-      "url": "https://github.com/XIAOKU2300/WineFoxDesktop/releases/download/v8.6.11/WineFox-Setup-8.6.11-x64.exe",
-      "signature": "0vLB4G+Mjgv6pvNnDyjY51EQnX9lCjzMtUmApXk6pCuj12rwWtLoAiaUof1EUzikpzkbUnGQn3Tik45VWuWiBw==",
-      "size": 22792767
+      "url": "https://github.com/XIAOKU2300/WineFoxDesktop/releases/download/v8.6.13/WineFox-Setup-8.6.13-x64.exe",
+      "signature": "7QmxiKNacUBG292tc+wEagqwNp2pS9YWkAOwMqMbPcjizl4BgTLojZ3FZR3mS3IecP4EVceO49zCrFvkrIXcAg==",
+      "size": 22905924
     }
   }
 }
