@@ -1,5 +1,6 @@
 # Python
 __pycache__/
+.pytest_cache/
 *.py[cod]
 *$py.class
 *.so
@@ -66,7 +67,6 @@ packaging/nsis/payload/
 reports/pre-public-release-verify.json
 
 # Git 提交脚本（不需要提交）
-git提交.py
 git提交.py
 
 # 本地密钥与代理配置（绝不提交）
