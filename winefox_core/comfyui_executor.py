@@ -130,6 +130,13 @@ def _queue_item_prompt_id(value: Any) -> str:
     return ""
 
 
+def _is_connection_failure(exc: "ComfyUIError") -> bool:
+    """连接级失败（拒绝/超时/DNS）：重试与串行后续请求都无意义。"""
+    from .comfyui_types import ErrorKind
+
+    return exc.kind in (ErrorKind.CONNECTION, ErrorKind.TIMEOUT)
+
+
 class ComfyUIExecutor:
     """ComfyUI 工作流执行器（无共享可变运行时状态）。
 
@@ -389,10 +396,24 @@ class ComfyUIExecutor:
             object_info = await self.fetch_object_info(force=True)
         except ComfyUIError as exc:
             warnings.append(f"object_info: {exc.user_message}")
+            # 连接级失败（拒绝/超时）时其余三个请求必然同样失败：
+            # 串行重打只会把探测拖到几十秒，把启动页卡在暖场。立即短路。
+            if _is_connection_failure(exc):
+                return ServerProbe(
+                    reachable=False,
+                    latency_ms=(time.perf_counter() - started) * 1000.0,
+                    warnings=warnings,
+                )
         try:
             queue = await self.fetch_queue()
         except ComfyUIError as exc:
             warnings.append(f"queue: {exc.user_message}")
+            if _is_connection_failure(exc):
+                return ServerProbe(
+                    reachable=False,
+                    latency_ms=(time.perf_counter() - started) * 1000.0,
+                    warnings=warnings,
+                )
         try:
             models = await self.fetch_models()
         except ComfyUIError as exc:

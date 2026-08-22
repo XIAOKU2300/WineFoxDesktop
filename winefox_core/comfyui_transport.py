@@ -376,6 +376,10 @@ class ComfyUITransport:
                         raise exc
             except asyncio.TimeoutError as exc:
                 last_error = self._classify(exc, "GET", url)
+            except aiohttp.ClientConnectorError as exc:
+                # 连接建立失败（拒绝/不可达）：重试必然同样失败，
+                # 只会让离线探测白白拖上几十秒。立即抛出。
+                raise self._classify(exc, "GET", url) from exc
             except aiohttp.ClientError as exc:
                 last_error = self._classify(exc, "GET", url)
             except ssl.SSLCertVerificationError as exc:
