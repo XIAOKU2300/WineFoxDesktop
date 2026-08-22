@@ -1293,8 +1293,13 @@ class LoraDownloadService:
                     probe = await self.bridge_status()
                     if not probe.get("ok"):
                         configured = str(settings.get("mode") or "auto").strip().lower()
-                        if configured == "auto" and self._effective_local_dir(settings):
+                        fallback_dir = self._effective_local_dir(settings) if configured == "auto" else ""
+                        if fallback_dir:
+                            # 翻转成本地时必须把推导目录合入 settings，
+                            # 否则 _install_local 拿不到 local_dir 仍会失败
                             mode = "local"
+                            settings = dict(settings)
+                            settings["local_dir"] = fallback_dir
                         else:
                             raise RuntimeError(f"ComfyUI LoRA Bridge 不可用：{probe.get('message') or '未就绪'}")
 

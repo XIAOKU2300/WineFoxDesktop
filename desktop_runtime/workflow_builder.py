@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import random
+import re
 from typing import Any, Mapping
 
 
@@ -36,6 +37,27 @@ _QUALITY_MARKERS = (
     "score_9", "score_8", "score_7", "very aesthetic", "absurdres", "highres",
 )
 
+#: 角色数量/阵容类内容指令。模板基底携带它们是为配合模板的原始用途
+#: （多角色工作流预置 multiple characters，单人安全模板预置 solo），
+#: 合并进用户 prompt 会与用户实际的单/多人意图直接冲突，一律剔除。
+_CONTENT_DIRECTIVE_TAGS = frozenset({
+    "solo", "single character", "multiple characters", "multiple views",
+    "different hair colors", "different hairstyles", "different outfits",
+    "multiple girls", "multiple boys", "1girl", "2girls", "3girls",
+    "1boy", "2boys", "group",
+})
+
+_WEIGHT_TAG_RE = re.compile(r"^\((.+?)(?::[\d.]+)?\)$")
+
+
+def _tag_marker(value: str) -> str:
+    """tag 去重键：剥掉加权写法 (tag:1.2) 的外壳与权重，再大小写归一。"""
+    text = str(value or "").strip()
+    match = _WEIGHT_TAG_RE.match(text)
+    if match:
+        text = match.group(1).strip()
+    return text.casefold()
+
 
 def _is_quality_or_style_stack(text: str) -> bool:
     """模板默认正向是否是值得保留的质量/风格栈（而非占位垃圾）。"""
@@ -44,13 +66,23 @@ def _is_quality_or_style_stack(text: str) -> bool:
     return len(tags) >= 4 and any(marker in lowered for marker in _QUALITY_MARKERS)
 
 
+def _filter_content_directives(text: str) -> str:
+    """从模板基底里剔除角色数量/阵容类内容指令，保留质量与风格 tag。"""
+    kept = [
+        tag.strip()
+        for tag in str(text or "").split(",")
+        if tag.strip() and _tag_marker(tag) not in _CONTENT_DIRECTIVE_TAGS
+    ]
+    return ", ".join(kept)
+
+
 def _merge_tag_texts(base: str, extra: str) -> str:
     """base 在前、extra 在后合并，按大小写不敏感去重（保留原 tag 写法与权重）。"""
     parts: list[str] = []
     seen: set[str] = set()
     for tag in f"{base},{extra}".split(","):
         value = str(tag or "").strip()
-        marker = value.casefold()
+        marker = _tag_marker(value)
         if not value or marker in seen:
             continue
         parts.append(value)
@@ -110,7 +142,9 @@ def prepare_workflow(
     # LoRA 自带内容乘虚主导画面（表现为部分 LoRA 下用户描述无效）。
     template_positive, template_negative = _template_prompt_defaults(workflow)
     if template_positive and _is_quality_or_style_stack(template_positive):
-        prompt = _merge_tag_texts(template_positive, prompt)
+        # 只保留质量/风格 tag：角色数量类内容指令（multiple characters / solo 等）
+        # 是模板原始用途的预置，与用户实际的单/多人意图冲突，不能带进去
+        prompt = _merge_tag_texts(_filter_content_directives(template_positive), prompt)
     if not negative:
         negative = template_negative
     seed_value = payload.get("seed")

@@ -62,6 +62,7 @@ class SetupManager:
         self._scanner = Scanner(self.manifest, install_dir=install_dir)
         self._planner = Planner(self.manifest)
         self._persisted_root: str | None = None
+        self._bg_tasks: set[asyncio.Task] = set()
         self._executor = SetupExecutor(
             self.manifest,
             install_dir=install_dir,
@@ -234,7 +235,9 @@ class SetupManager:
         if config is None:
             return
         try:
-            asyncio.get_running_loop().create_task(config({"comfyui_root": text}))
+            task = asyncio.get_running_loop().create_task(config({"comfyui_root": text}))
+            self._bg_tasks.add(task)
+            task.add_done_callback(self._bg_tasks.discard)
         except RuntimeError:
             pass
         except Exception:  # noqa: BLE001 - 记住失败不影响扫描
