@@ -564,6 +564,42 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "真实网络端到端验证（走系统代理拉 GitHub feed + 下载 + 签名校验），手动运行: cargo test -- --ignored"]
+    fn live_update_feed_and_installer_roundtrip() {
+        let feed_body = crate::winhttp::https_get(
+            &resolve_feed_url_for_test(),
+            Duration::from_secs(30),
+            None,
+        )
+        .expect("拉取更新 feed 失败（检查系统代理是否开启）");
+        let feed = parse_feed(&feed_body).expect("feed 解析失败");
+        assert!(!feed.version.is_empty());
+
+        let win = feed.platforms.windows_x86_64;
+        let installer = crate::winhttp::https_get(
+            &win.url,
+            Duration::from_secs(600),
+            Some(&mut |done, total| {
+                if total > 0 && done % (8 * 1024 * 1024) < 64 * 1024 {
+                    // 低频进度输出，避免测试日志刷屏
+                }
+            }),
+        )
+        .expect("下载签名安装包失败");
+        assert_eq!(installer.len() as u64, win.size, "安装包大小与 feed 不符");
+        verify_installer_signature(resolve_pubkey_b64(), &win.signature, &installer)
+            .expect("官方安装包签名校验失败");
+    }
+
+    fn resolve_feed_url_for_test() -> String {
+        option_env!("WINE_FOX_UPDATE_FEED_URL")
+            .filter(|url| !url.trim().is_empty())
+            .unwrap_or(UPDATE_FEED_URL)
+            .trim()
+            .to_string()
+    }
+
+    #[test]
     fn civil_date_roundtrip() {
         assert_eq!(civil_from_days(0), (1970, 1, 1));
         assert_eq!(civil_from_days(365), (1971, 1, 1));
