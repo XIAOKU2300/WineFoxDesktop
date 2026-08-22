@@ -91,7 +91,17 @@ export const api = {
   probe: (payload = {}, options = {}) => request("/comfyui/probe", { ...options, method: "POST", body: JSON.stringify(payload) }),
   catalog: (options = {}) => request("/catalog", options),
   models: (options = {}) => request("/models", options),
-  searchLoras: (query, family = "illustrious", options = {}) => request("/lora/search", { ...options, query: { q: query, family, limit: 12, source: options.sources || [], adult_consent: options.adult_consent ? "1" : undefined } }),
+  searchLoras: (query, family = "illustrious", options = {}) => request("/lora/search", {
+    ...options,
+    query: {
+      q: query,
+      family,
+      limit: Math.max(1, Math.min(Number(options.limit) || 20, 20)),
+      page: Math.max(1, Math.min(Number(options.page) || 1, 20)),
+      source: options.sources || [],
+      adult_consent: options.adult_consent ? "1" : undefined,
+    },
+  }),
   startLoraDownload: (resultId, alias = "", options = {}) => request("/lora/downloads", { ...options, method: "POST", body: JSON.stringify({ result_id: resultId, alias, adult_consent: !!options.adult_consent }) }),
   loraDownload: (id, options = {}) => request(`/lora/downloads/${encodeURIComponent(id)}`, options),
   probeLoraBridge: (options = {}) => request("/lora/bridge/probe", { ...options, method: "POST", body: JSON.stringify({}) }),

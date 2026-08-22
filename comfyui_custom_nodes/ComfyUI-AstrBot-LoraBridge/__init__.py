@@ -390,7 +390,12 @@ def _host_allowed(url: str) -> bool:
     return False
 
 
-def _host_resolves_public(url: str, *, require_allowlisted: bool = True) -> bool:
+def _host_resolves_public(
+    url: str,
+    *,
+    require_allowlisted: bool = True,
+    proxy_configured: bool = False,
+) -> bool:
     if require_allowlisted and not _host_allowed(url):
         return False
     try:
@@ -413,6 +418,13 @@ def _host_resolves_public(url: str, *, require_allowlisted: bool = True) -> bool
         pass
     else:
         return False
+    # In proxy mode the proxy owns DNS resolution.  A local resolver can be
+    # blocked or return a different answer (Clash fake-IP/TUN), which used to
+    # reject an otherwise reachable Civitai URL before aiohttp ever used the
+    # configured proxy.  Keep this shortcut limited to allowlisted hosts; an
+    # untrusted redirect still has to pass the public-DNS check below.
+    if proxy_configured and _host_allowed(url):
+        return True
     try:
         infos = socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)
     except (socket.gaierror, OSError):
@@ -537,6 +549,27 @@ def _safe_response_headers(headers) -> dict:
     return result
 
 
+def _format_download_http_error(status: int, text: str) -> str:
+    """Convert provider auth failures into an actionable Bridge error."""
+    raw = str(text or "")
+    lowered = raw.lower()
+    if int(status or 0) == 401 and (
+        "creator of this asset requires" in lowered
+        or "requires you to be logged in" in lowered
+        or "unauthorized" in lowered
+    ):
+        return (
+            "Civitai 拒绝下载（HTTP 401）：该资源要求登录。"
+            "请在 WineFox 设置 → 认证与密钥中配置 Civitai 登录 Cookie，"
+            "或换用公开下载资源。"
+        )
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        payload = None
+    message = payload.get("message") if isinstance(payload, dict) else ""
+    return f"download HTTP {status}: {str(message or raw)[:200]}"
+
 def _task_snapshot(task_id: str) -> dict:
     task = TASKS.get(str(task_id or ""))
     if not isinstance(task, dict):
@@ -593,7 +626,7 @@ async def _download_worker(task_id: str, url: str, target: Path, headers: dict, 
                     _mark_proxy_success(proxy)
                     if resp.status >= 400:
                         text = await resp.text(errors="replace")
-                        raise RuntimeError(f"download HTTP {resp.status}: {text[:200]}")
+                        raise RuntimeError(_format_download_http_error(resp.status, text))
                     total = int(resp.headers.get("Content-Length") or 0)
                     task.update({"total": total, "updated_at": time.time()})
                     done = 0
@@ -633,12 +666,12 @@ async def _download_worker(task_id: str, url: str, target: Path, headers: dict, 
 
 async def _fetch_url(payload: dict) -> dict:
     url = str(payload.get("url") or "").strip()
-    if not _host_resolves_public(url):
+    proxy = _safe_proxy(payload.get("proxy")) or _safe_proxy(CONFIG.get("proxy")) or None
+    if not _host_resolves_public(url, proxy_configured=bool(proxy)):
         raise RuntimeError("fetch host is not allowed")
     method = str(payload.get("method") or "GET").upper()
     if method not in {"GET", "POST"}:
         raise RuntimeError("method must be GET or POST")
-    proxy = _safe_proxy(payload.get("proxy")) or _safe_proxy(CONFIG.get("proxy")) or None
     config_fetch_timeout = max(_safe_int(CONFIG.get("fetch_timeout"), 45, minimum=10), 10)
     request_fetch_timeout = _safe_int(
         payload.get("timeout") or payload.get("fetch_timeout") or config_fetch_timeout,
@@ -932,11 +965,12 @@ if PromptServer is not None:
         if not _check_auth(request, payload=payload):
             return _json_error("invalid AstrBot bridge token", status=401)
         url = str(payload.get("url") or "").strip()
-        if not _host_resolves_public(url):
-            return _json_error("download host is not allowed", status=400)
         proxy = str(payload.get("proxy") or "").strip()
         if proxy and not _safe_proxy(proxy):
             return _json_error("proxy must be an http(s) URL or host:port", status=400)
+        effective_proxy = _safe_proxy(proxy) or _safe_proxy(CONFIG.get("proxy")) or None
+        if not _host_resolves_public(url, proxy_configured=bool(effective_proxy)):
+            return _json_error("download host is not allowed", status=400)
         try:
             filename = _safe_filename(payload.get("filename") or Path(urlparse(url).path).name)
             target, root, target_type, target_subdir = _resolve_download_target(payload, filename)

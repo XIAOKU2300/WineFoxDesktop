@@ -22,7 +22,34 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from desktop_runtime.lora_search import LoraSearchService  # noqa: E402
+import civitai_api  # noqa: E402
 from civitai_api import CivitaiClient  # noqa: E402
+
+
+class ProxyCircuitPolicy(unittest.TestCase):
+    def setUp(self):
+        civitai_api._PROXY_CIRCUITS.clear()
+
+    def tearDown(self):
+        civitai_api._PROXY_CIRCUITS.clear()
+
+    def test_proxy_setting_accepts_host_port(self):
+        client = CivitaiClient(proxy="127.0.0.1:7890")
+        self.assertEqual(client.proxy, "http://127.0.0.1:7890")
+
+    def test_circuit_is_source_scoped_and_requires_repeated_failures(self):
+        civitai = CivitaiClient(proxy="http://127.0.0.1:7890", source_key="civitai")
+        huggingface = CivitaiClient(proxy="http://127.0.0.1:7890", source_key="huggingface")
+        error = OSError("temporary connect failure")
+
+        civitai._mark_proxy_failure(error)
+        civitai._mark_proxy_failure(error)
+        self.assertEqual(civitai._proxy_circuit_block_message(), "")
+        self.assertEqual(huggingface._proxy_circuit_block_message(), "")
+
+        civitai._mark_proxy_failure(error)
+        self.assertIn("已暂时熔断", civitai._proxy_circuit_block_message())
+        self.assertEqual(huggingface._proxy_circuit_block_message(), "")
 
 
 class FakeConfig:
@@ -142,7 +169,7 @@ class SearchPublicSafety(IsolatedAsyncioTestCase):
         self.assertTrue(config["host"].startswith("https://"))
         self.assertEqual(page_requests, [])
 
-    async def test_civitai_cjk_search_merges_web_and_rest_channels(self):
+    async def test_civitai_cjk_search_prefers_web_channel_without_rest_fanout(self):
         client = CivitaiClient()
 
         async def web(*args, **kwargs):
@@ -151,7 +178,10 @@ class SearchPublicSafety(IsolatedAsyncioTestCase):
                 {"version_id": "2", "name": "web-only"},
             ]
 
+        rest_calls = []
+
         async def rest(*args, **kwargs):
+            rest_calls.append((args, kwargs))
             return [
                 {"version_id": "1", "name": "rest-duplicate"},
                 {"version_id": "3", "name": "rest-only"},
@@ -160,7 +190,8 @@ class SearchPublicSafety(IsolatedAsyncioTestCase):
         client.search_loras_via_web = web
         client._search_loras_rest_api = rest
         items = await client.search_loras("维里奈", limit=5, base_models=["Illustrious"])
-        self.assertEqual([item["name"] for item in items], ["web-first", "web-only", "rest-only"])
+        self.assertEqual([item["name"] for item in items], ["web-first", "web-only"])
+        self.assertEqual(rest_calls, [])
 
     async def test_civitai_cjk_search_keeps_rest_result_when_web_times_out(self):
         client = CivitaiClient()
@@ -220,6 +251,50 @@ class SearchPublicSafety(IsolatedAsyncioTestCase):
         result = await service.search("yae miko genshin impact", sources=["civitai"])
         for item in result["items"]:
             self.assertEqual(item["preview_token"], "")
+
+    async def test_search_pages_keep_twenty_items_and_web_total(self):
+        raw = []
+        for index in range(45):
+            value = _item(
+                f"Endfield LoRA {index}",
+                model_id=str(1000 + index),
+                version_id=str(2000 + index),
+                page_url=f"https://civitai.com/models/{1000 + index}?modelVersionId={2000 + index}",
+                _web_search=True,
+                _web_search_rank=index,
+                _search_total=45,
+            )
+            raw.append(value)
+        service = self._make_service(client=FakeCivitaiClient(results=raw))
+        first = await service.search("endfield", sources=["civitai"], page=1, limit=20)
+        second = await service.search("endfield", sources=["civitai"], page=2, limit=20)
+        third = await service.search("endfield", sources=["civitai"], page=3, limit=20)
+        self.assertEqual(len(first["items"]), 20)
+        self.assertEqual(len(second["items"]), 20)
+        self.assertEqual(len(third["items"]), 5)
+        self.assertEqual(first["total"], 45)
+        self.assertTrue(first["has_more"])
+        self.assertTrue(second["has_more"])
+        self.assertFalse(third["has_more"])
+        self.assertNotEqual(first["items"][0]["version_id"], second["items"][0]["version_id"])
+
+    async def test_filtered_short_page_keeps_next_page_when_remote_total_is_larger(self):
+        raw = []
+        for index in range(17):
+            raw.append(_item(
+                f"Endfield filtered {index}",
+                model_id=str(3000 + index),
+                version_id=str(4000 + index),
+                page_url=f"https://civitai.com/models/{3000 + index}?modelVersionId={4000 + index}",
+                _web_search=True,
+                _web_search_rank=index,
+                _search_total=850,
+            ))
+        service = self._make_service(client=FakeCivitaiClient(results=raw))
+        result = await service.search("endfield", sources=["civitai"], page=1, limit=20)
+        self.assertEqual(len(result["items"]), 17)
+        self.assertEqual(result["total"], 850)
+        self.assertTrue(result["has_more"])
 
 
 class SearchFiltering(IsolatedAsyncioTestCase):
@@ -343,6 +418,22 @@ class SearchNoLLM(IsolatedAsyncioTestCase):
         self.assertIn("Verina", called_terms)
         self.assertIn("Verina", result["searched_terms"])
         self.assertTrue(any("Verina" in item["name"] for item in result["items"]))
+
+    async def test_red_failure_does_not_hide_normal_civitai_results(self):
+        class FailingRedClient(FakeCivitaiClient):
+            async def search_loras(self, query: str, limit: int = 10, base_models=None):
+                raise RuntimeError("red mirror unavailable")
+
+        normal = FakeCivitaiClient(results=[_item("Endfield public result")])
+        service = LoraSearchService(
+            config=FakeConfig(),
+            data_root=self.tmp,
+            client_factory=lambda **kw: normal,
+            red_client_factory=lambda **kw: FailingRedClient(),
+        )
+        result = await service.search("endfield", sources=["civitai", "civitai_red"])
+        self.assertTrue(result["items"])
+        self.assertTrue(any("Civitai Red" in error for error in result["errors"]))
 
     async def test_slow_cjk_term_times_out_without_losing_fast_alias_result(self):
         client = TermAwareCivitaiClient(

@@ -168,7 +168,12 @@ export class SettingsView {
           el("div", { class: "field" }, [
             el("label", { for: "s-lora-proxy" }, "搜索与下载代理（可选）"),
             this.input("s-lora-proxy", l.proxy || "", { placeholder: "例如 http://127.0.0.1:7890", autocomplete: "off", spellcheck: "false" }),
-            el("span", { class: "hint" }, "仅用于 Civitai / Hugging Face 请求；留空则使用系统直连。"),
+            el("span", { class: "hint" }, "用于搜索、缩略图和本机下载；Bridge 下载默认复用此代理。"),
+          ]),
+          el("div", { class: "field" }, [
+            el("label", { for: "s-lora-bridge-proxy" }, "Bridge 出网代理（可选）"),
+            this.input("s-lora-bridge-proxy", l.bridge_proxy || "", { placeholder: "远程 ComfyUI 的代理，例如 http://192.168.0.114:7890", autocomplete: "off", spellcheck: "false" }),
+            el("span", { class: "hint" }, "仅在 ComfyUI Bridge 所在机器需要单独代理时填写；留空自动复用上面的代理。"),
           ]),
           el("div", { class: "field" }, [
             el("label", { for: "s-lora-timeout" }, "来源请求超时（秒）"),
@@ -225,7 +230,18 @@ export class SettingsView {
       ]),
       el("div", { class: "section-card" }, [
         el("div", { class: "sec-head" }, [el("h3", {}, "密钥状态")]),
-        el("div", { class: "sec-body stack-2" }, this.secretRows()),
+        el("div", { class: "sec-body stack-2" }, [
+          el("div", { class: "notice info civitai-credential-guide" }, [
+            el("b", {}, "Civitai 下载凭证获取方法"),
+            el("ol", {}, [
+              el("li", {}, "优先使用 API Key：登录 Civitai，打开账户设置，在 API Keys 区域创建 Key，然后填入下方的 Civitai API Token。"),
+              el("li", {}, "如果特定资源仍返回 HTTP 401：在已登录 Civitai 的浏览器按 F12 → Network，点击一次网站下载；打开 api/download/models 请求，在 Request Headers 中复制完整 Cookie 值。"),
+              el("li", {}, "Cookie 等同账户登录凭证，只能保存在自己的电脑；不要截图、发群或提交到 Git。失效后重新抓取。"),
+            ]),
+            el("a", { class: "btn btn-sm", href: "https://civitai.com/user/account", target: "_blank", rel: "noopener noreferrer" }, "打开 Civitai 账户设置"),
+          ]),
+          this.secretRows(),
+        ]),
       ]),
     ];
   }
@@ -233,6 +249,10 @@ export class SettingsView {
   secretRows(definitions = null) {
     const defaults = definitions || [
       { key: "comfyui_api_key", label: "ComfyUI API Key", desc: "用于反向代理 / 网关认证" },
+      { key: "civitai_api_token", label: "Civitai API Token", desc: "公开 API 和有权限的资源下载" },
+      { key: "civitai_cookie", label: "Civitai 登录 Cookie", desc: "作者要求登录的资源下载；从已登录浏览器复制 Cookie" },
+      { key: "huggingface_api_token", label: "Hugging Face Token", desc: "需要权限的 Hugging Face 下载" },
+      { key: "comfyui_bridge_token", label: "ComfyUI Bridge Token", desc: "远端 Bridge 启用鉴权时填写" },
       { key: "comfyui_client_cert", label: "客户端证书（可选）", desc: "mTLS 双向认证" },
       { key: "tls_ca_cert", label: "自定义 CA 证书", desc: "受信任的本地根证书" },
     ];
@@ -306,16 +326,20 @@ export class SettingsView {
   }
 
   setSecretDialog(key) {
-    const label = ({ comfyui_api_key: "ComfyUI API Key", ai_api_key: "提示词 AI API Key", vision_api_key: "视觉理解 AI API Key", comfyui_client_cert: "客户端证书", tls_ca_cert: "自定义 CA 证书" })[key] || key;
-    const isApiKey = key === "comfyui_api_key" || key === "ai_api_key" || key === "vision_api_key";
+    const label = ({ comfyui_api_key: "ComfyUI API Key", ai_api_key: "提示词 AI API Key", vision_api_key: "视觉理解 AI API Key", civitai_api_token: "Civitai API Token", civitai_cookie: "Civitai 登录 Cookie", huggingface_api_token: "Hugging Face Token", comfyui_bridge_token: "ComfyUI Bridge Token", comfyui_client_cert: "客户端证书", tls_ca_cert: "自定义 CA 证书" })[key] || key;
+    const isApiKey = new Set(["comfyui_api_key", "ai_api_key", "vision_api_key", "civitai_api_token", "civitai_cookie", "huggingface_api_token", "comfyui_bridge_token"]).has(key);
     const overlay = el("div", { class: "overlay", role: "dialog", "aria-modal": "true", "aria-labelledby": "sk-title", "aria-describedby": "sk-desc" });
     overlay.append(el("div", { class: "modal" }, [
       el("div", { class: "modal-head" }, [el("h3", { id: "sk-title" }, esc(`设置 ${label}`)), el("button", { class: "icon-btn", type: "button", "aria-label": "关闭" }, [ic("x")])]),
       el("div", { class: "modal-body" }, [
-        el("p", { class: "text-sm text-muted", id: "sk-desc" }, "密钥仅写入后端本机存储，界面不会回显；不会存储到浏览器 localStorage。"),
+        el("p", { class: "text-sm text-muted", id: "sk-desc" }, key === "civitai_api_token"
+          ? "登录 Civitai → 账户设置 → API Keys 创建并复制 Key。优先使用该 Token 解决受限下载。"
+          : key === "civitai_cookie"
+            ? "仅在 API Key 仍返回 401 时使用：已登录浏览器 F12 → Network → 点击网站下载 → api/download/models 请求 → Request Headers → 复制完整 Cookie。Cookie 等同登录凭证，请勿分享。"
+            : "密钥仅写入后端本机存储，界面不会回显；不会存储到浏览器 localStorage。"),
         isApiKey
           ? el("div", { class: "field" }, [
-            el("label", { for: "sk-val" }, "API Key"),
+            el("label", { for: "sk-val" }, key === "civitai_cookie" ? "Cookie 请求头值" : "API Key / Token"),
             el("input", { id: "sk-val", class: "input", type: "password", autocomplete: "new-password" }),
           ])
           : el("div", { class: "field" }, [
@@ -688,6 +712,7 @@ export class SettingsView {
         mode: val("s-lora-mode") || "auto",
         local_dir: val("s-lora-dir")?.trim() || "",
         proxy: val("s-lora-proxy")?.trim() || "",
+        bridge_proxy: val("s-lora-bridge-proxy")?.trim() || "",
         request_timeout: Math.max(10, Math.min(parseInt(val("s-lora-timeout"), 10) || 60, 180)),
       };
     } else if (section === "ui") {
@@ -805,7 +830,10 @@ export class SettingsView {
         node = loadingState("更新完成，正在重启…", { compact: true });
         break;
       case "failed":
-        node = el("p", { class: "text-sm", style: "color:var(--danger)" }, [ic("warn"), esc(` ${state.error || "检查失败，请检查网络"}`)]);
+        node = el("div", { class: "stack-1" }, [
+          el("p", { class: "text-sm", style: "color:var(--danger)" }, [ic("warn"), esc(` ${state.error || "检查失败，请检查网络"}`)]),
+          el("p", { class: "text-xs text-muted" }, "提示：更新走 GitHub，若在代理/防火墙环境请开启系统代理后重试；应用会自动使用系统代理。"),
+        ]);
         break;
       default:
         node = el("p", { class: "text-sm text-muted" }, "—");

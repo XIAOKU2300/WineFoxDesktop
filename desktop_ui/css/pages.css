@@ -496,14 +496,14 @@
   margin-bottom: var(--sp-3);
   border-radius: var(--r-md); overflow: hidden;
   border: 1px solid var(--border); background: var(--surface-2);
-  transition: box-shadow var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), transform var(--dur) var(--ease-out);
+  transition: transform var(--card-motion) var(--ease-out), box-shadow var(--card-motion) var(--ease-out), border-color 180ms ease;
 }
-.img-cell:hover { box-shadow: var(--shadow-2); border-color: var(--border-strong); transform: translateY(-2px); }
+.img-cell:hover { box-shadow: var(--card-shadow-hover); border-color: var(--border-strong); transform: translateY(var(--card-lift)); }
 .img-cell img {
   width: 100%; height: auto; display: block; object-fit: cover;
   transition: transform 420ms var(--ease-out);
 }
-.img-cell:hover img { transform: scale(1.035); }
+.img-cell:hover img { transform: scale(var(--card-image-scale)); }
 .img-cell .cell-actions {
   position: absolute; right: 6px; top: 6px; display: flex; gap: 2px;
   opacity: 0; transform: translateY(-3px);
@@ -608,11 +608,16 @@
 .cat-chip .cnt { font-size: var(--fs-xs); opacity: 0.75; }
 
 /* 收藏单元格（带备注） */
-.fav-cell { display: flex; flex-direction: column; break-inside: avoid; margin-bottom: var(--sp-3); border-radius: var(--r-md); overflow: hidden; border: 1px solid var(--border); background: var(--surface); transition: box-shadow var(--dur-fast) var(--ease), transform var(--dur) var(--ease-out); }
-.fav-cell:hover { box-shadow: var(--shadow-2); transform: translateY(-2px); }
+.fav-cell { display: flex; flex-direction: column; break-inside: avoid; margin-bottom: var(--sp-3); border-radius: var(--r-md); overflow: hidden; border: 1px solid var(--border); background: var(--surface); transition: transform var(--card-motion) var(--ease-out), box-shadow var(--card-motion) var(--ease-out), border-color 180ms ease; }
+.fav-cell:hover { box-shadow: var(--card-shadow-hover); border-color: var(--border-strong); transform: translateY(var(--card-lift)); }
 .fav-cell .fav-thumb { position: relative; overflow: hidden; background: var(--surface-2); }
 .fav-cell .fav-thumb img { width: 100%; height: auto; display: block; object-fit: cover; transition: transform 420ms var(--ease-out); }
-.fav-cell:hover .fav-thumb img { transform: scale(1.035); }
+/* 无图收藏（纯提示词收藏）的占位徽记，替代破图图标 */
+.fav-thumb-placeholder { position: absolute; inset: 0; display: grid; place-items: center; color: var(--faint); background: linear-gradient(150deg, var(--surface-2), var(--surface)); }
+.fav-thumb-placeholder svg { width: 30px; height: 30px; opacity: .55; }
+.fav-thumb-placeholder.is-large { position: static; min-height: 180px; }
+.fav-thumb-placeholder.is-large svg { width: 44px; height: 44px; opacity: .4; }
+.fav-cell:hover .fav-thumb img { transform: scale(var(--card-image-scale)); }
 .fav-cell .fav-note { padding: 8px 10px; font-size: var(--fs-xs); color: var(--muted); border-top: 1px solid var(--hairline); }
 .fav-cell .fav-note b { display: block; font-weight: 550; color: var(--text-2); font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -772,8 +777,39 @@
   background: var(--surface-2);
 }
 .lora-library-thumb img, .lora-market-thumb img { width: 100%; height: 100%; display: block; object-fit: cover; color: transparent; }
+.lora-library-thumb, .lora-market-thumb, .lora-detail-preview { position: relative; }
+.lora-library-thumb img, .lora-market-thumb img, .lora-detail-preview img { opacity: 0; transition: opacity 180ms ease; }
+.lora-library-thumb.is-loaded img, .lora-market-thumb.is-loaded img, .lora-detail-preview.is-loaded img { opacity: 1; }
 .lora-library-thumb.is-placeholder, .lora-market-thumb.is-placeholder { display: grid; place-items: center; color: var(--faint); }
 .lora-library-thumb.is-placeholder svg { width: 24px; height: 24px; }
+.lora-library-thumb.is-error, .lora-market-thumb.is-error, .lora-detail-preview.is-error {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 5px;
+  color: var(--muted);
+  text-align: center;
+}
+.lora-preview-retry {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  max-width: 100%;
+  padding: 3px 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
+  color: var(--muted);
+  font: inherit;
+  font-size: 10px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+.lora-preview-retry:hover { border-color: var(--primary); color: var(--primary); }
+.lora-preview-retry:focus-visible { outline: var(--focus-outline); outline-offset: 2px; }
+.lora-preview-retry .ui-icon { width: 12px; height: 12px; }
+.lora-preview-error-label { white-space: nowrap; }
 .lora-library-main, .lora-result-main { min-width: 0; }
 .lora-title-line { display: flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: wrap; }
 .lora-title-line h3 {
@@ -889,8 +925,241 @@
   border-radius: var(--r-md);
   background: var(--surface);
 }
-.lora-market-card:hover { border-color: var(--border-strong); box-shadow: var(--shadow-1); }
-.lora-card-open {
+/* ================= LoRA 搜索卡片 · 从容入场（逐张缓慢浮现，气口舒展） ================= */
+.lora-market-card {
+  position: relative;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(18px) scale(.99);
+  animation: loraResultEnter 440ms cubic-bezier(.34, .95, .32, 1) both;
+  transition: transform 220ms var(--ease-out), box-shadow 220ms var(--ease-out), border-color 180ms ease, background 180ms ease;
+}
+.lora-market-card:hover {
+  border-color: color-mix(in srgb, var(--primary) 42%, var(--border));
+  background: color-mix(in srgb, var(--surface) 92%, var(--primary-soft));
+  box-shadow: 0 14px 30px -22px color-mix(in srgb, var(--primary) 68%, transparent);
+  transform: translateY(var(--card-lift));
+}
+.lora-market-card.is-opening {
+  opacity: .42;
+  transform: scale(.992);
+  transition-duration: 120ms;
+}
+@keyframes loraResultEnter {
+  from { opacity: 0; transform: translateY(18px) scale(.99); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.lora-market-thumb,
+.lora-detail-preview {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  border-radius: var(--r-md);
+  background: linear-gradient(145deg, var(--surface-2), var(--surface));
+  box-shadow: 0 10px 26px -22px rgba(0, 0, 0, .6);
+  transition: box-shadow 240ms var(--ease-out), border-color 180ms ease, transform 240ms var(--ease-out);
+}
+.lora-market-thumb::before,
+.lora-detail-preview::before {
+  content: "";
+  position: absolute;
+  inset: -30% -70%;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0;
+  background: linear-gradient(108deg, transparent 38%, color-mix(in srgb, #fff 22%, transparent) 49%, transparent 60%);
+  transform: translateX(-42%);
+  transition: opacity 160ms ease;
+}
+.lora-market-thumb::after,
+.lora-detail-preview::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  border: 1px solid color-mix(in srgb, var(--primary) 26%, var(--border));
+  border-radius: inherit;
+  opacity: .42;
+  transition: opacity 220ms ease, border-color 220ms ease;
+}
+.lora-market-thumb.is-loaded,
+.lora-detail-preview.is-loaded {
+  box-shadow: 0 14px 30px -24px color-mix(in srgb, var(--primary) 72%, transparent);
+}
+.lora-market-thumb.is-loaded::after,
+.lora-detail-preview.is-loaded::after { opacity: .78; }
+
+/* 加载时只动画占位层，不动画图片本身，避免闪烁和 transform 争抢。 */
+.lora-library-thumb.is-loading,
+.lora-market-thumb.is-loading,
+.lora-detail-preview.is-loading {
+  background: linear-gradient(110deg, var(--surface-2) 18%, color-mix(in srgb, var(--primary-soft-2) 70%, var(--surface-2)) 42%, var(--surface-2) 66%);
+  background-size: 220% 100%;
+  animation: loraPreviewLoading 1.55s ease-in-out infinite;
+}
+.lora-library-thumb.is-loading::after,
+.lora-market-thumb.is-loading::after,
+.lora-detail-preview.is-loading::after {
+  opacity: .92;
+  border-color: color-mix(in srgb, var(--aizome) 34%, var(--border));
+  background: linear-gradient(108deg, transparent 34%, color-mix(in srgb, #fff 18%, transparent) 49%, transparent 64%);
+  background-size: 220% 100%;
+  animation: loraPreviewShimmer 1.25s ease-in-out infinite;
+}
+@keyframes loraPreviewLoading {
+  0%, 100% { background-position: 100% 0; }
+  50% { background-position: 0 0; }
+}
+@keyframes loraPreviewShimmer {
+  0%, 100% { background-position: 100% 0; }
+  50% { background-position: 0 0; }
+}
+@media (hover: hover) and (pointer: fine) {
+  .lora-card-open:hover .lora-market-thumb:not(.is-loading),
+  .lora-detail-preview:not(.is-loading):not(.is-shared-pending):hover,
+  .lora-detail-preview.is-shared-complete:not(.is-loading):hover {
+    transform: translateY(-1px);
+    box-shadow: 0 16px 32px -24px color-mix(in srgb, var(--primary) 78%, transparent);
+  }
+  .lora-card-open:hover .lora-market-thumb:not(.is-loading)::before,
+  .lora-detail-preview:not(.is-loading):not(.is-shared-pending):hover::before,
+  .lora-detail-preview.is-shared-complete:not(.is-loading):hover::before {
+    opacity: .9;
+    transform: translateX(42%);
+    transition: opacity 120ms ease, transform 560ms var(--ease-out);
+  }
+}
+
+/* 图片显影只动 opacity 与 transform；旧版的 saturate/blur 滤镜过渡
+ * 会令大图逐帧重绘，是掉帧的元凶之一，已移除。 */
+.lora-market-thumb img,
+.lora-detail-preview img {
+  position: relative;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  object-position: center;
+  color: transparent;
+  opacity: 0;
+  transform: scale(1.035);
+  transform-origin: center;
+  transition: opacity 260ms var(--ease-out), transform 460ms var(--ease-out);
+}
+.lora-market-thumb.is-loaded img,
+.lora-detail-preview.is-loaded img {
+  opacity: 1;
+  transform: scale(1);
+}
+/* 飞行交接：目标图在飞行期间保持隐藏且不参与过渡；落地帧与飞行层同帧硬切显形
+ * （同源克隆、同几何 cover），杜绝双重运动与交叉淡化的糊感。 */
+.lora-detail-preview.is-shared-pending img { opacity: 0 !important; animation: none; transition: none !important; }
+.lora-detail-preview.is-shared-pending.is-shared-complete img { opacity: 1 !important; transition: none !important; }
+
+/* ================= 详情浮层编排 =================
+ * 遮罩 = 实色墨色层 + 独立恒定模糊层，各自只动 opacity。
+ * 旧版把 backdrop-filter 从 blur(0) 插值到 blur(9px)，等于每帧对整页
+ * 重新滤波，是“一卡一卡”的另一元凶；恒定半径 + 透明度过渡可完全交给合成器。 */
+.lora-detail-overlay {
+  animation: none;
+  opacity: 0;
+  background: rgba(19, 17, 20, .42);
+  backdrop-filter: none;
+  transition: opacity 320ms var(--ease-out);
+}
+.lora-detail-overlay::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  backdrop-filter: blur(9px) saturate(114%);
+  opacity: 0;
+  transition: opacity 320ms var(--ease-out);
+}
+.lora-detail-overlay.is-visible,
+.lora-detail-overlay.is-visible::before { opacity: 1; }
+/* 面板自身：opacity + transform 入场（去掉旧版整面板 blur(3px) 滤镜过渡）；
+ * 轻微 60ms 延迟让飞行图先动、纸面随后铺开，层级更从容。 */
+.lora-detail-overlay .modal {
+  position: relative;
+  z-index: 1;
+  animation: none;
+  opacity: 0;
+  transform: translateY(8px) scale(.988);
+  transition: opacity 280ms var(--ease-out) 60ms, transform 340ms var(--ease-out) 60ms;
+}
+.lora-detail-overlay.is-visible .modal { opacity: 1; transform: translateY(0) scale(1); }
+/* 共享元素飞行期间：面板 transform 必须冻结在 none——若保留入场过渡，
+ * 起飞时测得的目标矩形会比最终位置低 8px，飞行落在错位目标上，
+ * 落地交接就会被撕开一帧（“消失再浮现”）。只保留 opacity 淡入，
+ * 纸面在飞行图下方从容显形，几何纹丝不动。 */
+.lora-detail-overlay.is-shared-transfer .modal,
+.lora-detail-overlay.is-shared-transfer.is-visible .modal {
+  transform: none;
+  transition: opacity 280ms var(--ease-out) 60ms;
+}
+.lora-detail-overlay .modal-head,
+.lora-detail-overlay .lora-detail-content,
+.lora-detail-overlay .modal-foot {
+  transition: opacity 200ms var(--ease-out), transform 280ms var(--ease-out);
+}
+.lora-detail-overlay.is-shared-transfer .modal-head,
+.lora-detail-overlay.is-shared-transfer .lora-detail-content,
+.lora-detail-overlay.is-shared-transfer .modal-foot {
+  opacity: 0;
+  transform: translateY(6px);
+}
+.lora-detail-overlay.is-visible:not(.is-shared-transfer) .modal-head,
+.lora-detail-overlay.is-visible:not(.is-shared-transfer) .lora-detail-content,
+.lora-detail-overlay.is-visible:not(.is-shared-transfer) .modal-foot {
+  opacity: 1;
+  transform: translateY(0);
+}
+.lora-detail-overlay.is-visible:not(.is-shared-transfer) .lora-detail-content { transition-delay: 40ms; }
+.lora-detail-overlay.is-visible:not(.is-shared-transfer) .modal-foot { transition-delay: 80ms; }
+/* 关闭：墨色层与面板同步收拢，为返航飞行让路。 */
+.lora-detail-overlay.is-closing,
+.lora-detail-overlay.is-closing::before { opacity: 0; transition-duration: 200ms; }
+.lora-detail-overlay.is-closing .modal {
+  opacity: 0;
+  transform: translateY(4px) scale(.994);
+  transition-duration: 200ms;
+  transition-delay: 0ms;
+}
+.lora-detail-overlay.is-closing .modal-head,
+.lora-detail-overlay.is-closing .lora-detail-content,
+.lora-detail-overlay.is-closing .modal-foot {
+  opacity: 0;
+  transform: translateY(4px);
+  transition-duration: 160ms;
+  transition-delay: 0ms;
+}
+/* 飞行层：一张纸页般轻的克隆图。无描边、无逐帧阴影——深度感由遮罩渐暗、
+ * 面板静态阴影（随面板淡入）与这一抹墨晕共同承担；除圆角反补偿外全部
+ * 走 transform/opacity，合成器独占，零逐帧重绘。 */
+.lora-detail-flight {
+  display: block;
+  box-sizing: border-box;
+  isolation: isolate;
+}
+.lora-detail-flight::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  border-radius: inherit;
+  background: radial-gradient(130% 130% at 50% 40%, transparent 60%, color-mix(in srgb, var(--primary) 10%, transparent) 100%);
+  animation: loraFlightInk var(--lora-flight-dur, 520ms) var(--ease-out) both;
+}
+@keyframes loraFlightInk {
+  0% { opacity: 0; }
+  40% { opacity: .55; }
+  100% { opacity: 0; }
+}.lora-card-open {
   grid-area: open;
   display: grid;
   grid-template-columns: 96px minmax(0, 1fr);
@@ -902,8 +1171,9 @@
 }
 .lora-card-open:focus-visible { outline: var(--focus-outline); outline-offset: 4px; }
 .lora-card-open:hover .lora-title-line h3 { color: var(--primary); }
-.lora-market-thumb { width: 96px; height: 112px; overflow: hidden; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2); }
+.lora-market-thumb { width: 96px; height: auto; aspect-ratio: var(--lora-preview-ratio, 4 / 5); border: 1px solid var(--border); }
 .lora-market-thumb.is-placeholder svg { width: 28px; height: 28px; }
+.lora-market-thumb.is-error .lora-preview-retry { font-size: 10px; }
 .lora-market-card .lora-result-actions { grid-area: actions; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--sp-2); margin-left: calc(96px + var(--sp-3)); }
 .lora-market-card .lora-download-state { grid-area: state; min-width: 0; }
 .lora-market-card .notice { margin-top: 2px; }
@@ -915,16 +1185,17 @@
 .lora-detail-body { display: grid; grid-template-columns: minmax(210px, 280px) minmax(0, 1fr); align-items: start; gap: var(--sp-5); }
 .lora-detail-preview {
   width: 100%;
-  aspect-ratio: 4 / 5;
-  max-height: 420px;
+  height: auto;
+  aspect-ratio: var(--lora-preview-ratio, 4 / 5);
+  max-height: min(58vh, 420px);
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--r-md);
   background: var(--surface-2);
 }
-.lora-detail-preview img { width: 100%; height: 100%; display: block; object-fit: contain; color: transparent; }
 .lora-detail-preview.is-placeholder { display: grid; place-items: center; color: var(--faint); }
 .lora-detail-preview.is-placeholder svg { width: 40px; height: 40px; }
+.lora-detail-preview.is-error .lora-preview-retry { padding: 6px 9px; font-size: var(--fs-xs); }
 .lora-detail-content { display: flex; flex-direction: column; gap: var(--sp-4); min-width: 0; }
 .lora-detail-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-2); }
 .lora-detail-fact { display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: var(--sp-3); border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2); }
@@ -933,6 +1204,15 @@
 .lora-detail-section { display: flex; flex-direction: column; gap: var(--sp-2); min-width: 0; }
 .lora-detail-section h4 { color: var(--text-2); font-size: var(--fs-sm); font-weight: 650; }
 .lora-detail-tags { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.lora-pagination {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  padding: var(--sp-4) 0 var(--sp-2);
+}
+.lora-pagination-summary { min-width: 180px; color: var(--muted); font-size: var(--fs-xs); text-align: center; }
 .lora-results-state {
   grid-column: 1 / -1;
   min-height: 220px;
@@ -950,6 +1230,28 @@
 .lora-results-state > svg { width: 28px; height: 28px; color: var(--faint); }
 .lora-results-state b { color: var(--text-2); font-size: var(--fs-md); font-weight: 600; }
 .lora-results-state span { max-width: 460px; font-size: var(--fs-sm); line-height: 1.55; }
+
+@media (prefers-reduced-motion: reduce) {
+  .lora-market-card { opacity: 1; transform: none; filter: none; animation: none; transition-duration: 0ms; }
+  .lora-market-thumb::before, .lora-detail-preview::before { display: none; }
+  .lora-market-thumb img, .lora-detail-preview img { animation: none !important; transition-duration: 0ms; transform: none; filter: none; }
+  .lora-detail-overlay, .lora-detail-overlay::before,
+  .lora-detail-overlay.is-visible, .lora-detail-overlay.is-visible::before {
+    opacity: 1;
+    background: rgba(19, 17, 20, .42);
+    backdrop-filter: none;
+    transition-duration: 0ms;
+  }
+  .lora-detail-overlay .modal, .lora-detail-overlay.is-visible .modal { opacity: 1; transform: none; filter: none; transition-duration: 0ms; }
+  .lora-detail-overlay .modal-head, .lora-detail-overlay .lora-detail-content, .lora-detail-overlay .modal-foot,
+  .lora-detail-overlay.is-shared-transfer .modal-head, .lora-detail-overlay.is-shared-transfer .lora-detail-content, .lora-detail-overlay.is-shared-transfer .modal-foot {
+    opacity: 1;
+    transform: none;
+    transition-duration: 0ms;
+  }
+  .lora-detail-flight { display: none; }
+}
+
 .lora-progress { display: flex; flex-direction: column; gap: 6px; padding-top: var(--sp-2); }
 .lora-progress-label { color: var(--muted); font-size: var(--fs-xs); }
 .lora-progress-track { height: 4px; overflow: hidden; border-radius: var(--r-full); background: var(--surface-2); }
@@ -995,10 +1297,10 @@
   .lora-source-row { align-items: flex-start; }
   .lora-channel-status { width: 100%; margin-left: 0; }
   .lora-card-open { grid-template-columns: 76px minmax(0, 1fr); }
-  .lora-market-thumb { width: 76px; height: 94px; }
+  .lora-market-thumb { width: 76px; height: auto; aspect-ratio: var(--lora-preview-ratio, 4 / 5); }
   .lora-market-card .lora-result-actions { margin-left: 0; }
   .lora-detail-body { grid-template-columns: 1fr; }
-  .lora-detail-preview { width: min(100%, 300px); max-height: 360px; margin-inline: auto; }
+  .lora-detail-preview { width: min(100%, 300px); height: auto; max-height: 360px; margin-inline: auto; }
   .lora-title-line h3 { white-space: normal; overflow-wrap: anywhere; }
   .lora-match-layout { grid-template-columns: 1fr; }
   .lora-match-controls .textarea { min-height: 124px; }

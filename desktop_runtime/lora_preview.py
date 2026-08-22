@@ -15,7 +15,8 @@ import re
 import socket
 import struct
 from pathlib import Path
-from urllib.parse import urlparse
+from typing import Callable
+from urllib.parse import urljoin, urlparse
 
 import aiohttp
 
@@ -31,6 +32,10 @@ _REFERERS = {"civitai_red": "https://civitai.red/", "civitai.red": "https://civi
 _DEFAULT_REFERER = "https://civitai.com/"
 _ALLOWED_PREVIEW_HOSTS = ("civitai.com", "civitai.red", "civitaired.com", "huggingface.co", "hf.co")
 _ALLOWED_PREVIEW_PORTS = {80, 443}
+_PREVIEW_REDIRECT_STATUSES = {301, 302, 303, 307, 308}
+_PREVIEW_RETRY_STATUSES = {408, 425, 429, 500, 502, 503, 504}
+_PREVIEW_MAX_REDIRECTS = 3
+_PREVIEW_MAX_ATTEMPTS = 3
 _EXT_BY_MIME = {
     "image/png": ".png",
     "image/jpeg": ".jpg",
@@ -52,6 +57,9 @@ def _is_safe_preview_url(url: str) -> bool:
     except ValueError:
         return False
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return False
+    # Never forward credentials embedded in a preview URL or a redirect.
+    if parsed.username is not None or parsed.password is not None:
         return False
     host = (parsed.hostname or "").strip().lower()
     if not host:
@@ -161,12 +169,30 @@ def _magic_matches(data: bytes, mime: str) -> bool:
 class LoraPreviewService:
     """按 token 提供 Civitai 预览图，下载后做安全性校验。"""
 
-    def __init__(self, *, data_root: Path, max_bytes: int = _DEFAULT_MAX_BYTES) -> None:
+    def __init__(
+        self,
+        *,
+        data_root: Path,
+        max_bytes: int = _DEFAULT_MAX_BYTES,
+        proxy: str | Callable[[], str] = "",
+    ) -> None:
         self.data_root = Path(data_root)
         self.max_bytes = max(64 * 1024, int(max_bytes or _DEFAULT_MAX_BYTES))
         self._registry: dict[str, tuple[str, str]] = {}
         self._memory_cache: dict[str, tuple[str, bytes]] = {}
         self._lock = asyncio.Lock()
+        # 预览图属于独立 token 的网络资源：同一个 token 只允许一个下载任务，
+        # 不同 token 通过有界并发并行，避免全局锁把整页缩略图排成队列。
+        self._fetch_semaphore = asyncio.Semaphore(6)
+        self._inflight: dict[str, asyncio.Task[tuple[str, bytes] | None]] = {}
+        self._proxy = proxy
+
+    def _current_proxy(self) -> str:
+        value = self._proxy() if callable(self._proxy) else self._proxy
+        value = str(value or "").strip()
+        if value and "://" not in value:
+            value = f"http://{value}"
+        return value
 
     def register(self, token: str, url: str, source: str = "") -> str | None:
         """登记 token -> (url, source)。仅内存，进程退出即失效。
@@ -223,18 +249,39 @@ class LoraPreviewService:
             logger.info("预览 token 未登记: %s", token[:12])
             return None
         async with self._lock:
-            if token in self._memory_cache:
-                return self._memory_cache[token]
-            url, source = entry
-            disk_result = self._read_valid_disk_cache(url)
-            result = disk_result or await self._download_and_validate(url, source)
+            cached = self._memory_cache.get(token)
+            if cached is not None:
+                return cached
+            task = self._inflight.get(token)
+            if task is None:
+                task = asyncio.create_task(self._fetch_registered(token, entry))
+                self._inflight[token] = task
+        # 调用方取消时不取消共享下载任务，后续卡片仍可复用其结果。
+        return await asyncio.shield(task)
+
+    async def _fetch_registered(
+        self,
+        token: str,
+        entry: tuple[str, str],
+    ) -> tuple[str, bytes] | None:
+        try:
+            async with self._fetch_semaphore:
+                url, source = entry
+                disk_result = self._read_valid_disk_cache(url)
+                result = disk_result or await self._download_and_validate(url, source)
             if result is not None:
-                self._memory_cache[token] = result
-                if len(self._memory_cache) > _MAX_MEMORY_CACHE:
-                    oldest = next(iter(self._memory_cache), None)
-                    if oldest is not None:
-                        self._memory_cache.pop(oldest, None)
+                async with self._lock:
+                    self._memory_cache[token] = result
+                    if len(self._memory_cache) > _MAX_MEMORY_CACHE:
+                        oldest = next(iter(self._memory_cache), None)
+                        if oldest is not None and oldest != token:
+                            self._memory_cache.pop(oldest, None)
             return result
+        finally:
+            async with self._lock:
+                current = self._inflight.get(token)
+                if current is asyncio.current_task():
+                    self._inflight.pop(token, None)
 
     def _read_valid_disk_cache(self, url: str) -> tuple[str, bytes] | None:
         for mime in _EXT_BY_MIME:
@@ -287,36 +334,97 @@ class LoraPreviewService:
             host = (urlparse(url).hostname or "").strip().lower()
         except ValueError:
             return None
-        if not host or not _resolve_public(host):
+        proxy = self._current_proxy()
+        # When a proxy is configured, the proxy performs DNS resolution.  A
+        # local socket.getaddrinfo() check is both redundant and wrong behind
+        # Clash/TUN setups (it can return a blocked/empty answer even though
+        # the proxy can fetch the same public hostname).  The hostname and
+        # port allowlist above remains in force in proxy mode.
+        if not host or (not proxy and not _resolve_public(host)):
             logger.info("预览图主机解析为非公网地址，拒绝下载: %s", host)
             return None
         referer = _REFERERS.get(str(source or "").strip().lower(), _DEFAULT_REFERER)
         headers = dict(_UA)
         headers["Referer"] = referer
+        timeout = aiohttp.ClientTimeout(total=20, connect=8, sock_read=12)
         try:
-            timeout = aiohttp.ClientTimeout(total=30, connect=15)
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(url, headers=headers, allow_redirects=False) as resp:
-                    if resp.status != 200:
-                        logger.info("预览图下载非 200: %s", resp.status)
-                        return None
-                    content_type = str(resp.headers.get("Content-Type") or "").lower()
-                    if content_type and "image" not in content_type:
-                        logger.info("预览图 Content-Type 非图片: %s", content_type)
-                        return None
-                    chunks = []
-                    total = 0
-                    async for chunk in resp.content.iter_chunked(64 * 1024):
-                        total += len(chunk)
-                        if total > self.max_bytes:
-                            logger.info("预览图超过大小上限")
+                for attempt in range(1, _PREVIEW_MAX_ATTEMPTS + 1):
+                    current_url = url
+                    retry = False
+                    try:
+                        for redirect_index in range(_PREVIEW_MAX_REDIRECTS + 1):
+                            # Validate every hop.  Civitai's image host normally
+                            # returns 301 to image-b2.civitai.com; refusing that
+                            # hop was the reason the UI showed an empty card.
+                            if not _is_safe_preview_url(current_url):
+                                logger.info("预览图重定向 URL 不在白名单内，拒绝下载")
+                                return None
+                            request_kwargs = {"headers": headers, "allow_redirects": False}
+                            if proxy:
+                                request_kwargs["proxy"] = proxy
+                            async with session.get(current_url, **request_kwargs) as resp:
+                                if resp.status in _PREVIEW_REDIRECT_STATUSES:
+                                    location = str(resp.headers.get("Location") or "").strip()
+                                    if not location:
+                                        logger.info("预览图重定向缺少 Location")
+                                        return None
+                                    next_url = urljoin(current_url, location)
+                                    parsed_next = urlparse(next_url)
+                                    # Do not allow a redirect to downgrade HTTPS
+                                    # or to carry credentials, even if the host
+                                    # happens to be on the source allowlist.
+                                    if parsed_next.scheme != "https" or not _is_safe_preview_url(next_url):
+                                        logger.info("预览图重定向到了不安全地址")
+                                        return None
+                                    current_url = next_url
+                                    continue
+                                if resp.status != 200:
+                                    logger.info("预览图下载非 200: %s", resp.status)
+                                    retry = resp.status in _PREVIEW_RETRY_STATUSES
+                                    if not retry:
+                                        return None
+                                    break
+                                content_type = str(resp.headers.get("Content-Type") or "").lower()
+                                # Ignore an optional charset/parameter when
+                                # checking the image magic bytes.
+                                content_type = content_type.split(";", 1)[0].strip()
+                                if content_type and "image" not in content_type:
+                                    logger.info("预览图 Content-Type 非图片: %s", content_type)
+                                    return None
+                                chunks = []
+                                total = 0
+                                async for chunk in resp.content.iter_chunked(64 * 1024):
+                                    total += len(chunk)
+                                    if total > self.max_bytes:
+                                        logger.info("预览图超过大小上限")
+                                        return None
+                                    chunks.append(chunk)
+                                if not chunks:
+                                    logger.info("预览图响应为空")
+                                    return None
+                                data = b"".join(chunks)
+                                break
+                        else:
+                            logger.info("预览图重定向次数超过上限")
                             return None
-                        chunks.append(chunk)
-                    if not chunks:
-                        return None
-                    data = b"".join(chunks)
+                        if retry:
+                            if attempt < _PREVIEW_MAX_ATTEMPTS:
+                                await asyncio.sleep(min(0.6 * attempt, 1.5))
+                                continue
+                            return None
+                        # A successful 200 response leaves data/content_type
+                        # defined; validation below is shared by all attempts.
+                        break
+                    except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
+                        if attempt >= _PREVIEW_MAX_ATTEMPTS:
+                            logger.info("预览图下载失败（%s）: %s", type(exc).__name__, exc)
+                            return None
+                        logger.info("预览图下载抖动，重试 %s/%s（%s）", attempt + 1, _PREVIEW_MAX_ATTEMPTS, type(exc).__name__)
+                        await asyncio.sleep(min(0.6 * attempt, 1.5))
+                        continue
         except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
-            logger.info("预览图下载失败: %s", type(exc).__name__)
+            logger.info("预览图下载失败（%s）: %s", type(exc).__name__, exc)
             return None
 
         if not content_type:

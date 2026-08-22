@@ -61,6 +61,25 @@ def normalize_key(text: str) -> str:
 _SOURCE_ALIAS_CACHE = None
 _SOURCE_TERMS_CACHE = None
 _PROXY_CIRCUITS = {}
+_PROXY_CIRCUIT_FAILURE_THRESHOLD = 3
+_PROXY_CIRCUIT_FAILURE_WINDOW = 30.0
+
+
+def _normalize_proxy_url(proxy: str) -> str:
+    """Normalize the user-facing proxy setting before handing it to aiohttp.
+
+    The settings UI accepts both ``host:port`` and a fully-qualified URL.  The
+    latter is what aiohttp expects; silently turning the former into an HTTP
+    proxy avoids a confusing ``InvalidURL``/direct-connect fallback.
+    """
+    value = str(proxy or "").strip()
+    if not value:
+        return ""
+    if re.match(r"^[a-z][a-z0-9+.-]*://", value, flags=re.I):
+        return value.rstrip("/")
+    if re.match(r"^(?:[^:/\s]+|\[[0-9a-f:]+\]):\d{1,5}$", value, flags=re.I):
+        return f"http://{value}"
+    return value
 
 
 def _normalize_source_alias_map(data) -> dict:
@@ -249,7 +268,7 @@ class CivitaiClient:
         download_redirect_validator=None,
     ):
         self.api_token = str(api_token or "").strip()
-        self.proxy = str(proxy or "").strip()
+        self.proxy = _normalize_proxy_url(proxy)
         self.timeout = max(10, int(timeout or 60))
         self.cookie = str(cookie or "").strip()
         self.downloader = str(downloader or "aiohttp").strip().lower()
@@ -330,7 +349,12 @@ class CivitaiClient:
         return RuntimeError(str(exc))
 
     def _proxy_circuit_key(self) -> str:
-        return str(self.proxy or "").strip()
+        proxy = str(self.proxy or "").strip()
+        if not proxy:
+            return ""
+        # A failed Hugging Face request must never disable Civitai (or the
+        # independent civitai.red source) that happens to share the proxy.
+        return f"{self.source_key}:{proxy}"
 
     def _proxy_circuit_state(self) -> dict:
         key = self._proxy_circuit_key()
@@ -339,8 +363,10 @@ class CivitaiClient:
         state = _PROXY_CIRCUITS.get(key)
         if not isinstance(state, dict):
             return {}
-        if float(state.get("blocked_until") or 0) <= time.time():
-            _PROXY_CIRCUITS.pop(key, None)
+        blocked_until = float(state.get("blocked_until") or 0)
+        if blocked_until <= time.time():
+            if blocked_until:
+                _PROXY_CIRCUITS.pop(key, None)
             return {}
         return state
 
@@ -350,8 +376,13 @@ class CivitaiClient:
             return ""
         remain = max(1, int(float(state.get("blocked_until") or time.time()) - time.time()))
         reason = str(state.get("reason") or "").strip()
+        source_label = {
+            "civitai": "Civitai",
+            "civitai_red": "Civitai Red",
+            "huggingface": "Hugging Face",
+        }.get(self.source_key, self.source_key or "网络来源")
         return (
-            f"代理 {self.proxy} 暂不可用，已触发全局熔断，剩余约 {remain}s。"
+            f"{source_label} 代理 {self.proxy} 暂不可用，已暂时熔断，剩余约 {remain}s。"
             "请检查 Clash Allow LAN/Mixed Port、防火墙、Docker/服务器到该代理的网络；"
             f"原始错误：{reason}"
         )
@@ -368,10 +399,22 @@ class CivitaiClient:
         key = self._proxy_circuit_key()
         if not key or not self.proxy_circuit_breaker:
             return
+        now = time.time()
+        previous = _PROXY_CIRCUITS.get(key) if isinstance(_PROXY_CIRCUITS.get(key), dict) else {}
+        last_failure = float(previous.get("last_failure_at") or 0)
+        failures = int(previous.get("failures") or 0)
+        if now - last_failure > _PROXY_CIRCUIT_FAILURE_WINDOW:
+            failures = 0
+        failures += 1
+        blocked_until = 0.0
+        if failures >= _PROXY_CIRCUIT_FAILURE_THRESHOLD:
+            blocked_until = now + self.proxy_circuit_breaker_cooldown
         _PROXY_CIRCUITS[key] = {
-            "blocked_until": time.time() + self.proxy_circuit_breaker_cooldown,
+            "blocked_until": blocked_until,
+            "failures": failures,
+            "last_failure_at": now,
             "reason": str(exc),
-            "updated_at": time.time(),
+            "updated_at": now,
         }
 
     def _mark_proxy_success(self):
@@ -863,7 +906,8 @@ class CivitaiClient:
         index = str(config.get("index") or CIVITAI_SEARCH_INDEX).strip() or CIVITAI_SEARCH_INDEX
         if not host or not key:
             return []
-        fetch_limit = min(max(limit * 4, 50), 120)
+        # 桌面端每页 20 条；保留足够的网页排序窗口供后续分页使用。
+        fetch_limit = min(max(limit * 2, 50), 240)
         payload = {
             "q": query,
             "limit": fetch_limit,
@@ -894,79 +938,30 @@ class CivitaiClient:
         hits = data.get("hits", []) if isinstance(data, dict) else []
         if not isinstance(hits, list) or not hits:
             return []
-        results = await self._normalize_meili_lora_hits(hits, limit=limit, base_models=base_models)
+        results = await self._normalize_meili_lora_hits(
+            hits,
+            limit=limit,
+            base_models=base_models,
+            total_hits=data.get("estimatedTotalHits") if isinstance(data, dict) else None,
+        )
         logger.info(
             f"[ComfyUI] Civitai Meilisearch 搜索完成: query={query} "
             f"hits={len(hits)} results={len(results)} source={config.get('source') or '-'}"
         )
         return results
 
-    async def _normalize_meili_lora_hits(self, hits: list, limit: int, base_models=None) -> list:
+    async def _normalize_meili_lora_hits(self, hits: list, limit: int, base_models=None, total_hits=None) -> list:
         if not isinstance(hits, list) or not hits:
             return []
-        detail_limit = min(len(hits), max(limit, 12), 24)
-        detail_semaphore = asyncio.Semaphore(4)
-
-        # Meilisearch 命中本身已含 version/versions/images/trainedWords/metrics 等完整字段，
-        # 可以直接构造成果卡片。REST 详情补全仅是锦上添花：一旦 REST 不可用（如 503/超时）
-        # 必须立即放弃补全并退回 hit 本身，避免拖垮整个搜索预算。
-        detail_budget = 2.5  # 秒；REST 补全的总体预算
-        detail_deadline = asyncio.get_event_loop().time() + detail_budget
-
-        async def fetch_detail(hit: dict):
-            model_id = _safe_int((hit or {}).get("id") or (hit or {}).get("modelId"))
-            if not model_id:
-                return None
-            async with detail_semaphore:
-                remaining = detail_deadline - asyncio.get_event_loop().time()
-                if remaining <= 0:
-                    return None
-                try:
-                    # 为每次补全设定独立短超时，防止累积拖垮预算
-                    detail = await asyncio.wait_for(self.get_model(model_id), timeout=min(remaining, 1.8))
-                    if isinstance(detail, dict):
-                        version = hit.get("version") if isinstance(hit, dict) else {}
-                        detail["_preferred_version_id"] = (version or {}).get("id") or hit.get("modelVersionId")
-                        detail["_meili_ranking_score"] = hit.get("_rankingScore")
-                        return detail
-                except Exception as e:
-                    logger.info(f"[ComfyUI] Civitai Meilisearch 详情补全失败 model={model_id}: {e}")
-            return None
-
-        detail_tasks = [
-            asyncio.ensure_future(fetch_detail(hit))
-            for hit in hits[:detail_limit]
-            if isinstance(hit, dict)
-        ]
-        if detail_tasks:
-            try:
-                detail_items = await asyncio.wait_for(
-                    asyncio.gather(*detail_tasks, return_exceptions=True), timeout=detail_budget
-                )
-            except Exception:
-                for t in detail_tasks:
-                    t.cancel()
-                await asyncio.gather(*detail_tasks, return_exceptions=True)
-                detail_items = []
-        else:
-            detail_items = []
-        details_by_model = {}
-        for item in detail_items or []:
-            if isinstance(item, dict):
-                model_id = str(item.get("id") or item.get("modelId") or "")
-                if model_id:
-                    details_by_model[model_id] = item
-
+        # Meilisearch hits already contain the website card data. Do not issue
+        # one REST/token request per hit here: that was the source of the
+        # sluggish search and Civitai 429s. REST is a whole-search fallback only.
         results = []
         seen = set()
         for hit in hits:
             if not isinstance(hit, dict):
                 continue
-            model_id = str(hit.get("id") or hit.get("modelId") or "")
-            item = details_by_model.get(model_id) or hit
-            normalized = self._normalize_web_search_item(item, base_models=base_models)
-            if not normalized and item is not hit:
-                normalized = self._normalize_web_search_item(hit, base_models=base_models)
+            normalized = self._normalize_web_search_item(hit, base_models=base_models)
             if not normalized:
                 continue
             key = str(normalized.get("version_id") or normalized.get("model_id") or "")
@@ -975,6 +970,12 @@ class CivitaiClient:
             seen.add(key)
             if hit.get("_rankingScore") is not None:
                 normalized["_web_search_score"] = hit.get("_rankingScore")
+            normalized["_web_search"] = True
+            normalized["_web_search_rank"] = len(results)
+            try:
+                normalized["_search_total"] = max(0, int(total_hits or 0))
+            except (TypeError, ValueError):
+                normalized["_search_total"] = 0
             results.append(normalized)
             if len(results) >= limit:
                 break
@@ -1016,82 +1017,31 @@ class CivitaiClient:
         return results
 
     async def search_loras(self, query: str = "lora", limit: int = 10, base_models=None) -> list:
-        """Search Civitai LoRAs; CJK queries merge website full-text and REST results."""
-        query = str(query or "lora").strip() or "lora"
-        limit = max(1, min(int(limit or 10), 60))
-        base_models = [str(x).strip() for x in (base_models or ["Anima"]) if str(x).strip()] or ["Anima"]
-        # 中英文统一走"网页全文(Meilisearch) + REST"双通道：
-        # 中文靠 Meili 全文命中，英文名同样受益；REST 503/超时时 Meili 仍可兜底。
-        web_task = asyncio.create_task(self.search_loras_via_web(query=query, limit=limit, base_models=base_models))
-        rest_task = asyncio.create_task(self._search_loras_rest_api(query=query, limit=limit, base_models=base_models))
-        try:
-            # 优先等网页全文通道：它命中即返回，不空等 REST 的 503 重试（REST 常几十秒）。
-            web_done, _ = await asyncio.wait(
-                {web_task}, timeout=self._combined_search_timeout()
-            )
-            web_results: list = []
-            web_error: Exception | None = None
-            if web_task in web_done:
-                try:
-                    web_results = web_task.result() or []
-                except Exception as exc:
-                    web_error = exc
-            if web_results:
-                # 网页结果可用：给 REST 一个很短的红利窗口补充独有结果；
-                # 超过即取消（真实 REST 做 503 重试会很慢），避免拖慢响应。
-                rest_grace = min(2.5, max(0.5, self._combined_search_timeout() * 0.12))
-                rest_done, rest_pending = await asyncio.wait(
-                    {rest_task}, timeout=rest_grace
-                )
-                rest_items: list = []
-                if rest_task in rest_done:
-                    try:
-                        rest_items = rest_task.result() or []
-                    except Exception as exc:
-                        logger.warning("[ComfyUI] Civitai REST 通道失败: %s", exc)
-                if rest_pending:
-                    rest_task.cancel()
-                await asyncio.gather(rest_task, return_exceptions=True)
-                return self._merge_lora_search_results(web_results, rest_items, limit=limit)
+        """Search Civitai LoRAs through the public website index first.
 
-            done, pending = await asyncio.wait(
-                {rest_task}, timeout=self._combined_search_timeout()
+        The website index is the authoritative search experience (especially for
+        CJK and aliases). REST/token search is deliberately sequential fallback;
+        running both for every query caused rate limits, duplicate work and poor
+        ranking compared with Civitai's own results page.
+        """
+        query = str(query or "lora").strip() or "lora"
+        limit = max(1, min(int(limit or 10), 240))
+        base_models = [str(x).strip() for x in (base_models or ["Anima"]) if str(x).strip()] or ["Anima"]
+        try:
+            web_results = await asyncio.wait_for(
+                self.search_loras_via_web(query=query, limit=limit, base_models=base_models),
+                timeout=self._combined_search_timeout(),
             )
-            failures = []
-            if web_error is not None:
-                failures.append(f"网页广搜失败：{web_error}")
-            elif not web_done:
-                failures.append("网页广搜超时")
-            groups = {"网页广搜": web_results, "REST": []}
-            if rest_task in done:
-                try:
-                    groups["REST"] = rest_task.result() or []
-                except Exception as exc:
-                    failures.append(f"REST失败：{exc}")
-            else:
-                rest_task.cancel()
-                failures.append("REST超时")
-            await asyncio.gather(rest_task, return_exceptions=True)
-            merged = self._merge_lora_search_results(
-                groups["网页广搜"], groups["REST"], limit=limit,
-            )
-            if failures:
-                logger.warning("[ComfyUI] Civitai 双通道搜索部分失败: %s", "；".join(failures))
-            if merged:
-                return merged
-            if failures:
-                raise RuntimeError("；".join(failures))
-            return []
-        except BaseException:
-            for task in (web_task, rest_task):
-                task.cancel()
-            await asyncio.gather(web_task, rest_task, return_exceptions=True)
-            raise
+            if web_results:
+                return list(web_results)[:limit]
+        except Exception as exc:
+            logger.warning("[ComfyUI] Civitai 网页全文搜索失败，才回退 REST Token：%s", exc)
+        return await self._search_loras_rest_api(query=query, limit=limit, base_models=base_models)
 
     async def search_loras_via_web(self, query: str = "lora", limit: int = 10, base_models=None) -> list:
         """Use Civitai's public web search backend for CJK-friendly full-text results."""
         query = str(query or "lora").strip() or "lora"
-        limit = max(1, min(int(limit or 10), 60))
+        limit = max(1, min(int(limit or 10), 240))
         base_models = [str(x).strip() for x in (base_models or []) if str(x).strip()]
 
         try:
@@ -1130,6 +1080,8 @@ class CivitaiClient:
             if not key or key in seen:
                 continue
             seen.add(key)
+            normalized["_web_search"] = True
+            normalized["_web_search_rank"] = len(results)
             results.append(normalized)
             if len(results) >= limit:
                 break

@@ -68,7 +68,12 @@
   --dur-scene: 520ms;
   --ease: cubic-bezier(0.2, 0, 0, 1);
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
   --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+  --card-lift: -2px;
+  --card-motion: 220ms;
+  --card-image-scale: 1.035;
+  --card-shadow-hover: 0 14px 34px rgba(32, 36, 38, 0.12);
 
   --topbar-h: 56px;
   --rail-w: 208px;

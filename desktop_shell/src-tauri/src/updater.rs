@@ -180,9 +180,20 @@ impl UpdateManager {
     /// Execute a check previously reserved by `begin_check`.
     pub fn finish_check(&self, app: &AppHandle) -> UpdateState {
         let feed_url = self.state.lock().unwrap().feed_url.clone();
+        // 拉取清单做一次快速重试：GitHub 在代理/弱网环境常见瞬时重置，
+        // 第二次往往就通了；清单很小，重试成本可忽略。
         let result = (|| -> Result<UpdateFeed, String> {
-            let body = winhttp::https_get(&feed_url, Duration::from_secs(15), None)?;
-            parse_feed(&body)
+            let mut last = String::from("未知错误");
+            for attempt in 0..2 {
+                if attempt > 0 {
+                    std::thread::sleep(Duration::from_millis(1500));
+                }
+                match winhttp::https_get(&feed_url, Duration::from_secs(15), None) {
+                    Ok(body) => return parse_feed(&body),
+                    Err(e) => last = e,
+                }
+            }
+            Err(format!("{last}（已重试一次仍失败，若在代理环境请确认系统代理已开启）"))
         })();
 
         let mut cached_feed = self.feed.lock().unwrap();

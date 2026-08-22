@@ -171,7 +171,14 @@ class DesktopEngine:
         self._probe_task: asyncio.Task[dict[str, Any]] | None = None
         self._lora_metadata_task: asyncio.Task[None] | None = None
         self._lora_metadata_attempted: set[str] = set()
-        self.lora_preview = LoraPreviewService(data_root=self.data_root)
+        self.lora_preview = LoraPreviewService(
+            data_root=self.data_root,
+            # 缩略图和搜索/下载共用设置中的代理；用回调读取最新值，
+            # 用户修改设置后无需重启 sidecar 才能加载新图。
+            proxy=lambda: str(
+                ((self.config.snapshot().get("lora_download") or {}).get("proxy") or "")
+            ),
+        )
         self.lora_download = LoraDownloadService(
             db=database,
             config=self.config,
@@ -735,7 +742,8 @@ class DesktopEngine:
         query: str,
         *,
         family: str = "illustrious",
-        limit: int = 12,
+        limit: int = 20,
+        page: int = 1,
         sources: list[str] | None = None,
         adult_consent: bool = False,
     ) -> dict[str, Any]:
@@ -743,6 +751,7 @@ class DesktopEngine:
             query,
             family=family,
             limit=limit,
+            page=page,
             sources=sources,
             adult_consent=adult_consent,
         )

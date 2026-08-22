@@ -93,7 +93,7 @@ class LoraSearchService:
         self.profile_seed_fn = profile_seed_fn
         self.preview_service = preview_service
         self._clients: dict[str, Any] = {}
-        self._search_semaphore: asyncio.Semaphore | None = None
+        self._search_semaphores: dict[str, asyncio.Semaphore] = {}
         self._lora_source_alias_map_cache: dict | None = None
         self._source_alias_bundle_cache: dict | None = None
         self._lora_search_llm_cache: dict[str, dict] = {}
@@ -187,7 +187,8 @@ class LoraSearchService:
         query: str,
         *,
         family: str = "illustrious",
-        limit: int = 12,
+        limit: int = 20,
+        page: int = 1,
         sources: list[str] | None = None,
     ) -> dict[str, Any]:
         """执行固定查询流水线并返回公开安全的结果。"""
@@ -203,7 +204,9 @@ class LoraSearchService:
                 "errors": [],
             }
         family = self._normalize_family(family)
-        choice_limit = max(1, min(int(limit or 12), 20))
+        page = max(1, min(int(page or 1), 20))
+        choice_limit = max(1, min(int(limit or 20), 20))
+        fetch_window = min(max((page + 2) * choice_limit * 2, 100), 240)
         source_list = self._parse_lora_search_sources(
             sources if sources is not None else _DEFAULT_SOURCES
         )
@@ -292,23 +295,29 @@ class LoraSearchService:
                     return
 
         async def run_one_search(source: str, term: str, index: int, source_index: int):
-            search_semaphore = self._search_semaphore
-            if str(source or "").strip().lower() in {"civitai", "civitai_red"}:
-                if search_semaphore is None:
-                    search_semaphore = asyncio.Semaphore(4)
-                    self._search_semaphore = search_semaphore
+            source_key = str(source or "").strip().lower()
+            # Civitai Red is optional and additive. Query only the strongest
+            # two terms so an unavailable adult mirror cannot multiply
+            # timeouts across every alias and fallback search.
+            if source_key == "civitai_red" and index >= 2:
+                return source, term, index, source_index, []
 
-            # 单个来源/关键词的搜索时间预算：防止慢速网页搜索（Meilisearch 对
-            # CJK 常耗时数十秒且可能空返回）拖住整个响应，导致前端 45s 超时后
-            # 显示“没有结果”。预算较宽松，可被并行吸收；超时会被下方 except 捕获
-            # 并记入 errors，不影响已并行的英文/拉丁词搜索返回。
+            search_semaphore = None
+            if source_key in {"civitai", "civitai_red"}:
+                concurrency = 2 if source_key == "civitai_red" else 4
+                search_semaphore = self._search_semaphores.get(source_key)
+                if search_semaphore is None:
+                    search_semaphore = asyncio.Semaphore(concurrency)
+                    self._search_semaphores[source_key] = search_semaphore
+
             per_search_timeout = self._per_source_search_timeout()
+            if source_key == "civitai_red":
+                per_search_timeout = min(per_search_timeout, 4.0)
 
             async def execute_search():
-                fetch_limit = max(choice_limit * 3, 12)
                 client = self._source_client(source)
                 return source, term, index, source_index, await client.search_loras(
-                    term, limit=fetch_limit, base_models=base_models
+                    term, limit=fetch_window, base_models=base_models
                 )
 
             try:
@@ -328,7 +337,6 @@ class LoraSearchService:
                 errors.append(f"{label}/{term}: {err}")
                 logger.warning("%s 搜索失败 term=%s: %s", label, term, _bounded_text(err, 200))
                 return source, term, index, source_index, []
-
         def absorb_items(source: str, term: str, index: int, source_index: int, items: list) -> None:
             for item in items:
                 discover_terms_from_raw_item(item, term)
@@ -370,7 +378,12 @@ class LoraSearchService:
                 if cjk_title_relevance:
                     enriched['_relevance'] = max(enriched['_relevance'], cjk_title_relevance)
                     enriched['_trusted_cjk_title_match'] = True
-                if enriched['_relevance'] <= 0:
+                # Meilisearch 已经按 Civitai 网页排序完成相关度计算。网页命中
+                # 可能只出现在别名/标签/训练词中，不能再用本地 token 规则把它
+                # 丢掉；保留类型、底模、安全词和 page_url 等硬过滤即可。
+                if enriched.get("_web_search"):
+                    enriched['_relevance'] = max(enriched['_relevance'], 1)
+                elif enriched['_relevance'] <= 0:
                     if self._lora_search_term_can_keep_low_relevance(term) and key not in reserve_seen:
                         reserve_seen.add(key)
                         reserve = dict(enriched)
@@ -481,12 +494,30 @@ class LoraSearchService:
                 item['_relevance'] = 1
             item['_score'] = self._score_civitai_candidate(item, search_terms, int(item.get('_source_index') or 0))
         candidates.sort(key=lambda item: item.get('_score', 0), reverse=True)
-        items = [self._public_item(item, family) for item in candidates[:choice_limit]]
+        total_hint = max(
+            [int(item.get("_search_total") or 0) for item in candidates if item.get("_search_total")] or [0]
+        )
+        start = (page - 1) * choice_limit
+        page_candidates = candidates[start:start + choice_limit]
+        total = max(total_hint, len(candidates))
+        end = start + len(page_candidates)
+        # Filtering can reduce a visible page below 20 even while the website
+        # reports hundreds of hits. Continue while a wider raw window remains
+        # available; at the 240-hit cap, rely on known filtered candidates.
+        has_more = bool(
+            len(candidates) > end
+            or (total_hint > end and fetch_window < 240)
+        )
+        items = [self._public_item(item, family) for item in page_candidates]
         return {
             "query": query,
             "family": family,
             "sources": source_list,
             "items": items,
+            "page": page,
+            "page_size": choice_limit,
+            "total": total,
+            "has_more": bool(has_more),
             "searched_terms": search_terms[:8],
             "alias": alias or "",
             "errors": errors[:5],
@@ -1594,6 +1625,14 @@ class LoraSearchService:
         downloads = self._civitai_count(item, "download_count")
         relevance = int(item.get('_relevance') or self._civitai_candidate_relevance(item, search_terms) or 0)
         score = self._civitai_popularity_score(hearts, downloads, relevance=relevance, source_index=source_index)
+        if item.get("_web_search"):
+            # Civitai 网页索引已经完成相关度排序；热度只作为同一网页顺序
+            # 内的轻微 tie-breaker，不能把站内前排结果改排到后面。
+            try:
+                web_rank = max(0, int(item.get("_web_search_rank") or 0))
+            except (TypeError, ValueError):
+                web_rank = 0
+            score += 100000.0 - web_rank * 100.0
         name_lower = str(item.get('name') or '').lower()
         for term in search_terms or []:
             term_norm = str(term or '').strip().lower()

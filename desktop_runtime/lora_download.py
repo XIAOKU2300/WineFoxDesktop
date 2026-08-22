@@ -308,7 +308,8 @@ class LoraDownloadService:
         query: str,
         *,
         family: str = "illustrious",
-        limit: int = 12,
+        limit: int = 20,
+        page: int = 1,
         sources: list[str] | None = None,
         adult_consent: bool = False,
     ) -> dict[str, Any]:
@@ -318,7 +319,8 @@ class LoraDownloadService:
         family = str(family or "illustrious").strip().lower()
         if family not in _FAMILY_BASE_MODELS:
             raise AppError(422, "LORA_SEARCH_INVALID", f"不支持的模型族: {family}")
-        limit = max(1, min(int(limit or 12), 20))
+        limit = max(1, min(int(limit or 20), 20))
+        page = max(1, min(int(page or 1), 20))
         requested_sources = {
             str(source or "").strip().lower() for source in (sources or [])
         }
@@ -336,7 +338,14 @@ class LoraDownloadService:
                 self._search_service = service
             if service is not None:
                 try:
-                    result = await service.search(query, family=family, limit=limit, sources=sources)
+                    try:
+                        result = await service.search(query, family=family, limit=limit, page=page, sources=sources)
+                    except TypeError as exc:
+                        # 允许旧版/第三方搜索服务继续工作；只有明确是不认识
+                        # page 参数时才走兼容调用，不能吞掉服务内部 TypeError。
+                        if "unexpected keyword argument 'page'" not in str(exc):
+                            raise
+                        result = await service.search(query, family=family, limit=limit, sources=sources)
                     raw_items = result.get("items") or []
                     items = list(raw_items) if isinstance(raw_items, list) else []
                     nsfw_hidden = 0
@@ -365,6 +374,10 @@ class LoraDownloadService:
                         "query": query,
                         "family": family,
                         "items": items,
+                        "page": int(result.get("page") or page),
+                        "page_size": int(result.get("page_size") or limit),
+                        "total": max(0, int(result.get("total") or len(items))),
+                        "has_more": bool(result.get("has_more")),
                         "nsfw_hidden": nsfw_hidden,
                         "searched_terms": list(result.get("searched_terms") or [])[:8],
                         "alias": _bounded_text(result.get("alias"), 120),
@@ -379,6 +392,10 @@ class LoraDownloadService:
                 except Exception as exc:
                     logger.warning("LoraSearchService 搜索失败，回退 Civitai 直查: %s", _safe_error(exc))
         result = await self._search_fallback(query, family, limit)
+        result.setdefault("page", page)
+        result.setdefault("page_size", limit)
+        result.setdefault("total", len(result.get("items") or []))
+        result.setdefault("has_more", False)
         if not adult_consent:
             items = list(result.get("items") or [])
             result["nsfw_hidden"] = sum(
@@ -491,7 +508,15 @@ class LoraDownloadService:
             })
             if len(public) >= limit:
                 break
-        return {"query": query, "family": family, "items": public}
+        return {
+            "query": query,
+            "family": family,
+            "items": public,
+            "page": 1,
+            "page_size": limit,
+            "total": len(public),
+            "has_more": False,
+        }
 
     # -- 任务调度 -----------------------------------------------------------
 
@@ -729,7 +754,11 @@ class LoraDownloadService:
             "filename": safe_filename(summary.get("file_name")),
             "source": "Civitai",
             "headers": external_headers,
-            "proxy": str(settings.get("bridge_proxy") or "").strip(),
+            # The Bridge performs the actual external download on the ComfyUI
+            # host.  Keep a dedicated override for remote deployments, but do
+            # not silently fall back to a direct connection when the user has
+            # already configured the LoRA proxy in the desktop settings.
+            "proxy": str(settings.get("bridge_proxy") or settings.get("proxy") or "").strip(),
             "target_type": "loras",
             "target_subdir": "",
         }

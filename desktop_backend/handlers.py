@@ -182,9 +182,13 @@ async def handle_lora_search(request: web.Request) -> web.Response:
     query = str(request.query.get("q") or "").strip()
     family = str(request.query.get("family") or "illustrious").strip().lower()
     try:
-        limit = int(request.query.get("limit") or 12)
+        limit = int(request.query.get("limit") or 20)
     except ValueError as exc:
         raise ValidationError("limit 必须是整数") from exc
+    try:
+        page = int(request.query.get("page") or 1)
+    except ValueError as exc:
+        raise ValidationError("page 必须是整数") from exc
     if not query or len(query) > 120:
         raise ValidationError("LoRA 搜索词长度必须为 1-120 个字符")
     if family not in {"anima", "illustrious"}:
@@ -197,6 +201,7 @@ async def handle_lora_search(request: web.Request) -> web.Response:
         query,
         family=family,
         limit=max(1, min(limit, 20)),
+        page=max(1, min(page, 20)),
         sources=sources,
         adult_consent=adult_consent,
     ))

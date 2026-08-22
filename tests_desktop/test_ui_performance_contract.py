@@ -16,6 +16,7 @@ class UiPerformanceContractTests(unittest.TestCase):
 
         self.assertIn("function scheduleMount(entry)", source)
         self.assertIn("requestAnimationFrame(() =>", source)
+        self.assertNotIn("if (entry.hasEntered) return", source)
         self.assertIn("loadingState(`正在打开${definition.label}`)", source)
         self.assertNotIn("await switchView", source)
         self.assertNotIn("diagnostics: api.diagnostics()", source)
@@ -33,6 +34,14 @@ class UiPerformanceContractTests(unittest.TestCase):
         self.assertIn("api.saveSettings(patch, { signal })", source)
         self.assertIn("const controller = new AbortController()", source)
 
+    def test_civitai_credentials_explain_token_and_cookie_acquisition(self) -> None:
+        source = self.source("desktop_ui/js/views/settings.js")
+
+        self.assertIn("https://civitai.com/user/account", source)
+        self.assertIn("API Keys", source)
+        self.assertIn("api/download/models", source)
+        self.assertIn("Request Headers", source)
+        self.assertIn("Cookie 等同账户登录凭证", source)
     def test_diagnostics_is_single_flight_bounded_and_defers_details(self) -> None:
         source = self.source("desktop_ui/js/views/diagnostics.js")
 
@@ -88,6 +97,26 @@ class UiPerformanceContractTests(unittest.TestCase):
         source = self.source("desktop_ui/js/views/lora.js")
 
         self.assertIn("openOnlineDetail(item)", source)
+        self.assertIn("const completeSharedPreview = () =>", source)
+        # 新交接契约：is-shared-pending 故意保留，与 is-shared-complete 组合做
+        # “先显形、后移除、隔帧重叠”的同帧硬切，目标图不走自身过渡。
+        self.assertIn('detailPreview.classList.add("is-loaded", "is-shared-complete")', source)
+        self.assertIn("completeSharedPreview();", source)
+        # 共享预览用克隆图飞行（flight 不搬真图节点），杜绝 fixed↔布局层交接卡顿；
+        # 事件源传 sourceImage 用于克隆，动画完成走 onfinish 回调收尾。
+        self.assertIn("sourceImage,", source)
+        self.assertIn("cloneNode(false)", source)
+        self.assertIn("flight.append(image)", source)
+        self.assertIn('transformOrigin: "top left"', source)
+        # 8.6.11 动效契约：单段指数减速曲线（本站 --ease-out），无过冲无回弹、
+        # 无逐帧 boxShadow/filter 关键帧；开场与返航对称；旧“Q 弹三段关键帧”
+        # （overshoot/settle 双缓动叠加）已被废弃，禁止回归。
+        self.assertIn("cubic-bezier(0.16, 1, 0.3, 1)", source)
+        self.assertNotIn("const overshootX = sx * 1.03;", source)
+        self.assertNotIn("const settleX = sx * 0.985;", source)
+        self.assertIn("returnSharedPreview(", source)
+        self.assertIn("borderRadius: plan.endRadius", source)
+
         self.assertIn('dataset: { loraDetail: item.id }', source)
         self.assertIn('role: "button"', source)
         self.assertIn('tabindex: "0"', source)
@@ -96,6 +125,36 @@ class UiPerformanceContractTests(unittest.TestCase):
         self.assertIn('onerror: showPlaceholder', source)
         self.assertIn('thumb.replaceChildren(ic(placeholderIcon))', source)
         self.assertIn('alt: ""', source)
+
+    def test_global_card_motion_reuses_history_favorites_lift_language(self) -> None:
+        tokens = self.source("desktop_ui/css/tokens.css")
+        motion = self.source("desktop_ui/css/motion.css")
+
+        self.assertIn("--card-lift: -2px;", tokens)
+        self.assertIn("--card-image-scale: 1.035;", tokens)
+        self.assertIn(".lora-market-card:hover, .lora-library-row:hover, .img-cell:hover, .fav-cell:hover", motion)
+        self.assertIn("transform: translateY(var(--card-lift));", motion)
+
+    def test_lora_preview_loading_motion_has_a_defined_easing_curve(self) -> None:
+        tokens = self.source("desktop_ui/css/tokens.css")
+        pages = self.source("desktop_ui/css/pages.css")
+
+        self.assertIn("--ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);", tokens)
+        self.assertIn("animation: loraPreviewShimmer 1.25s ease-in-out infinite;", pages)
+        self.assertIn("animation: loraPreviewLoading 1.55s ease-in-out infinite;", pages)
+    def test_canvas_zoom_keeps_pointer_space_and_visible_pan_bounds(self) -> None:
+        source = self.source("desktop_ui/js/views/generate.js")
+
+        # getBoundingClientRect() already contains the current translation;
+        # subtracting tx/ty a second time makes repeated zooms fling the image
+        # outside the clipped canvas. Keep this as a regression contract.
+        self.assertIn("const clampPan = (base) =>", source)
+        self.assertIn("const px = (e.clientX - (rect.left + rect.width / 2)) / z.level;", source)
+        self.assertIn("const py = (e.clientY - (rect.top + rect.height / 2)) / z.level;", source)
+        self.assertIn("z.tx = e.clientX - base.centerX - px * next;", source)
+        self.assertIn("z.ty = e.clientY - base.centerY - py * next;", source)
+        self.assertNotIn("e.clientX - (rect.left - z.tx)", source)
+        self.assertNotIn("e.clientY - (rect.top - z.ty)", source)
 
     def test_resource_names_hide_absolute_paths(self) -> None:
         source = self.source("desktop_ui/js/utils.js")

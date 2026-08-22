@@ -57,9 +57,10 @@ def _webp_bytes(width: int, height: int) -> bytes:
 
 
 class _FakeResp:
-    def __init__(self, status: int, content_type: str, chunks: list[bytes]) -> None:
+    def __init__(self, status: int, content_type: str, chunks: list[bytes], headers: dict | None = None) -> None:
         self.status = status
         self.headers = {"Content-Type": content_type}
+        self.headers.update(headers or {})
         self._chunks = chunks
         self.content = self
 
@@ -79,6 +80,7 @@ class _FakeSession:
         self._responses = list(responses)
         self._index = 0
         self.timeout = None
+        self.proxies = []
 
     async def __aenter__(self):
         return self
@@ -86,7 +88,8 @@ class _FakeSession:
     async def __aexit__(self, *args):
         return False
 
-    def get(self, url: str, headers: dict | None = None, allow_redirects: bool = True):
+    def get(self, url: str, headers: dict | None = None, allow_redirects: bool = True, **kwargs):
+        self.proxies.append(kwargs.get("proxy"))
         resp = self._responses[min(self._index, len(self._responses) - 1)]
         self._index += 1
         return _FakeResp(*resp)
@@ -222,6 +225,31 @@ class PreviewServiceFetch(unittest.IsolatedAsyncioTestCase):
         with mock.patch("aiohttp.ClientSession", lambda timeout: _FakeSession([(404, "image/png", [b""])])):
             result = await self.service.fetch("tok")
         self.assertIsNone(result)
+
+    async def test_fetch_follows_civitai_image_redirect_through_proxy(self):
+        data = _png_bytes(64, 64)
+        fake = _FakeSession([
+            (301, "", [b""], {"Location": "https://image-b2.civitai.com/file/cache/preview.png"}),
+            (200, "image/png", [data]),
+        ])
+        service = LoraPreviewService(data_root=self.tmp, proxy="127.0.0.1:7890")
+        service.register("redirect", "https://image.civitai.com/file/preview.png", source="civitai")
+        with mock.patch("aiohttp.ClientSession", lambda timeout: fake), mock.patch(
+            "desktop_runtime.lora_preview._resolve_public", return_value=False
+        ):
+            result = await service.fetch("redirect")
+        self.assertEqual(result, ("image/png", data))
+        self.assertEqual(fake.proxies, ["http://127.0.0.1:7890", "http://127.0.0.1:7890"])
+
+    async def test_fetch_retries_transient_status(self):
+        data = _png_bytes(64, 64)
+        fake = _FakeSession([
+            (502, "text/plain", [b"bad gateway"]),
+            (200, "image/png", [data]),
+        ])
+        with mock.patch("aiohttp.ClientSession", lambda timeout: fake):
+            result = await self.service.fetch("tok")
+        self.assertEqual(result, ("image/png", data))
 
     async def test_fetch_missing_content_type_falls_back_to_magic(self):
         data = _png_bytes(16, 16)

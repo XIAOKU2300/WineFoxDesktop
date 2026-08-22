@@ -95,18 +95,31 @@ export function sanitizeResourceName(name) {
   return parts.join("/") || sanitizeName(value);
 }
 
+/** 统一日期解析：兼容任务接口的 Unix 秒（数值/纯数字字符串）、
+ * 毫秒级时间戳与历史/收藏接口的 ISO 字符串。无效值返回 null。 */
+export function parseDate(value) {
+  if (value == null || value === "") return null;
+  const text = String(value).trim();
+  // 纯数字 → 时间戳：位数超过 12 认为已是毫秒，否则按秒换算。
+  if (/^\d+(?:\.\d+)?$/.test(text)) {
+    const n = Number(text);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    return new Date(n > 1e12 ? n : n * 1000);
+  }
+  const d = new Date(text);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 export function fmtTime(iso) {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
+  const d = parseDate(iso);
+  if (!d) return "—";
   const p = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 export function fmtRelative(iso) {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
+  const d = parseDate(iso);
+  if (!d) return "—";
   const diff = Date.now() - d.getTime();
   const m = Math.floor(diff / 60000);
   if (m < 1) return "刚刚";
