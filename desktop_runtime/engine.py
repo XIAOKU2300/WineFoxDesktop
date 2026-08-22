@@ -87,7 +87,7 @@ def _detect_image_output(data: bytes) -> tuple[str, str]:
     return output
 
 _WINDOWS_PATH_RE = re.compile(
-    r"(?i)(?:\"[a-z]:[\\/][^\"\r\n]+\"|(?:[a-z]:[\\/]|\\\\)[^\s,;\"<>|?*]+)"
+    r"(?i)(?:\"[a-z]:[\\/][^\"\r\n]+\"|(?<![a-z0-9])[a-z]:[\\/][^\s,;\"<>|?*]+|\\\\[^\s,;\"<>|?*]+)"
 )
 _SECRET_VALUE_RE = re.compile(
     r"(?i)\b(authorization|api[_-]?key|token|secret|password|passwd|bearer)"
@@ -183,6 +183,9 @@ class DesktopEngine:
             proxy=lambda: net_env.effective_proxy(
                 str((self.config.snapshot().get("lora_download") or {}).get("proxy") or "")
             )[0],
+            proxy_probe=lambda: net_env.ensure_probed(
+                str((self.config.snapshot().get("lora_download") or {}).get("proxy") or "")
+            ),
         )
         self.lora_download = LoraDownloadService(
             db=database,

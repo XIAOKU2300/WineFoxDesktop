@@ -56,10 +56,13 @@ def _public_text(value: Any, limit: int = 200) -> str:
 
 def _safe_error(value: Any) -> str:
     text = str(value or "LoRA 搜索失败")
+    from .lora_download import _translate_network_error
+
+    text = _translate_network_error(text)
     text = re.sub(r"(?i)(token=)[^&\s]+", r"\1[REDACTED]", text)
     text = re.sub(r"(?i)(authorization|cookie)(\s*[:=]\s*)[^\s,;]+", r"\1\2[REDACTED]", text)
     text = re.sub(r"(?i)https?://[^\s,;]+", "[URL]", text)
-    text = re.sub(r"(?i)(?:[a-z]:[\\/]|\\\\)[^\r\n,;]+", "[LOCAL_PATH]", text)
+    text = re.sub(r"(?i)(?<![a-z0-9])[a-z]:[\\/][^\r\n,;]+|\\\\[^\r\n,;]+", "[LOCAL_PATH]", text)
     return _bounded_text(text, 600)
 
 

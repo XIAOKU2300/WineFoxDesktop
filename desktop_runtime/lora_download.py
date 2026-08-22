@@ -151,11 +151,37 @@ def _public_text(value: Any, limit: int = 200) -> str:
     return text[:limit]
 
 
+def _translate_network_error(text: str) -> str:
+    """常见 aiohttp 英文错误翻译成可操作的中文，避免原文直进界面。"""
+    text = re.sub(
+        r"Cannot connect to host\s+([^:\s]+):(\d+)[^\n]*",
+        lambda m: f"无法连接 {m.group(1)}:{m.group(2)}（目标或代理不可达，请检查代理设置）",
+        text,
+    )
+    text = re.sub(
+        r"(?i)Name or service not known",
+        "域名无法解析（请检查网络或代理）",
+        text,
+    )
+    text = re.sub(
+        r"(?i)(Connection reset by peer|connection lost)",
+        "连接被重置（网络不稳定，可重试）",
+        text,
+    )
+    text = re.sub(
+        r"(?i)ssl:\w+",
+        "",
+        text,
+    )
+    return text
+
+
 def _safe_error(value: Any) -> str:
     text = str(value or "LoRA 下载失败")
+    text = _translate_network_error(text)
     text = re.sub(r"(?i)(token=)[^&\s]+", r"\1[REDACTED]", text)
     text = re.sub(r"(?i)(authorization|cookie)(\s*[:=]\s*)[^\s,;]+", r"\1\2[REDACTED]", text)
-    text = re.sub(r"(?i)(?:[a-z]:[\\/]|\\\\)[^\r\n,;]+", "[LOCAL_PATH]", text)
+    text = re.sub(r"(?i)(?<![a-z0-9])[a-z]:[\\/][^\r\n,;]+|\\\\[^\r\n,;]+", "[LOCAL_PATH]", text)
     return _bounded_text(text, 600)
 
 
