@@ -426,6 +426,8 @@ class SetupExecutor:
             await self._run_python_runtime(job, state)
         elif plan_step.kind == "requirements":
             await self._run_requirements(job, state)
+        elif plan_step.kind == "manual_resolve":
+            await self._run_manual_resolve(job, state)
         else:  # pragma: no cover
             raise SetupError(SetupErrorCode.UNKNOWN, f"未知步骤类型: {plan_step.kind}")
 
@@ -691,6 +693,87 @@ class SetupExecutor:
         if not match:
             return None
         return f"{match.group(1)}.{match.group(2)}"
+
+    async def _run_manual_resolve(self, job: SetupJob, state: StepState) -> None:
+        """对清单里“需手动放置”的文件做 Civitai 自动解析下载（尽力而为）。
+
+        以文件名主干在 Civitai 搜索，名字能对上的首个结果视为命中；找不到
+        或下载失败不阻塞安装——保持“需手动”状态并在事件里说明原因。
+        """
+        from civitai_api import CivitaiClient
+
+        from . import net_env
+
+        pending = [mf for mf in self.manifest.manual_files if not (job.root / mf.dest).is_file()]
+        if not pending:
+            job.emit("runtime_skipped", component="manual", reason="无缺失文件")
+            return
+        state.items_total = len(pending)
+        api_token = ""
+        proxy = ""
+        try:
+            if self.secret_store is not None:
+                api_token = str(self.secret_store.get_secret("civitai_api_token") or "")
+        except Exception:
+            api_token = ""
+        try:
+            proxy, _src = net_env.effective_proxy("")
+        except Exception:
+            proxy = ""
+        client = CivitaiClient(api_token=api_token, proxy=proxy, timeout=45)
+        for mf in pending:
+            if job.cancel_requested.is_set():
+                return
+            stem = Path(mf.name).stem
+            job.emit("item_started", step=state.index, kind="manual", id=stem)
+            try:
+                results = await client.search_loras(
+                    query=stem,
+                    limit=20,
+                    base_models=["Illustrious", "Illustrious-XL", "Anima", "SDXL 1.0", "Pony", "SD 1.5"],
+                )
+            except Exception as exc:
+                job.emit("item_finished", step=state.index, kind="manual", id=stem, note=f"搜索失败: {str(exc)[:120]}")
+                continue
+            target = self._match_manual_result(stem, results)
+            if target is None:
+                job.emit("item_finished", step=state.index, kind="manual", id=stem, note="未找到名字匹配的结果")
+                continue
+            try:
+                summary = await client.resolve_model(
+                    f"https://civitai.com/models/{target['model_id']}?modelVersionId={target['version_id']}"
+                )
+                dest = safe_comfyui_path(job.root, mf.dest)
+                if job.work_dir is not None:
+                    staging = job.work_dir / "manual" / stem
+                    staging.mkdir(parents=True, exist_ok=True)
+                    tmp = staging / mf.name
+                    await client.download_file(summary["download_url"], tmp)
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    self._snapshot(job, dest)
+                    await asyncio.to_thread(shutil.move, str(tmp), str(dest))
+                    job.emit("item_finished", step=state.index, kind="manual", id=stem, note=f"已自动下载: {target.get('name', '')[:60]}")
+                    state.items_done += 1
+            except Exception as exc:
+                job.emit("item_finished", step=state.index, kind="manual", id=stem, note=f"下载失败: {str(exc)[:120]}")
+
+    @staticmethod
+    def _match_manual_result(stem: str, results) -> dict | None:
+        def key(value: str) -> str:
+            return re.sub(r"[^0-9a-zŀ-ɏ぀-ヿ㐀-鿿]+", "", str(value or "").lower())
+
+        stem_key = key(stem)
+        if not stem_key:
+            return None
+        for item in results or []:
+            if not isinstance(item, dict):
+                continue
+            name_key = key(item.get("name") or "")
+            if not name_key:
+                continue
+            if stem_key in name_key or name_key in stem_key:
+                return item
+        return None
 
     # ------------------------------------------------------------- python
 
@@ -1029,8 +1112,24 @@ class SetupExecutor:
         staging = job.work_dir / "nodes" / node.id
         staging.mkdir(parents=True, exist_ok=True)
         zip_path = staging / f"{node.repo_name}-{node.ref[:8]}.zip"
-        url = await self._resolve_url(node.archive_url)
-        await self._download_file(job, url, zip_path)
+        # GitHub 官方源优先，ghfast/gh-proxy 镜像回退（国内直连慢或超时）。
+        candidates = [node.archive_url]
+        runtime = self.manifest.runtime
+        for prefix in (runtime.github_mirror_prefixes if runtime else ()):
+            candidates.append(f"{prefix}{node.archive_url}")
+        last_error = None
+        for url in candidates:
+            resolved = await self._resolve_url(url)
+            try:
+                await self._download_file(job, resolved, zip_path)
+                last_error = None
+                break
+            except SetupError as exc:
+                last_error = exc
+                if exc.code == SetupErrorCode.CANCELLED:
+                    raise
+        if last_error is not None:
+            raise last_error
         extracted = staging / "extract"
         if extracted.exists():
             await asyncio.to_thread(shutil.rmtree, extracted)

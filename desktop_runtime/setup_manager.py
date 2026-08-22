@@ -441,6 +441,41 @@ class SetupManager:
             "note": "桌面环境直接在本机安装，无需远程部署；远程场景需手动放置以下文件",
         }
 
+    async def nodes_overview(self) -> list[dict[str, Any]]:
+        """列出 ComfyUI 根目录 custom_nodes 下全部已安装节点 + 清单缺失项。
+
+        纯本地文件系统枚举，不依赖 ComfyUI 在线——修“自定义节点页在
+        ComfyUI 离线或无缺失时查不到任何内容”的问题。
+        """
+        status = await self._scan()
+        root = status.root
+        if root is None:
+            return []
+        custom_nodes = root / "custom_nodes"
+
+        def scan_dir() -> list[dict[str, Any]]:
+            entries: list[dict[str, Any]] = []
+            if not custom_nodes.is_dir():
+                return entries
+            for child in sorted(custom_nodes.iterdir(), key=lambda p: p.name.lower()):
+                if not child.is_dir() or child.name.startswith("."):
+                    continue
+                if child.name.endswith(".disabled"):
+                    name = child.name[: -len(".disabled")]
+                    entries.append({"name": name, "installed": True, "disabled": True, "managed": name in self.manifest.nodes or child.name in [n.name for n in self.manifest.nodes.values()]})
+                    continue
+                if not (child / "__init__.py").is_file() and not any(child.glob("*.py")):
+                    continue
+                entries.append({"name": child.name, "installed": True, "disabled": False, "managed": child.name in [n.name for n in self.manifest.nodes.values()]})
+            return entries
+
+        entries = await asyncio.to_thread(scan_dir)
+        known = {entry["name"] for entry in entries}
+        for node in self.manifest.nodes.values():
+            if node.name not in known:
+                entries.append({"name": node.name, "installed": False, "disabled": False, "managed": True})
+        return entries
+
     # ------------------------------------------------------------- helpers
 
     async def _disk_usage(self, root: Path | None) -> dict[str, Any]:

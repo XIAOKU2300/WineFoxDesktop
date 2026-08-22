@@ -119,16 +119,25 @@ export class ModelsView {
 
   nodeList(d) {
     const nodes = d.nodes || d.custom_nodes || [];
-    if (!nodes.length) return this.empty("未检测到自定义节点信息", "连接 ComfyUI 后可查看节点兼容状态。");
+    if (!nodes.length) {
+      return this.empty("未检测到自定义节点", "在环境配置里选择 ComfyUI 目录后，这里会列出 custom_nodes 下的节点；也可用“从零装机”一键安装。");
+    }
     return this.resourceList(nodes, "nodes", (n) => {
       const ok = n.installed !== false;
+      const sub = [];
+      if (n.version) sub.push(n.version);
+      if (ok && n.disabled) sub.push("已被 ComfyUI 停用");
+      else if (ok && n.managed) sub.push("环境中心管理");
+      else if (ok) sub.push("已安装");
       const row = el("div", { class: "model-row" + (ok ? "" : " missing") }, [
         el("div", { class: "grow" }, [
           el("div", { class: "m-name" }, esc(n.name)),
-          el("div", { class: "m-sub" }, esc(n.version || (ok ? "已安装" : "未安装"))),
+          el("div", { class: "m-sub" }, esc(sub.join(" · ") || "已安装")),
         ]),
-        ok ? el("span", { class: "badge ok" }, "就绪") : el("span", { class: "badge warn" }, "缺失"),
-        ok ? null : el("span", { class: "m-warn" }, esc(n.install_hint || "请通过 ComfyUI Manager 安装此节点")),
+        ok
+          ? el("span", { class: "badge " + (n.disabled ? "warn" : "ok") }, n.disabled ? "停用" : "就绪")
+          : el("span", { class: "badge warn" }, "缺失"),
+        ok ? null : el("span", { class: "m-warn" }, esc(n.install_hint || "在环境配置里重试安装或通过 ComfyUI Manager 安装")),
       ]);
       return row;
     });

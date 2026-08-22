@@ -40,7 +40,24 @@ function withDeadline(run, ms, message) {
   });
 }
 
-const PROFILE_LABELS = { lite: "精简", full: "进阶", complete: "完整" };
+const PROFILE_LABELS = { lite: "精简", full: "进阶", complete: "完整", bootstrap: "从零装机" };
+/* 计划步骤标签里的组名映射为中文；文件名/仓库名是内容标识，保留原文。 */
+const GROUP_LABELS = {
+  minimal: "精简节点",
+  core: "核心模型",
+  hq: "高清放大节点",
+  anima: "Anima 模型",
+  wan: "视频模型（Wan）",
+  wan_clip_vision: "视频视觉编码器",
+  wan_quality: "高质量视频模型",
+};
+const localizeStepLabel = (label) => {
+  let out = String(label || "");
+  for (const [key, value] of Object.entries(GROUP_LABELS)) {
+    out = out.replaceAll(key, value);
+  }
+  return out;
+};
 const STEP_LABELS = {
   nodes: "自定义节点",
   models: "模型下载",
@@ -49,6 +66,7 @@ const STEP_LABELS = {
   comfyui: "ComfyUI 本体",
   python_runtime: "Python 运行时",
   requirements: "PyTorch 与依赖",
+  manual_resolve: "自动补齐缺失文件",
 };
 
 const ACTIVE_STATUSES = new Set(["pending", "running", "rolling_back"]);
@@ -166,8 +184,13 @@ export class EnvSetupView {
 
   async load() {
     const token = ++this.loadToken;
-    this.loading = true;
-    this.loadError = null;
+    // 已有数据时静默刷新：保留 header 与状态卡骨架（重新扫描不再让
+    // “更换目录”按钮闪烁消失），只在首次进入时显示整页 loading。
+    const silent = this.loaded;
+    if (!silent) {
+      this.loading = true;
+      this.loadError = null;
+    }
     try {
       const [summary, capabilities, jobs, pref] = await Promise.all([
         api.setupSummary(),
@@ -183,8 +206,14 @@ export class EnvSetupView {
       this.loading = false;
       // 恢复：若存在未结束的任务，自动接管其进度
       const running = (jobs.items || []).find((job) => ACTIVE_STATUSES.has(job.status));
-      if (running) this.openJob(running.id, running);
-      else this.render();
+      if (running) { this.openJob(running.id, running); return; }
+      if (silent) {
+        const body = $("#setup-body", this.root);
+        if (body) body.replaceChildren(...this.renderBodySections());
+        else this.render();
+      } else {
+        this.render();
+      }
     } catch (error) {
       if (token !== this.loadToken || this._disposed) return;
       this.loading = false;
@@ -212,8 +241,6 @@ export class EnvSetupView {
         el("div", { class: "lead" }, "扫描 ComfyUI 环境，按档案安装自定义节点、模型与 LoraBridge，全程可取消、重试与回滚。"),
       ]),
       el("div", { class: "row gap-2" }, [
-        el("button", { class: "btn btn-primary btn-sm", type: "button", id: "setup-bootstrap" }, [ic("play"), esc("从零装机")]),
-        el("button", { class: "btn btn-sm", type: "button", dataset: { pickRoot: "1" } }, esc("选择目录")),
         el("button", { class: "btn btn-sm", id: "setup-rescan", type: "button" }, [ic("refresh"), esc("重新扫描")]),
       ]),
     ]);
@@ -261,6 +288,7 @@ export class EnvSetupView {
         ? el("div", { class: "setup-card-line" }, [
             el("span", { class: "setup-card-name", title: rootInfo.display }, esc(rootInfo.name)),
             el("span", { class: "badge " + stateMeta.cls }, esc(stateMeta.label)),
+            el("button", { class: "btn btn-sm", type: "button", dataset: { pickRoot: "1" }, title: "切换到其他 ComfyUI 目录" }, esc("更换")),
           ])
         : el("div", { class: "setup-card-line" }, [
             el("span", { class: "setup-card-value muted" }, "未找到"),
@@ -435,7 +463,6 @@ export class EnvSetupView {
         dataset: { profile: id },
       }, [
         el("span", { class: "setup-profile-name" }, esc(PROFILE_LABELS[id] || id)),
-        el("span", { class: "setup-profile-id" }, esc(id)),
       ]);
       chip.addEventListener("click", () => void this.chooseProfile(id));
       return chip;
@@ -466,6 +493,7 @@ export class EnvSetupView {
           el("h3", {}, "安装计划"),
           el("div", { class: "hint" }, "按档案安装缺失的节点与模型；已就绪的项目会自动跳过。"),
         ]),
+        el("button", { class: "btn btn-sm", type: "button", id: "setup-bootstrap" }, [ic("play"), esc("从零装机")]),
       ]),
       el("div", { class: "sec-body" }, [
         el("div", { class: "setup-profile-row", role: "radiogroup", "aria-label": "安装档案" }, chips),
@@ -500,7 +528,7 @@ export class EnvSetupView {
     return el("ol", { class: "setup-steps is-plan" }, steps.map((step) => el("li", { class: "setup-step" }, [
       el("span", { class: "setup-step-pill" }, esc(STEP_LABELS[step.kind] || step.kind)),
       el("div", { class: "grow" }, [
-        el("div", { class: "setup-step-label" }, esc(step.label)),
+        el("div", { class: "setup-step-label" }, esc(localizeStepLabel(step.label)),
         el("div", { class: "setup-step-sub" }, esc(this.stepItemNames(step))),
       ]),
     ])));
@@ -564,7 +592,8 @@ export class EnvSetupView {
   }
 
   jobStatusText(job) {
-    if (this.currentItem?.type === "model" && this.currentItem.size != null) {
+    // 所有在下载的组件（模型/节点/本体/Python 包）统一显示进度。
+    if (this.currentItem?.size != null && this.currentItem.size > 0) {
       const item = this.currentItem;
       const parts = [`已下载 ${fmtBytes(item.done ?? item.size)}`];
       if (item.total) parts.push(`共 ${fmtBytes(item.total)}`);
@@ -581,7 +610,7 @@ export class EnvSetupView {
     if (job.status === "failed") return job.error_message || "某一步骤失败";
     if (job.status === "running") {
       const running = job.steps.find((s) => s.status === "running");
-      return running ? `正在执行：${running.label}` : "准备就绪";
+      return running ? `正在执行：${localizeStepLabel(running.label)}` : "准备就绪";
     }
     return "";
   }
@@ -609,7 +638,7 @@ export class EnvSetupView {
   renderJobStep(step) {
     const running = step.status === "running";
     const sub = [];
-    if (running && step.kind === "models") {
+    if (running && ["models", "nodes", "comfyui", "python_runtime"].includes(step.kind)) {
       const item = this.currentItem;
       if (item && item.percent != null && item.total) {
         sub.push(el("div", { class: "setup-progress" }, [
@@ -636,7 +665,7 @@ export class EnvSetupView {
     return el("li", { class: "setup-step is-" + (step.status || "pending") }, [
       el("span", { class: "setup-step-pill is-" + (step.status || "pending") }, esc(this.stepStatusText(step))),
       el("div", { class: "grow" }, [
-        el("div", { class: "setup-step-label" }, esc(step.label)),
+        el("div", { class: "setup-step-label" }, esc(localizeStepLabel(step.label))),
         ...sub,
       ]),
     ]);

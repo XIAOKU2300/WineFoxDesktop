@@ -139,6 +139,7 @@ class RuntimePythonEmbed:
 class RuntimeSpec:
     python_embed: RuntimePythonEmbed | None
     comfyui_sources: tuple[ModelSource, ...]
+    github_mirror_prefixes: tuple[str, ...]
     pip_index_urls: tuple[str, ...]
     torch_packages: tuple[str, ...]
     torch_index_by_cuda: dict[str, str]
@@ -297,7 +298,7 @@ def _parse_tiers(raw: dict, model_groups: set[str], node_groups: set[str]) -> di
                 _require("group" not in item, f"tier {name!r}: bridge step must not carry a group")
                 steps.append(TierStep(step="bridge"))
                 continue
-            if step in {"comfyui", "python_runtime", "requirements"}:
+            if step in {"comfyui", "python_runtime", "requirements", "manual_resolve"}:
                 _require("group" not in item, f"tier {name!r}: {step} step must not carry a group")
                 steps.append(TierStep(step=step))
                 continue
@@ -360,6 +361,11 @@ def validate_manifest(data: dict[str, Any]) -> None:
                 s["host"] in allowed_hosts,
                 f"runtime.comfyui host {s['host']!r} not in bridge allowed_hosts",
             )
+        for prefix in runtime_raw.get("github_mirror_prefixes", []):
+            _require(
+                str(prefix).startswith("https://"),
+                f"github mirror prefix must be https: {prefix!r}",
+            )
         get_pip = str(runtime_raw.get("python_embed", {}).get("get_pip_url", ""))
         if get_pip:
             host = urlsplit(get_pip).hostname or ""
@@ -413,6 +419,9 @@ def parse_manifest(data: dict[str, Any]) -> SetupManifest:
         torch_raw = runtime_raw.get("torch") or {}
         runtime = RuntimeSpec(
             python_embed=python_embed,
+            github_mirror_prefixes=tuple(
+                str(u) for u in runtime_raw.get("github_mirror_prefixes", [])
+            ),
             comfyui_sources=tuple(
                 ModelSource(host=str(s["host"]), url=str(s["url"]))
                 for s in (runtime_raw.get("comfyui") or {}).get("sources", [])
