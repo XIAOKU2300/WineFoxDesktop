@@ -131,6 +131,9 @@ export const api = {
   setupReprobe: (options = {}) => request("/setup/reprobe", { ...options, method: "POST" }),
   setupRemoteKit: (options = {}) => request("/setup/remote-kit", options),
   setupJobEventsUrl: (id) => `/api/v1/setup/jobs/${encodeURIComponent(id)}/events`,
+  setupMirrorProbe: (options = {}) => request("/setup/mirrors/probe", { ...options, method: "POST", body: JSON.stringify({}) }),
+  setupMirrorPreference: (options = {}) => request("/setup/mirrors/preference", options),
+  setupSetMirrorPreference: (host, options = {}) => request("/setup/mirrors/preference", { ...options, method: "PUT", body: JSON.stringify({ preferred_host: host || "" }) }),
   uploads: async (formData) => {
     const result = await request("/uploads", { method: "POST", body: formData });
     return {

@@ -11,10 +11,13 @@ loop never blocks.
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 import time
 from pathlib import Path
 from typing import Any
+
+import aiohttp
 
 from .setup_errors import SetupError, SetupErrorCode
 from .setup_executor import JOB_CANCELLED, JOB_FAILED, SetupExecutor, SetupJob
@@ -26,6 +29,9 @@ _GB = 1024 ** 3
 _SCAN_TTL = 5.0
 _TERMINAL_STATUSES = ("success", "failed", "cancelled", "rolled_back", "rolling_back")
 _NODE_ZIP_ESTIMATE = 5 * 1024 * 1024
+#: 镜像测速参数：取样 512 KB、8 秒超时，兼顾准确性与等待时间。
+_MIRROR_SAMPLE_BYTES = 512 * 1024
+_MIRROR_PROBE_TIMEOUT = 8.0
 
 
 class SetupManager:
@@ -65,6 +71,127 @@ class SetupManager:
         self._job_lock = asyncio.Lock()
         self._scan_cache: EnvironmentStatus | None = None
         self._scan_cache_at = 0.0
+        self._prefs_path = (self.work_dir.parent / "setup_prefs.json") if self.work_dir else None
+        self._preferred_host = self._load_preferred_host()
+        self._sync_executor_preferred()
+
+    def _load_preferred_host(self) -> str:
+        if self._prefs_path is None or not self._prefs_path.is_file():
+            return ""
+        try:
+            data = json.loads(self._prefs_path.read_text(encoding="utf-8"))
+            host = str((data or {}).get("preferred_host") or "").strip().lower()
+            return host if host in self.manifest.bridge.allowed_hosts else ""
+        except (OSError, ValueError):
+            return ""
+
+    def _save_preferred_host(self, host: str) -> None:
+        if self._prefs_path is None:
+            return
+        try:
+            self._prefs_path.parent.mkdir(parents=True, exist_ok=True)
+            self._prefs_path.write_text(
+                json.dumps({"preferred_host": host}, ensure_ascii=False), encoding="utf-8"
+            )
+        except OSError:
+            pass
+
+    @property
+    def preferred_host(self) -> str:
+        return self._preferred_host
+
+    def set_preferred_host(self, host: str) -> str:
+        host = str(host or "").strip().lower()
+        if host and host not in self.manifest.bridge.allowed_hosts:
+            raise SetupError(SetupErrorCode.SOURCE_UNTRUSTED, f"未知镜像主机: {host}")
+        self._preferred_host = host
+        self._save_preferred_host(host)
+        self._sync_executor_preferred()
+        return host
+
+    def _sync_executor_preferred(self) -> None:
+        hosts = [self._preferred_host] if self._preferred_host else []
+        self._executor.preferred_hosts = hosts
+
+    # ------------------------------------------------------------- mirror probe
+
+    async def probe_mirrors(self) -> dict[str, Any]:
+        """对清单里出现过的下载主机做实测速（取样下载 512KB）。"""
+        sample_urls: dict[str, str] = {}
+        for model in self.manifest.models.values():
+            for source in model.sources:
+                if source.host not in sample_urls:
+                    sample_urls[source.host] = source.url
+        if not sample_urls:
+            return {"items": [], "preferred_host": self._preferred_host}
+
+        async def probe(host: str, url: str) -> dict[str, Any]:
+            started = time.monotonic()
+            try:
+                return await _probe_once(host, url)
+            except Exception as exc:  # noqa: BLE001 - 单个镜像探测失败不影响其余
+                return {"host": host, "ok": False, "error": str(exc)[:120]}
+
+        async def _probe_once(host: str, url: str) -> dict[str, Any]:
+            started = time.monotonic()
+            try:
+                timeout = aiohttp.ClientTimeout(total=_MIRROR_PROBE_TIMEOUT, connect=4)
+                # 注意不能 async with 共享会话：那会在块结束时关闭执行器会话。
+                session = self._executor._session_for()
+                if True:
+                    async with session.get(
+                        url,
+                        headers={"Range": f"bytes=0-{_MIRROR_SAMPLE_BYTES - 1}"},
+                        allow_redirects=True,
+                        ssl=True,
+                        timeout=timeout,
+                    ) as resp:
+                        if resp.status >= 400:
+                            return {"host": host, "ok": False, "error": f"HTTP {resp.status}"}
+                        first_byte = time.monotonic()
+                        received = 0
+                        async for chunk in resp.content.iter_chunked(64 * 1024):
+                            received += len(chunk)
+                            if received >= _MIRROR_SAMPLE_BYTES:
+                                break
+                        elapsed = time.monotonic() - started
+                        transfer = max(time.monotonic() - first_byte, 1e-3)
+                        return {
+                            "host": host,
+                            "ok": received > 0,
+                            "latency_ms": round((first_byte - started) * 1000, 1),
+                            "sample_bytes": received,
+                            "speed_bps": round(received / transfer, 1),
+                            "elapsed_ms": round(elapsed * 1000, 1),
+                        }
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                raise
+
+        items = await asyncio.gather(
+            *(probe(h, u) for h, u in sample_urls.items()), return_exceptions=True
+        )
+        normalized: list[dict[str, Any]] = []
+        for host, item in zip(sample_urls.keys(), items):
+            if isinstance(item, dict):
+                normalized.append(item)
+            else:
+                normalized.append({"host": host, "ok": False, "error": "探测失败"})
+        ranked = sorted(
+            [item for item in normalized if item.get("ok")],
+            key=lambda item: item.get("speed_bps") or 0,
+            reverse=True,
+        )
+        return {
+            "items": normalized,
+            "preferred_host": self._preferred_host,
+            "fastest_host": ranked[0]["host"] if ranked else "",
+            "recommended": bool(ranked and not self._preferred_host),
+        }
+
+    def _executor_session(self):
+        return self._executor._session_for()
 
     async def close(self) -> None:
         # 真正的会话由 executor 懒创建持有；manager 自持的 _session 仅为注入透传

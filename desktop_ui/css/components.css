@@ -404,6 +404,15 @@ kbd {
 .setup-manual-row .m-name { font-size: var(--fs-md); font-weight: 550; }
 .setup-manual-row .m-sub { font-size: var(--fs-xs); color: var(--muted); overflow-wrap: anywhere; }
 
+.setup-mirror-row { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2) 0; border-bottom: 1px solid var(--hairline); }
+.setup-mirror-row:last-of-type { border-bottom: 0; }
+.setup-mirror-row .m-name { font-size: var(--fs-md); min-width: 180px; overflow-wrap: anywhere; }
+.setup-mirror-row .setup-card-value { font-size: var(--fs-md); font-weight: 600; }
+.setup-mirror-row .setup-card-sub { font-size: var(--fs-xs); color: var(--muted); }
+.setup-progress { display: flex; align-items: center; gap: var(--sp-2); margin-top: 6px; }
+.setup-progress .progress { flex: 1; min-width: 120px; }
+.setup-progress-meta { font-size: var(--fs-xs); color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+
 .setup-profile-row { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
 .setup-profile-chip { display: inline-flex; align-items: baseline; gap: 6px; padding: 6px 14px; border-radius: var(--r-full); border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--text-2); font: inherit; cursor: pointer; transition: all var(--dur-fast) var(--ease); }
 .setup-profile-chip:hover { border-color: var(--primary); color: var(--text); }

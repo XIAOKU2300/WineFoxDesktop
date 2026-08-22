@@ -6,8 +6,39 @@
  *   - 事件流：SSE 优先，连接失败或流中断时退化 1s 轮询 + 指数退避；
  *   - 绝不展示绝对路径 / token（后端已脱敏，这里只信任 display/basename 字段）。
  */
-import { el, $, ic, esc, loadingState, toast, fmtBytes } from "./utils.js";
+import { el, $, ic, esc, loadingState, toast, fmtBytes, fmtSpeed } from "./utils.js";
 import { api } from "./api.js";
+
+function fmtEta(seconds) {
+  if (seconds == null || !isFinite(seconds) || seconds <= 0) return "";
+  const s = Math.round(seconds);
+  if (s < 60) return `${s} 秒`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} 分 ${s % 60} 秒`;
+  return `${Math.floor(m / 60)} 时 ${m % 60} 分`;
+}
+
+function withDeadline(run, ms, message) {
+  const controller = new AbortController();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error(message));
+    }, ms);
+    let promise;
+    try {
+      promise = Promise.resolve(run(controller.signal));
+    } catch (error) {
+      clearTimeout(timer);
+      reject(error);
+      return;
+    }
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
 
 const PROFILE_LABELS = { lite: "精简", full: "进阶", complete: "完整" };
 const STEP_LABELS = {
@@ -81,6 +112,9 @@ export class EnvSetupView {
     this.lastStatusText = "";
     this._disposed = false;
     this.loadToken = 0;
+    this.mirrorProbing = false;
+    this.mirrorResults = null;
+    this.preferredHost = "";
   }
 
   // ------------------------------------------------------------- 生命周期
@@ -93,7 +127,11 @@ export class EnvSetupView {
       this._attachedListener = (event) => {
         if (event.target.closest("[data-pick-root]")) { void this.pickRoot(); return; }
         if (event.target.closest("#setup-rescan")) { void this.rescan(); return; }
-        if (event.target.closest("#setup-repair")) { void this.repair(); }
+        if (event.target.closest("#setup-repair")) { void this.repair(); return; }
+        const preferBtn = event.target.closest("[data-mirror-prefer]");
+        if (preferBtn) { void this.preferMirror(preferBtn.dataset.mirrorPrefer); return; }
+        if (event.target.closest("#setup-mirror-probe")) { void this.probeMirrors(); return; }
+        if (event.target.closest("#setup-mirror-auto")) { void this.preferMirror(""); }
       };
       container.addEventListener("click", this._attachedListener);
     }
@@ -125,14 +163,16 @@ export class EnvSetupView {
     this.loading = true;
     this.loadError = null;
     try {
-      const [summary, capabilities, jobs] = await Promise.all([
+      const [summary, capabilities, jobs, pref] = await Promise.all([
         api.setupSummary(),
         api.setupCapabilities(),
         api.setupListJobs(),
+        api.setupMirrorPreference().catch(() => ({ preferred_host: "" })),
       ]);
       if (token !== this.loadToken || this._disposed) return;
       this.summary = summary;
       this.capabilities = capabilities;
+      this.preferredHost = pref?.preferred_host || "";
       this.loaded = true;
       this.loading = false;
       // 恢复：若存在未结束的任务，自动接管其进度
@@ -186,7 +226,7 @@ export class EnvSetupView {
     if (this.activeJobId) {
       return [this.renderJobPanel(), this.renderStatus()];
     }
-    return [this.renderStatus(), this.renderManual(), this.renderPlan()];
+    return [this.renderStatus(), this.renderMirrorCard(), this.renderManual(), this.renderPlan()].filter(Boolean);
   }
 
   // ------------------------------------------------------------- 状态卡片
@@ -241,7 +281,12 @@ export class EnvSetupView {
         el("span", { class: "setup-card-value" + (python.found ? "" : " muted") }, python.found ? esc(python.executable || "已找到") : "未找到"),
         python.found ? "ok" : "warn"),
       this.card("磁盘", disk.available
-        ? el("span", { class: "setup-card-value" }, esc(`${disk.free_gb ?? "—"} GB 可用`))
+        ? el("div", { class: "setup-card-line" }, [
+            el("span", { class: "setup-card-value" }, esc(`${disk.free_gb ?? "—"} GB 可用`)),
+            disk.total_bytes
+              ? el("span", { class: "badge neutral" }, esc(`共 ${Math.round(disk.total_bytes / (1024 ** 3))} GB`))
+              : null,
+          ])
         : el("span", { class: "setup-card-value muted" }, "不可用")),
     ]);
 
@@ -263,6 +308,91 @@ export class EnvSetupView {
     ]);
   }
 
+  // ------------------------------------------------------------- 镜像
+
+  renderMirrorCard() {
+    const hosts = this.mirrorHosts();
+    if (!hosts.length) return null;
+    const probing = this.mirrorProbing;
+    const results = this.mirrorResults;
+    const fastest = results?.fastest_host || "";
+    const rows = hosts.map((host) => {
+      const r = (results?.items || []).find((item) => item.host === host);
+      const isPreferred = this.preferredHost === host;
+      const isFastest = fastest === host && !isPreferred;
+      const badges = [];
+      if (isPreferred) badges.push(el("span", { class: "badge ok" }, "已优选"));
+      else if (isFastest) badges.push(el("span", { class: "badge primary" }, "最快"));
+      let metric = el("span", { class: "setup-card-value muted" }, probing ? "测速中…" : "未测速");
+      if (r) {
+        metric = r.ok
+          ? el("span", { class: "setup-card-value" }, [
+              esc(fmtSpeed(r.speed_bps)),
+              el("span", { class: "setup-card-sub" }, esc(` · 首字节 ${Math.round(r.latency_ms)}ms`)),
+            ])
+          : el("span", { class: "setup-card-value", style: "color:var(--danger)" }, esc(`不可用 ${r.error || ""}`.trim()));
+      }
+      const setBtn = el("button", {
+        class: "btn btn-sm", type: "button", dataset: { mirrorPrefer: host },
+        disabled: isPreferred || probing,
+      }, esc("设为优选"));
+      return el("div", { class: "setup-mirror-row" }, [
+        el("span", { class: "m-name mono" }, esc(host)),
+        metric,
+        el("div", { class: "row gap-2" }, [...badges, setBtn]),
+      ]);
+    });
+    const actions = el("div", { class: "row wrap gap-2" }, [
+      el("button", { class: "btn btn-sm", id: "setup-mirror-probe", type: "button", disabled: probing },
+        [ic("refresh"), esc(probing ? "测速中…" : "镜像测速")]),
+      this.preferredHost
+        ? el("button", { class: "btn btn-sm", id: "setup-mirror-auto", type: "button", disabled: probing }, esc("恢复自动"))
+        : null,
+      el("span", { class: "hint" }, "下载会优先使用优选镜像；多连接加速对大模型自动生效。"),
+    ]);
+    return el("section", { id: "setup-mirrors", class: "section-card" }, [
+      el("div", { class: "sec-head" }, [
+        el("div", {}, [
+          el("h3", {}, "下载镜像"),
+          el("div", { class: "hint" }, "官方源与镜像源实测对比；选择更快的源可显著缩短模型下载时间。"),
+        ]),
+      ]),
+      el("div", { class: "sec-body stack-2" }, [...rows, actions]),
+    ]);
+  }
+
+  mirrorHosts() {
+    const hosts = this.capabilities?.source_hosts || [];
+    return hosts.slice(0, 6);
+  }
+
+  async probeMirrors() {
+    if (this.mirrorProbing) return;
+    this.mirrorProbing = true;
+    this.mirrorResults = null;
+    this.render();
+    try {
+      const results = await withDeadline((signal) => api.setupMirrorProbe({ signal }), 30000, "镜像测速超时");
+      this.mirrorResults = results;
+    } catch (error) {
+      toast("镜像测速失败：" + error.message, "err");
+    } finally {
+      this.mirrorProbing = false;
+      this.render();
+    }
+  }
+
+  async preferMirror(host) {
+    try {
+      const result = await api.setupSetMirrorPreference(host || "");
+      this.preferredHost = result?.preferred_host || "";
+      toast(host ? `已优选 ${host}` : "已恢复自动顺序", "ok");
+      this.render();
+    } catch (error) {
+      toast("设置优选失败：" + error.message, "err");
+    }
+  }
+
   // ------------------------------------------------------------- 手动文件
 
   renderManual() {
@@ -273,7 +403,7 @@ export class EnvSetupView {
     return el("section", { id: "setup-manual", class: "section-card" }, [
       el("div", { class: "sec-head" }, [
         el("div", {}, [
-          el("h3", "需手动放置的文件"),
+          el("h3", {}, "需手动放置的文件"),
           el("div", { class: "hint" }, "以下文件无法自动下载，请放入对应目录后重新扫描。"),
         ]),
       ]),
@@ -313,18 +443,20 @@ export class EnvSetupView {
       planArea = el("div", { class: "setup-plan-area hint" }, "选择一个档案以生成安装计划。");
     }
 
+    const insufficient = this.planDiskInsufficient(plan);
     const startBtn = el("button", {
       class: "btn btn-primary setup-start",
       type: "button",
       id: "setup-start",
-      disabled: !plan || this.starting,
+      disabled: !plan || this.starting || insufficient,
+      title: insufficient ? "磁盘空间不足：请更换目录或清理磁盘" : "",
     }, [ic("play"), esc(this.starting ? "正在启动…" : "开始安装")]);
     if (plan && !this.starting) startBtn.addEventListener("click", () => void this.startInstall());
 
     return el("section", { id: "setup-plan", class: "section-card" }, [
       el("div", { class: "sec-head" }, [
         el("div", {}, [
-          el("h3", "安装计划"),
+          el("h3", {}, "安装计划"),
           el("div", { class: "hint" }, "按档案安装缺失的节点与模型；已就绪的项目会自动跳过。"),
         ]),
       ]),
@@ -339,10 +471,20 @@ export class EnvSetupView {
 
   renderPlanMeta(plan) {
     const parts = [];
-    if (plan.estimated_bytes > 0) parts.push(el("span", { class: "badge neutral" }, esc(`约需 ${fmtBytes(plan.estimated_bytes)}`)));
+    const disk = this.summary?.disk || {};
+    const free = disk.free_bytes || 0;
+    if (plan.estimated_bytes > 0) parts.push(el("span", { class: "badge neutral" }, esc(`约需下载 ${fmtBytes(plan.estimated_bytes)}`)));
+    if (disk.available) parts.push(el("span", { class: "badge neutral" }, esc(`磁盘剩余 ${fmtBytes(free)}`)));
+    const insufficient = disk.available && plan.estimated_bytes > free;
+    if (insufficient) parts.push(el("span", { class: "badge warn" }, "磁盘空间不足"));
     if (plan.manual_required) parts.push(el("span", { class: "badge warn" }, "需手动放置文件"));
     if (plan.steps?.length) parts.push(el("span", { class: "badge neutral" }, esc(`${plan.steps.length} 个步骤`)));
     return el("div", { class: "row wrap gap-2" }, parts);
+  }
+
+  planDiskInsufficient(plan) {
+    const disk = this.summary?.disk || {};
+    return !!(disk.available && plan?.estimated_bytes > (disk.free_bytes || 0));
   }
 
   renderPlanSteps(plan) {
@@ -415,8 +557,15 @@ export class EnvSetupView {
   }
 
   jobStatusText(job) {
-    if (this.currentItem?.type === "model" && this.currentItem.size) {
-      return `正在下载 · 已下载 ${fmtBytes(this.currentItem.size)}`;
+    if (this.currentItem?.type === "model" && this.currentItem.size != null) {
+      const item = this.currentItem;
+      const parts = [`已下载 ${fmtBytes(item.done ?? item.size)}`];
+      if (item.total) parts.push(`共 ${fmtBytes(item.total)}`);
+      if (item.percent != null) parts.unshift(`${item.percent.toFixed(1)}%`);
+      if (item.speed_bps) parts.push(`${fmtSpeed(item.speed_bps)}`);
+      const eta = fmtEta(item.eta_s);
+      if (eta) parts.push(`剩余 ${eta}`);
+      return `正在下载 · ${parts.join(" · ")}`;
     }
     if (this.currentItem) return "正在安装组件";
     if (this.currentPip) return `正在安装依赖 ${this.currentPip}`;
@@ -453,10 +602,22 @@ export class EnvSetupView {
     const running = step.status === "running";
     const sub = [];
     if (running && step.kind === "models") {
-      sub.push(loadingState(
-        this.currentItem ? `正在下载 ${this.currentItem.id}${this.currentItem.size ? ` · ${fmtBytes(this.currentItem.size)}` : ""}` : "正在下载",
-        { compact: true },
-      ));
+      const item = this.currentItem;
+      if (item && item.percent != null && item.total) {
+        sub.push(el("div", { class: "setup-progress" }, [
+          el("div", { class: "progress" }, [
+            el("i", { style: `width:${Math.max(0, Math.min(100, item.percent)).toFixed(1)}%` }),
+          ]),
+          el("span", { class: "setup-progress-meta" }, esc(
+            `${fmtBytes(item.done ?? 0)} / ${fmtBytes(item.total)}${item.speed_bps ? ` · ${fmtSpeed(item.speed_bps)}` : ""}`
+          )),
+        ]));
+      } else {
+        sub.push(loadingState(
+          item ? `正在下载 ${item.id}${item.size ? ` · ${fmtBytes(item.size)}` : ""}` : "正在下载",
+          { compact: true },
+        ));
+      }
     } else if (running && step.kind === "nodes") {
       sub.push(el("div", { class: "hint" }, `正在安装节点 ${step.items_done + 1}/${step.items_total || "…"}`));
     } else if (running) {
@@ -640,14 +801,21 @@ export class EnvSetupView {
         break;
       }
       case "item_started":
-        this.currentItem = { id: event.id, type: event.kind, step: event.step, size: 0 };
+        this.currentItem = { id: event.id, type: event.kind, step: event.step, size: 0, done: 0, total: null, speed_bps: null, eta_s: null, percent: null };
         this.currentPip = null;
         break;
       case "item_finished":
         this.currentItem = null;
         break;
       case "item_progress":
-        if (this.currentItem && this.currentItem.id === event.id) this.currentItem.size = event.size;
+        if (this.currentItem && this.currentItem.id === event.id) {
+          this.currentItem.size = event.size ?? event.done ?? this.currentItem.size;
+          this.currentItem.done = event.done ?? this.currentItem.done;
+          this.currentItem.total = event.total ?? this.currentItem.total;
+          this.currentItem.speed_bps = event.speed_bps ?? this.currentItem.speed_bps;
+          this.currentItem.eta_s = event.eta_s ?? this.currentItem.eta_s;
+          this.currentItem.percent = event.percent ?? this.currentItem.percent;
+        }
         break;
       case "pip_started":
         this.currentPip = event.package;

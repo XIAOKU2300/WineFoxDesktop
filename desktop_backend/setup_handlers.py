@@ -95,6 +95,7 @@ async def handle_setup_capabilities(request: web.Request) -> web.Response:
             ]
             for group in manifest.model_groups
         },
+        "source_hosts": sorted({s.host for m in manifest.models.values() for s in m.sources}),
         "node_groups": {
             name: {"nodes": list(g.nodes), "pip_packages": list(g.pip_packages)}
             for name, g in manifest.node_groups.items()
@@ -286,6 +287,24 @@ async def handle_setup_remote_kit(request: web.Request) -> web.Response:
     return _json(await manager.remote_kit())
 
 
+# ---------------- 镜像测速 / 优选 ----------------
+
+async def handle_setup_mirrors_probe(request: web.Request) -> web.Response:
+    """POST /api/v1/setup/mirrors/probe：实测各下载镜像的时延与吞吐。"""
+    manager = _setup(request)
+    return _json(await manager.probe_mirrors())
+
+
+async def handle_setup_mirrors_preference(request: web.Request) -> web.Response:
+    manager = _setup(request)
+    if request.method == "GET":
+        return _json({"preferred_host": manager.preferred_host})
+    body = await _json_body(request, required=False)
+    host = str((body or {}).get("preferred_host") or "").strip()
+    manager.set_preferred_host(host)  # 空串表示恢复自动顺序
+    return _json({"preferred_host": manager.preferred_host})
+
+
 # ---------------- 路由表 ----------------
 
 def register_setup_routes(app: web.Application) -> None:
@@ -302,3 +321,6 @@ def register_setup_routes(app: web.Application) -> None:
     app.router.add_post("/api/v1/setup/jobs/{id}/rollback", handle_setup_rollback_job)
     app.router.add_post("/api/v1/setup/reprobe", handle_setup_reprobe)
     app.router.add_get("/api/v1/setup/remote-kit", handle_setup_remote_kit)
+    app.router.add_post("/api/v1/setup/mirrors/probe", handle_setup_mirrors_probe)
+    app.router.add_get("/api/v1/setup/mirrors/preference", handle_setup_mirrors_preference)
+    app.router.add_put("/api/v1/setup/mirrors/preference", handle_setup_mirrors_preference)
