@@ -1,2 +1,6 @@
 *.bat text eol=crlf
 *.cmd text eol=crlf
+
+# Windows 脚本统一 CRLF（NSIS 脚本为 UTF-8 BOM + CRLF，属性不改动内容本身）
+*.ps1 text eol=crlf
+*.nsi text eol=crlf
