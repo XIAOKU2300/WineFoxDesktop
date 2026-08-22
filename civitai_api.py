@@ -64,6 +64,40 @@ _PROXY_CIRCUITS = {}
 _PROXY_CIRCUIT_FAILURE_THRESHOLD = 3
 _PROXY_CIRCUIT_FAILURE_WINDOW = 30.0
 
+#: API/搜索路径共享的 aiohttp 会话（按事件循环绑定）。
+#: 一次搜索会发起十余个短请求；逐请求新建 ClientSession 意味着每次都
+#: 重新 TCP+TLS 握手（经代理时每个往返多花数百毫秒）。共享连接池后，
+#: 首个请求之后的握手全部复用。下载路径不共享：它们需要独立的
+#: trace_configs（重定向校验）与超时策略。
+_SHARED_API_SESSIONS: dict = {}
+
+
+def shared_api_session() -> aiohttp.ClientSession:
+    """返回当前事件循环共用的 API 会话（连接池 + DNS 缓存）。"""
+    loop = asyncio.get_running_loop()
+    session = _SHARED_API_SESSIONS.get(id(loop))
+    if session is None or session.closed:
+        connector = aiohttp.TCPConnector(
+            limit=24,
+            ttl_dns_cache=300,
+            enable_cleanup_closed=True,
+        )
+        session = aiohttp.ClientSession(connector=connector)
+        _SHARED_API_SESSIONS[id(loop)] = session
+    return session
+
+
+async def close_shared_api_sessions() -> None:
+    """应用关停时释放共享会话（engine.stop 调用；测试的独立小循环也安全）。"""
+    sessions = list(_SHARED_API_SESSIONS.values())
+    _SHARED_API_SESSIONS.clear()
+    for session in sessions:
+        try:
+            if not session.closed:
+                await session.close()
+        except Exception:
+            pass
+
 
 def _normalize_proxy_url(proxy: str) -> str:
     """Normalize the user-facing proxy setting before handing it to aiohttp.
@@ -342,10 +376,10 @@ class CivitaiClient:
         if self.proxy and isinstance(exc, (ClientProxyConnectionError, ClientConnectorError, TimeoutError, OSError)):
             return RuntimeError(
                 f"无法连接 Civitai 代理：{self.proxy}。请检查 Clash 是否开启 Allow LAN、Mixed Port 是否正确、"
-                f"防火墙是否放行，以及 AstrBot/Docker 是否能访问该局域网 IP。原始错误：{exc}"
+                f"防火墙是否放行。原始错误：{exc}"
             )
         if isinstance(exc, TimeoutError):
-            return RuntimeError(f"连接 Civitai 超时，请检查网络或配置 civitai_settings.proxy。原始错误：{exc}")
+            return RuntimeError(f"连接 Civitai 超时：请在 设置 → LoRA 下载 填写代理（如 http://127.0.0.1:7890），留空自动使用系统代理。原始错误：{exc}")
         return RuntimeError(str(exc))
 
     def _proxy_circuit_key(self) -> str:
@@ -624,11 +658,11 @@ class CivitaiClient:
         plain = html.unescape(re.sub(r"<[^>]+>", " ", raw))
         plain = re.sub(r"\s+", " ", plain).strip()
         if status in {502, 503, 504}:
-            return f"{target} 暂时不可用（HTTP {status}），请稍后重试，或检查 civitai_settings.proxy。"
+            return f"{target} 暂时不可用（HTTP {status}），请稍后重试；持续失败请在 设置 → LoRA 下载 检查代理。"
         if status == 429:
             return f"{target} 请求过于频繁（HTTP 429），请稍后重试。"
         if status in {401, 403}:
-            return f"{target} 拒绝访问（HTTP {status}），如需登录权限请设置 civitai_settings.cookie。"
+            return f"{target} 拒绝访问（HTTP {status}），如需登录权限请在 设置 → 认证与密钥 配置 Civitai API Token 或登录 Cookie。"
         if plain:
             return f"{target} 返回 HTTP {status}: {plain[:160]}"
         return f"{target} 返回 HTTP {status}"
@@ -641,48 +675,50 @@ class CivitaiClient:
         max_retries = self.network_max_retries
         try:
             last_error = None
-            async with aiohttp.ClientSession(headers=self._headers(), timeout=timeout) as session:
-                for attempt in range(1, max_retries + 1):
-                    try:
-                        self._check_proxy_circuit()
-                        async with session.get(url, proxy=self.proxy or None) as resp:
-                            self._mark_proxy_success()
-                            text = await resp.text()
-                            if resp.status == 200:
-                                try:
-                                    return json.loads(text)
-                                except json.JSONDecodeError as exc:
-                                    last_error = self._format_json_decode_error("Civitai API", exc, text)
-                                    if attempt < max_retries:
-                                        delay = max(0.5, min(1.0 * attempt, 5.0))
-                                        logger.info(f"[ComfyUI] Civitai API JSON 解析失败，{delay:.1f}s 后重试 {attempt + 1}/{max_retries}: {last_error}")
-                                        await asyncio.sleep(delay)
-                                        continue
-                                    raise RuntimeError(last_error) from exc
-                            last_error = self._format_http_error("Civitai API", resp.status, text)
-                            if resp.status in retry_statuses and attempt < max_retries:
-                                retry_after = resp.headers.get("Retry-After")
-                                try:
-                                    delay = float(retry_after) if retry_after else min(1.5 * (2 ** (attempt - 1)), 15.0)
-                                except Exception:
-                                    delay = min(1.5 * (2 ** (attempt - 1)), 15.0)
-                                delay = max(0.5, min(delay + random.uniform(0, delay * 0.5), 18.0))
-                                logger.info(f"[ComfyUI] Civitai API HTTP {resp.status}，等待 {delay:.1f}s 后重试 {attempt + 1}/{max_retries}")
-                                await asyncio.sleep(delay)
-                                continue
-                            raise RuntimeError(last_error)
-                    except (aiohttp.ClientError, TimeoutError, OSError) as exc:
-                        last_error = self._format_network_error(exc)
-                        if self._is_proxy_network_error(exc):
-                            self._mark_proxy_failure(exc)
-                            raise RuntimeError(last_error)
-                        if attempt < max_retries:
-                            base_delay = min(1.5 * (2 ** (attempt - 1)), 15.0)
-                            delay = max(0.5, min(base_delay + random.uniform(0, base_delay * 0.5), 18.0))
-                            logger.info(f"[ComfyUI] Civitai API 网络抖动，等待 {delay:.1f}s 后重试 {attempt + 1}/{max_retries}: {exc}")
+            session = shared_api_session()
+            for attempt in range(1, max_retries + 1):
+                try:
+                    self._check_proxy_circuit()
+                    async with session.get(
+                        url, headers=self._headers(), timeout=timeout, proxy=self.proxy or None
+                    ) as resp:
+                        self._mark_proxy_success()
+                        text = await resp.text()
+                        if resp.status == 200:
+                            try:
+                                return json.loads(text)
+                            except json.JSONDecodeError as exc:
+                                last_error = self._format_json_decode_error("Civitai API", exc, text)
+                                if attempt < max_retries:
+                                    delay = max(0.5, min(1.0 * attempt, 5.0))
+                                    logger.info(f"[ComfyUI] Civitai API JSON 解析失败，{delay:.1f}s 后重试 {attempt + 1}/{max_retries}: {last_error}")
+                                    await asyncio.sleep(delay)
+                                    continue
+                                raise RuntimeError(last_error) from exc
+                        last_error = self._format_http_error("Civitai API", resp.status, text)
+                        if resp.status in retry_statuses and attempt < max_retries:
+                            retry_after = resp.headers.get("Retry-After")
+                            try:
+                                delay = float(retry_after) if retry_after else min(1.5 * (2 ** (attempt - 1)), 15.0)
+                            except Exception:
+                                delay = min(1.5 * (2 ** (attempt - 1)), 15.0)
+                            delay = max(0.5, min(delay + random.uniform(0, delay * 0.5), 18.0))
+                            logger.info(f"[ComfyUI] Civitai API HTTP {resp.status}，等待 {delay:.1f}s 后重试 {attempt + 1}/{max_retries}")
                             await asyncio.sleep(delay)
                             continue
                         raise RuntimeError(last_error)
+                except (aiohttp.ClientError, TimeoutError, OSError) as exc:
+                    last_error = self._format_network_error(exc)
+                    if self._is_proxy_network_error(exc):
+                        self._mark_proxy_failure(exc)
+                        raise RuntimeError(last_error)
+                    if attempt < max_retries:
+                        base_delay = min(1.5 * (2 ** (attempt - 1)), 15.0)
+                        delay = max(0.5, min(base_delay + random.uniform(0, base_delay * 0.5), 18.0))
+                        logger.info(f"[ComfyUI] Civitai API 网络抖动，等待 {delay:.1f}s 后重试 {attempt + 1}/{max_retries}: {exc}")
+                        await asyncio.sleep(delay)
+                        continue
+                    raise RuntimeError(last_error)
             raise RuntimeError(last_error or "Civitai API 请求失败")
         except RuntimeError:
             raise
@@ -697,39 +733,39 @@ class CivitaiClient:
         max_retries = self.network_max_retries
         try:
             last_error = None
-            async with aiohttp.ClientSession(headers=self._headers(), timeout=timeout) as session:
-                for attempt in range(1, max_retries + 1):
-                    try:
-                        self._check_proxy_circuit()
-                        async with session.get(url, proxy=self.proxy or None) as resp:
-                            self._mark_proxy_success()
-                            text = await resp.text()
-                            if resp.status == 200:
-                                return text
-                            last_error = self._format_http_error("Civitai 页面", resp.status, text)
-                            if resp.status in retry_statuses and attempt < max_retries:
-                                retry_after = resp.headers.get("Retry-After")
-                                try:
-                                    delay = float(retry_after) if retry_after else min(1.5 * (2 ** (attempt - 1)), 15.0)
-                                except Exception:
-                                    delay = min(1.5 * (2 ** (attempt - 1)), 15.0)
-                                delay = max(0.5, min(delay + random.uniform(0, delay * 0.5), 18.0))
-                                logger.info(f"[ComfyUI] Civitai 页面 HTTP {resp.status}，等待 {delay:.1f}s 后重试 {attempt + 1}/{max_retries}")
-                                await asyncio.sleep(delay)
-                                continue
-                            raise RuntimeError(last_error)
-                    except (aiohttp.ClientError, TimeoutError, OSError) as exc:
-                        last_error = self._format_network_error(exc)
-                        if self._is_proxy_network_error(exc):
-                            self._mark_proxy_failure(exc)
-                            raise RuntimeError(last_error)
-                        if attempt < max_retries:
-                            base_delay = min(1.5 * (2 ** (attempt - 1)), 15.0)
-                            delay = max(0.5, min(base_delay + random.uniform(0, base_delay * 0.5), 18.0))
-                            logger.info(f"[ComfyUI] Civitai 页面网络抖动，等待 {delay:.1f}s 后重试 {attempt + 1}/{max_retries}: {exc}")
+            session = shared_api_session()
+            for attempt in range(1, max_retries + 1):
+                try:
+                    self._check_proxy_circuit()
+                    async with session.get(url, proxy=self.proxy or None) as resp:
+                        self._mark_proxy_success()
+                        text = await resp.text()
+                        if resp.status == 200:
+                            return text
+                        last_error = self._format_http_error("Civitai 页面", resp.status, text)
+                        if resp.status in retry_statuses and attempt < max_retries:
+                            retry_after = resp.headers.get("Retry-After")
+                            try:
+                                delay = float(retry_after) if retry_after else min(1.5 * (2 ** (attempt - 1)), 15.0)
+                            except Exception:
+                                delay = min(1.5 * (2 ** (attempt - 1)), 15.0)
+                            delay = max(0.5, min(delay + random.uniform(0, delay * 0.5), 18.0))
+                            logger.info(f"[ComfyUI] Civitai 页面 HTTP {resp.status}，等待 {delay:.1f}s 后重试 {attempt + 1}/{max_retries}")
                             await asyncio.sleep(delay)
                             continue
                         raise RuntimeError(last_error)
+                except (aiohttp.ClientError, TimeoutError, OSError) as exc:
+                    last_error = self._format_network_error(exc)
+                    if self._is_proxy_network_error(exc):
+                        self._mark_proxy_failure(exc)
+                        raise RuntimeError(last_error)
+                    if attempt < max_retries:
+                        base_delay = min(1.5 * (2 ** (attempt - 1)), 15.0)
+                        delay = max(0.5, min(base_delay + random.uniform(0, base_delay * 0.5), 18.0))
+                        logger.info(f"[ComfyUI] Civitai 页面网络抖动，等待 {delay:.1f}s 后重试 {attempt + 1}/{max_retries}: {exc}")
+                        await asyncio.sleep(delay)
+                        continue
+                    raise RuntimeError(last_error)
             raise RuntimeError(last_error or "Civitai 页面请求失败")
         except RuntimeError:
             raise
@@ -754,48 +790,48 @@ class CivitaiClient:
         request_headers.update(headers or {})
         try:
             last_error = None
-            async with aiohttp.ClientSession(headers=request_headers, timeout=timeout) as session:
-                for attempt in range(1, max_retries + 1):
-                    try:
-                        self._check_proxy_circuit()
-                        async with session.post(url, json=payload or {}, proxy=self.proxy or None) as resp:
-                            self._mark_proxy_success()
-                            text = await resp.text()
-                            if resp.status == 200:
-                                try:
-                                    return json.loads(text)
-                                except json.JSONDecodeError as exc:
-                                    last_error = self._format_json_decode_error(target, exc, text)
-                                    if attempt < max_retries:
-                                        delay = max(0.5, min(1.0 * attempt, 5.0))
-                                        logger.info(f"[ComfyUI] {target} JSON 解析失败，{delay:.1f}s 后重试 {attempt + 1}/{max_retries}: {last_error}")
-                                        await asyncio.sleep(delay)
-                                        continue
-                                    raise RuntimeError(last_error) from exc
-                            last_error = self._format_http_error(target, resp.status, text)
-                            if resp.status in retry_statuses and attempt < max_retries:
-                                retry_after = resp.headers.get("Retry-After")
-                                try:
-                                    delay = float(retry_after) if retry_after else min(1.2 * (2 ** (attempt - 1)), 12.0)
-                                except Exception:
-                                    delay = min(1.2 * (2 ** (attempt - 1)), 12.0)
-                                delay = max(0.5, min(delay + random.uniform(0, delay * 0.5), 15.0))
-                                logger.info(f"[ComfyUI] {target} HTTP {resp.status}，等待 {delay:.1f}s 后重试 {attempt + 1}/{max_retries}")
-                                await asyncio.sleep(delay)
-                                continue
-                            raise RuntimeError(last_error)
-                    except (aiohttp.ClientError, TimeoutError, OSError) as exc:
-                        last_error = self._format_network_error(exc)
-                        if self._is_proxy_network_error(exc):
-                            self._mark_proxy_failure(exc)
-                            raise RuntimeError(last_error)
-                        if attempt < max_retries:
-                            base_delay = min(1.2 * (2 ** (attempt - 1)), 12.0)
-                            delay = max(0.5, min(base_delay + random.uniform(0, base_delay * 0.5), 15.0))
-                            logger.info(f"[ComfyUI] {target} 网络抖动，等待 {delay:.1f}s 后重试 {attempt + 1}/{max_retries}: {exc}")
+            session = shared_api_session()
+            for attempt in range(1, max_retries + 1):
+                try:
+                    self._check_proxy_circuit()
+                    async with session.post(url, json=payload or {}, proxy=self.proxy or None) as resp:
+                        self._mark_proxy_success()
+                        text = await resp.text()
+                        if resp.status == 200:
+                            try:
+                                return json.loads(text)
+                            except json.JSONDecodeError as exc:
+                                last_error = self._format_json_decode_error(target, exc, text)
+                                if attempt < max_retries:
+                                    delay = max(0.5, min(1.0 * attempt, 5.0))
+                                    logger.info(f"[ComfyUI] {target} JSON 解析失败，{delay:.1f}s 后重试 {attempt + 1}/{max_retries}: {last_error}")
+                                    await asyncio.sleep(delay)
+                                    continue
+                                raise RuntimeError(last_error) from exc
+                        last_error = self._format_http_error(target, resp.status, text)
+                        if resp.status in retry_statuses and attempt < max_retries:
+                            retry_after = resp.headers.get("Retry-After")
+                            try:
+                                delay = float(retry_after) if retry_after else min(1.2 * (2 ** (attempt - 1)), 12.0)
+                            except Exception:
+                                delay = min(1.2 * (2 ** (attempt - 1)), 12.0)
+                            delay = max(0.5, min(delay + random.uniform(0, delay * 0.5), 15.0))
+                            logger.info(f"[ComfyUI] {target} HTTP {resp.status}，等待 {delay:.1f}s 后重试 {attempt + 1}/{max_retries}")
                             await asyncio.sleep(delay)
                             continue
                         raise RuntimeError(last_error)
+                except (aiohttp.ClientError, TimeoutError, OSError) as exc:
+                    last_error = self._format_network_error(exc)
+                    if self._is_proxy_network_error(exc):
+                        self._mark_proxy_failure(exc)
+                        raise RuntimeError(last_error)
+                    if attempt < max_retries:
+                        base_delay = min(1.2 * (2 ** (attempt - 1)), 12.0)
+                        delay = max(0.5, min(base_delay + random.uniform(0, base_delay * 0.5), 15.0))
+                        logger.info(f"[ComfyUI] {target} 网络抖动，等待 {delay:.1f}s 后重试 {attempt + 1}/{max_retries}: {exc}")
+                        await asyncio.sleep(delay)
+                        continue
+                    raise RuntimeError(last_error)
             raise RuntimeError(last_error or f"{target} 请求失败")
         except RuntimeError:
             raise
@@ -1811,8 +1847,9 @@ class CivitaiClient:
                         if resp.status == 401:
                             raise RuntimeError(
                                 "下载失败 401：该模型作者要求登录后下载。"
-                                "Civitai API Token 不一定等同网页登录态；请在 WebUI 的 civitai_settings.cookie "
-                                "填入浏览器请求里的 Cookie，或确认 API Token 对该资源有下载权限。"
+                                "Civitai API Token 不一定等同网页登录态；请在 设置 → 认证与密钥 配置 Civitai 登录 Cookie "
+                                "（已登录浏览器 F12 → Network → 任意 civitai.com 请求 → 复制 Cookie 请求头，支持整段粘贴），"
+                                "或确认 API Token 对该资源有下载权限。"
                             )
                         raise RuntimeError(f"下载失败 {resp.status}: {text[:160]}")
                     total = int(resp.headers.get("Content-Length") or 0)
@@ -1847,7 +1884,7 @@ class CivitaiClient:
                 self._mark_proxy_success()
                 if resp.status == 401:
                     raise RuntimeError(
-                        "下载失败 401：该模型作者要求登录后下载。请设置 civitai_settings.cookie，"
+                        "下载失败 401：该模型作者要求登录后下载。请在 设置 → 认证与密钥 配置 Civitai 登录 Cookie，"
                         "或确认 API Token 对该资源有下载权限。"
                     )
                 if resp.status == 206:
@@ -1869,7 +1906,7 @@ class CivitaiClient:
             self._mark_proxy_success()
             if resp.status == 401:
                 raise RuntimeError(
-                    "下载失败 401：该模型作者要求登录后下载。请设置 civitai_settings.cookie，"
+                    "下载失败 401：该模型作者要求登录后下载。请在 设置 → 认证与密钥 配置 Civitai 登录 Cookie，"
                     "或确认 API Token 对该资源有下载权限。"
                 )
             if resp.status >= 400:
@@ -1971,7 +2008,7 @@ class CivitaiClient:
                         async with session.get(download_url, headers=req_headers, proxy=self.proxy or None) as resp:
                             self._mark_proxy_success()
                             if resp.status == 401:
-                                raise RuntimeError("下载失败 401：请设置 civitai_settings.cookie 登录态。")
+                                raise RuntimeError("下载失败 401：请在 设置 → 认证与密钥 配置 Civitai 登录 Cookie。")
                             if resp.status != 206:
                                 text = await resp.text()
                                 raise RuntimeError(f"分片 {idx} 下载失败 {resp.status}: {text[:160]}")
@@ -2049,7 +2086,7 @@ class CivitaiClient:
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         aria2c = self.aria2c_path
         if not Path(aria2c).exists() and not shutil.which(aria2c):
-            raise RuntimeError("未找到 aria2c。请安装 aria2，或将 civitai_settings.downloader 改回 aiohttp。")
+            raise RuntimeError("未找到 aria2c；桌面端默认使用内置多线程下载，无需安装。")
 
         args = [
             aria2c,
@@ -2161,46 +2198,48 @@ class HuggingFaceClient(CivitaiClient):
         max_retries = self.network_max_retries
         try:
             last_error = None
-            async with aiohttp.ClientSession(headers=self._headers(), timeout=timeout) as session:
-                for attempt in range(max_retries):
-                    try:
-                        self._check_proxy_circuit()
-                        async with session.get(url, proxy=self.proxy or None) as resp:
-                            self._mark_proxy_success()
-                            text = await resp.text()
-                            if resp.status == 200:
-                                try:
-                                    return json.loads(text)
-                                except json.JSONDecodeError as exc:
-                                    last_error = self._format_json_decode_error("Hugging Face API", exc, text)
-                                    if attempt + 1 < max_retries:
-                                        delay = 1.2 * (attempt + 1)
-                                        logger.info(f"[ComfyUI] Hugging Face API JSON 解析失败，{delay:.1f}s 后重试 {attempt + 2}/{max_retries}: {last_error}")
-                                        await asyncio.sleep(max(0.5, min(delay, 8.0)))
-                                        continue
-                                    raise RuntimeError(last_error) from exc
-                            last_error = self._format_http_error("Hugging Face API", resp.status, text)
-                            if resp.status in retry_statuses and attempt + 1 < max_retries:
-                                retry_after = resp.headers.get("Retry-After")
-                                try:
-                                    delay = float(retry_after) if retry_after else 1.2 * (attempt + 1)
-                                except Exception:
+            session = shared_api_session()
+            for attempt in range(max_retries):
+                try:
+                    self._check_proxy_circuit()
+                    async with session.get(
+                        url, headers=self._headers(), timeout=timeout, proxy=self.proxy or None
+                    ) as resp:
+                        self._mark_proxy_success()
+                        text = await resp.text()
+                        if resp.status == 200:
+                            try:
+                                return json.loads(text)
+                            except json.JSONDecodeError as exc:
+                                last_error = self._format_json_decode_error("Hugging Face API", exc, text)
+                                if attempt + 1 < max_retries:
                                     delay = 1.2 * (attempt + 1)
-                                logger.info(f"[ComfyUI] Hugging Face API HTTP {resp.status}，等待 {delay:.1f}s 后重试 {attempt + 2}/3")
-                                await asyncio.sleep(max(0.5, min(delay, 8.0)))
-                                continue
-                            raise RuntimeError(last_error)
-                    except (aiohttp.ClientError, TimeoutError, OSError) as exc:
-                        last_error = self._format_network_error(exc)
-                        if self._is_proxy_network_error(exc):
-                            self._mark_proxy_failure(exc)
-                            raise RuntimeError(last_error)
-                        if attempt + 1 < max_retries:
-                            delay = 1.2 * (attempt + 1)
-                            logger.info(f"[ComfyUI] Hugging Face API 网络抖动，等待 {delay:.1f}s 后重试 {attempt + 2}/3: {exc}")
-                            await asyncio.sleep(delay)
+                                    logger.info(f"[ComfyUI] Hugging Face API JSON 解析失败，{delay:.1f}s 后重试 {attempt + 2}/{max_retries}: {last_error}")
+                                    await asyncio.sleep(max(0.5, min(delay, 8.0)))
+                                    continue
+                                raise RuntimeError(last_error) from exc
+                        last_error = self._format_http_error("Hugging Face API", resp.status, text)
+                        if resp.status in retry_statuses and attempt + 1 < max_retries:
+                            retry_after = resp.headers.get("Retry-After")
+                            try:
+                                delay = float(retry_after) if retry_after else 1.2 * (attempt + 1)
+                            except Exception:
+                                delay = 1.2 * (attempt + 1)
+                            logger.info(f"[ComfyUI] Hugging Face API HTTP {resp.status}，等待 {delay:.1f}s 后重试 {attempt + 2}/3")
+                            await asyncio.sleep(max(0.5, min(delay, 8.0)))
                             continue
                         raise RuntimeError(last_error)
+                except (aiohttp.ClientError, TimeoutError, OSError) as exc:
+                    last_error = self._format_network_error(exc)
+                    if self._is_proxy_network_error(exc):
+                        self._mark_proxy_failure(exc)
+                        raise RuntimeError(last_error)
+                    if attempt + 1 < max_retries:
+                        delay = 1.2 * (attempt + 1)
+                        logger.info(f"[ComfyUI] Hugging Face API 网络抖动，等待 {delay:.1f}s 后重试 {attempt + 2}/3: {exc}")
+                        await asyncio.sleep(delay)
+                        continue
+                    raise RuntimeError(last_error)
             raise RuntimeError(last_error or "Hugging Face API 请求失败")
         except RuntimeError:
             raise
@@ -2212,14 +2251,16 @@ class HuggingFaceClient(CivitaiClient):
             return await self._get_text_via_adapter(url, target="Hugging Face page", max_retries=self.network_max_retries)
         timeout = aiohttp.ClientTimeout(total=self.timeout, connect=min(30, self.timeout))
         try:
-            async with aiohttp.ClientSession(headers=self._headers(), timeout=timeout) as session:
-                self._check_proxy_circuit()
-                async with session.get(url, proxy=self.proxy or None) as resp:
-                    self._mark_proxy_success()
-                    text = await resp.text()
-                    if resp.status != 200:
-                        raise RuntimeError(self._format_http_error("Hugging Face 页面", resp.status, text))
-                    return text
+            session = shared_api_session()
+            self._check_proxy_circuit()
+            async with session.get(
+                url, headers=self._headers(), timeout=timeout, proxy=self.proxy or None
+            ) as resp:
+                self._mark_proxy_success()
+                text = await resp.text()
+                if resp.status != 200:
+                    raise RuntimeError(self._format_http_error("Hugging Face 页面", resp.status, text))
+                return text
         except RuntimeError:
             raise
         except Exception as exc:

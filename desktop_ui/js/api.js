@@ -105,6 +105,7 @@ export const api = {
   startLoraDownload: (resultId, alias = "", options = {}) => request("/lora/downloads", { ...options, method: "POST", body: JSON.stringify({ result_id: resultId, alias, adult_consent: !!options.adult_consent }) }),
   loraDownload: (id, options = {}) => request(`/lora/downloads/${encodeURIComponent(id)}`, options),
   probeLoraBridge: (options = {}) => request("/lora/bridge/probe", { ...options, method: "POST", body: JSON.stringify({}) }),
+  testLoraConnection: (options = {}) => request("/lora/test-connection", { ...options, method: "POST", body: JSON.stringify({}) }),
   /* ---- LoRA 本地库（Agent 07 后端，见 docs/lora_library_audit.md） ---- */
   loraLibraryList: (family, options = {}) => request("/lora/library", { ...options, query: { family, include_quarantined: options.include_quarantined ? "1" : undefined } }),
   loraLibraryGet: (id, options = {}) => request(`/lora/library/${encodeURIComponent(id)}`, options),

@@ -149,7 +149,10 @@ export class SettingsView {
     const l = this.settings?.lora_download || {};
     return [
       el("div", { class: "section-card" }, [
-        el("div", { class: "sec-head" }, [el("h3", {}, "LoRA 下载")]),
+        el("div", { class: "sec-head" }, [
+          el("h3", {}, "LoRA 下载"),
+          el("button", { class: "btn btn-sm", id: "s-lora-test", type: "button" }, [ic("refresh"), esc("测试下载链路")]),
+        ]),
         el("div", { class: "sec-body" }, [
           el("div", { class: "field" }, [
             el("label", { for: "s-lora-mode" }, "下载模式"),
@@ -167,8 +170,8 @@ export class SettingsView {
           ]),
           el("div", { class: "field" }, [
             el("label", { for: "s-lora-proxy" }, "搜索与下载代理（可选）"),
-            this.input("s-lora-proxy", l.proxy || "", { placeholder: "例如 http://127.0.0.1:7890", autocomplete: "off", spellcheck: "false" }),
-            el("span", { class: "hint" }, "用于搜索、缩略图和本机下载；Bridge 下载默认复用此代理。"),
+            this.input("s-lora-proxy", l.proxy || "", { placeholder: "留空自动用系统代理；或填 http://127.0.0.1:7890", autocomplete: "off", spellcheck: "false" }),
+            el("span", { class: "hint" }, "用于搜索、缩略图和本机下载；留空时自动使用 Windows 系统代理或 HTTPS_PROXY 环境变量。仅支持 HTTP(S) 代理（Clash 请填 Mixed/HTTP 端口，不要填 socks5 端口）。"),
           ]),
           el("div", { class: "field" }, [
             el("label", { for: "s-lora-bridge-proxy" }, "Bridge 出网代理（可选）"),
@@ -234,8 +237,9 @@ export class SettingsView {
           el("div", { class: "notice info civitai-credential-guide" }, [
             el("b", {}, "Civitai 下载凭证获取方法"),
             el("ol", {}, [
-              el("li", {}, "优先使用 API Key：登录 Civitai，打开账户设置，在 API Keys 区域创建 Key，然后填入下方的 Civitai API Token。"),
-              el("li", {}, "如果特定资源仍返回 HTTP 401：在已登录 Civitai 的浏览器按 F12 → Network，点击一次网站下载；打开 api/download/models 请求，在 Request Headers 中复制完整 Cookie 值。"),
+              el("li", {}, "优先使用 API Key：登录 Civitai，打开账户设置，在 API Keys 区域创建 Key，然后填入下方的 Civitai API Token。绝大多数资源凭它即可下载。"),
+              el("li", {}, "个别资源仍返回 HTTP 401 时才需要 Cookie：已登录 Civitai 的浏览器按 F12 → Network → 刷新页面 → 点第一个请求 → Request Headers 里整行复制 cookie。填入时直接整段粘贴即可，程序会自动清理前缀和多余内容。"),
+              el("li", {}, "配置后可到 设置 → LoRA 下载 点击“测试下载链路”一键检查代理、连通性和凭证。"),
               el("li", {}, "Cookie 等同账户登录凭证，只能保存在自己的电脑；不要截图、发群或提交到 Git。失效后重新抓取。"),
             ]),
             el("a", { class: "btn btn-sm", href: "https://civitai.com/user/account", target: "_blank", rel: "noopener noreferrer" }, "打开 Civitai 账户设置"),
@@ -333,15 +337,25 @@ export class SettingsView {
       el("div", { class: "modal-head" }, [el("h3", { id: "sk-title" }, esc(`设置 ${label}`)), el("button", { class: "icon-btn", type: "button", "aria-label": "关闭" }, [ic("x")])]),
       el("div", { class: "modal-body" }, [
         el("p", { class: "text-sm text-muted", id: "sk-desc" }, key === "civitai_api_token"
-          ? "登录 Civitai → 账户设置 → API Keys 创建并复制 Key。优先使用该 Token 解决受限下载。"
+          ? "登录 Civitai → 账户设置 → API Keys 创建并复制 Key（推荐，优先用它即可下载绝大多数资源）。"
           : key === "civitai_cookie"
-            ? "仅在 API Key 仍返回 401 时使用：已登录浏览器 F12 → Network → 点击网站下载 → api/download/models 请求 → Request Headers → 复制完整 Cookie。Cookie 等同登录凭证，请勿分享。"
+            ? "仅在 API Token 仍返回 401 时使用。复制方法：已登录 civitai.com 的浏览器按 F12 → Network（网络）→ 刷新页面 → 点第一个请求 → Request Headers（请求标头）→ 找到 cookie 一行，整行复制。直接粘贴即可，程序会自动去掉 cookie: 前缀和多余内容。Cookie 等同登录凭证，请勿分享。"
             : "密钥仅写入后端本机存储，界面不会回显；不会存储到浏览器 localStorage。"),
+        (key === "civitai_api_token" || key === "civitai_cookie")
+          ? el("p", { class: "text-sm" }, [
+              el("a", { href: "https://civitai.com/user/account", target: "_blank", rel: "noopener noreferrer" }, "打开 Civitai 账户设置 ↗"),
+            ])
+          : null,
         isApiKey
-          ? el("div", { class: "field" }, [
-            el("label", { for: "sk-val" }, key === "civitai_cookie" ? "Cookie 请求头值" : "API Key / Token"),
-            el("input", { id: "sk-val", class: "input", type: "password", autocomplete: "new-password" }),
-          ])
+          ? (key === "civitai_cookie"
+              ? el("div", { class: "field" }, [
+                  el("label", { for: "sk-val" }, "Cookie（可直接整段粘贴，支持多行）"),
+                  el("textarea", { id: "sk-val", class: "textarea mono", rows: 5, autocomplete: "off", spellcheck: "false", placeholder: "cookie: civitai_token=…; …" }),
+                ])
+              : el("div", { class: "field" }, [
+                  el("label", { for: "sk-val" }, "API Key / Token"),
+                  el("input", { id: "sk-val", class: "input", type: "password", autocomplete: "new-password" }),
+                ]))
           : el("div", { class: "field" }, [
             el("label", { for: "sk-val" }, "证书内容（PEM）"),
             el("textarea", { id: "sk-val", class: "textarea mono", rows: 6, placeholder: "-----BEGIN CERTIFICATE-----…" }),
@@ -591,6 +605,9 @@ export class SettingsView {
       if (e.target.closest("#s-test")) {
         this.testConnection();
       }
+      if (e.target.closest("#s-lora-test")) {
+        void this.testLoraConnection();
+      }
       const t = e.target.closest("#s-theme-light") || e.target.closest("#s-theme-dark");
       if (t) {
         const wantsDark = t.id === "s-theme-dark";
@@ -632,6 +649,92 @@ export class SettingsView {
       this.probing = false;
       if (btn) disabledButton(btn, false, "测试连接");
     }
+  }
+
+  async testLoraConnection() {
+    const btn = $("#s-lora-test", this.root);
+    if (btn) disabledButton(btn, true, "诊断中…");
+    let report = null;
+    try {
+      report = await withDeadline((signal) => api.testLoraConnection({ signal }), 45000, "诊断超时，请稍后重试");
+    } catch (e) {
+      toast("诊断失败：" + e.message, "err");
+      if (btn) disabledButton(btn, false, "测试下载链路");
+      return;
+    }
+    if (btn) disabledButton(btn, false, "测试下载链路");
+    this.showLoraTestReport(report);
+  }
+
+  showLoraTestReport(report) {
+    const proxy = report?.proxy || {};
+    const apiState = report?.api || {};
+    const token = report?.token || {};
+    const cookie = report?.cookie || {};
+    const proxyLabel = proxy.value
+      ? `${proxy.value}${proxy.source === "system" ? "（系统代理自动检测）" : proxy.source === "system-fallback" ? "（原代理不可达，已自动回退）" : ""}`
+      : "未配置（直连）";
+    const rows = [
+      {
+        name: "代理",
+        state: proxy.reachable === null ? (proxy.value ? "ok" : "muted") : (proxy.reachable ? "ok" : "err"),
+        text: (proxy.reachable === false
+          ? `${proxyLabel} — ${proxy.error || "端口不可达"}`
+          : proxy.error ? `${proxyLabel} — ${proxy.error}` : proxyLabel),
+      },
+      {
+        name: "Civitai 连通",
+        state: apiState.ok ? "ok" : "err",
+        text: apiState.ok ? "可访问" : (apiState.error || "失败"),
+      },
+      {
+        name: "Civitai API Token",
+        state: !token.configured ? "muted" : (token.ok ? "ok" : "err"),
+        text: !token.configured ? "未配置（多数资源可匿名下载）" : (token.ok ? "有效" : token.error || "无效"),
+      },
+      {
+        name: "Civitai 登录 Cookie",
+        state: !cookie.configured ? "muted" : (cookie.looks_valid ? "ok" : "warn"),
+        text: !cookie.configured
+          ? "未配置（仅受限资源需要）"
+          : `${cookie.fields || 0} 个字段${cookie.looks_valid ? "，包含登录态" : cookie.error ? "，" + cookie.error : ""}`,
+      },
+    ];
+    const overlay = el("div", { class: "overlay", role: "dialog", "aria-modal": "true", "aria-labelledby": "lt-title" });
+    overlay.append(el("div", { class: "modal" }, [
+      el("div", { class: "modal-head" }, [
+        el("h3", { id: "lt-title" }, report?.ok ? "下载链路正常" : "下载链路存在问题"),
+        el("button", { class: "icon-btn", type: "button", "aria-label": "关闭" }, [ic("x")]),
+      ]),
+      el("div", { class: "modal-body" }, [
+        el("div", { class: "stack-2" }, rows.map((row) => el("div", { class: "secret-row" }, [
+          el("div", { class: "grow" }, [
+            el("div", { class: "s-name" }, esc(row.name)),
+            el("div", { class: "s-desc" }, esc(row.text)),
+          ]),
+          el("span", { class: "badge " + (row.state === "ok" ? "ok" : row.state === "err" ? "warn" : "") },
+            row.state === "ok" ? "正常" : row.state === "err" ? "异常" : row.state === "warn" ? "可疑" : "—"),
+        ]))),
+        (report?.guidance || []).length
+          ? el("div", { class: "notice warn" }, [
+              el("b", {}, "建议操作"),
+              el("ul", { style: "margin:6px 0 0 18px;padding:0" },
+                report.guidance.map((item) => el("li", { class: "text-sm" }, esc(item)))),
+            ])
+          : el("div", { class: "notice info" }, "搜索与下载链路正常；如个别资源下载失败，多半是资源本身需要登录凭证。"),
+      ]),
+      el("div", { class: "modal-foot" }, [
+        el("button", { class: "btn btn-primary", type: "button", id: "lt-close" }, "知道了"),
+      ]),
+    ]));
+    document.body.append(overlay);
+    const close = () => overlay.remove();
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+    overlay.querySelector(".modal-head .icon-btn").addEventListener("click", close);
+    $("#lt-close", overlay)?.addEventListener("click", close);
+    document.addEventListener("keydown", function onKey(e) {
+      if (e.key === "Escape") { close(); document.removeEventListener("keydown", onKey); }
+    });
   }
 
   async saveSection(section, button) {

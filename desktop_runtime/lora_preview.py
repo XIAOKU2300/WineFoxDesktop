@@ -14,6 +14,7 @@ import logging
 import re
 import socket
 import struct
+import time
 from pathlib import Path
 from typing import Callable
 from urllib.parse import urljoin, urlparse
@@ -32,6 +33,37 @@ _REFERERS = {"civitai_red": "https://civitai.red/", "civitai.red": "https://civi
 _DEFAULT_REFERER = "https://civitai.com/"
 _ALLOWED_PREVIEW_HOSTS = ("civitai.com", "civitai.red", "civitaired.com", "huggingface.co", "hf.co")
 _ALLOWED_PREVIEW_PORTS = {80, 443}
+#: Clash/mihomo TUN fake-ip：本机 DNS 会把白名单域名解析到保留段（IPv4 常见
+#: 198.18.0.0/15，IPv6 还有 ULA 段），实际由 TUN 转交真实主机。已知段直接
+#: 放行，其余用对照探针兜底识别其他 fake-ip 实现。
+_FAKE_IP_NETWORK = ipaddress.ip_network("198.18.0.0/15")
+_FAKE_IP_PROBE_HOST = "civitai.com"
+_FAKE_IP_PROBE_TTL = 60.0
+_fake_ip_probe_cache = {"at": 0.0, "value": False}
+
+
+def _local_dns_is_fake_ip() -> bool:
+    """对照域名解析到非公网地址即判定本机 DNS 处于 fake-ip（TUN）模式。"""
+    now = time.monotonic()
+    if now - float(_fake_ip_probe_cache.get("at") or 0) < _FAKE_IP_PROBE_TTL:
+        return bool(_fake_ip_probe_cache.get("value"))
+    value = False
+    try:
+        infos = socket.getaddrinfo(_FAKE_IP_PROBE_HOST, 443, proto=socket.IPPROTO_TCP)
+        for info in infos:
+            try:
+                ip = ipaddress.ip_address(info[4][0])
+            except ValueError:
+                continue
+            if not ip.is_global:
+                value = True
+                break
+    except (socket.gaierror, OSError):
+        value = False
+    _fake_ip_probe_cache.update(at=now, value=value)
+    return value
+
+
 _PREVIEW_REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 _PREVIEW_RETRY_STATUSES = {408, 425, 429, 500, 502, 503, 504}
 _PREVIEW_MAX_REDIRECTS = 3
@@ -78,19 +110,25 @@ def _is_safe_preview_url(url: str) -> bool:
 
 
 def _resolve_public(host: str) -> bool:
-    """解析 hostname 并确认所有解析 IP 均为公网地址；解析失败视为不安全。"""
+    """解析 hostname 并确认所有解析 IP 均为公网地址；解析失败视为不安全。
+
+    Clash/mihomo TUN fake-ip 会把域名解析到保留段（如 198.18.0.0/15 或
+    ULA 段），由 TUN 转交给真实主机；该类环境视为可放行，其余非公网地址
+    仍然拒绝。
+    """
     try:
         infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
     except (socket.gaierror, OSError):
         return False
     if not infos:
         return False
+    fake_ip_dns = _local_dns_is_fake_ip()
     for info in infos:
         try:
             ip = ipaddress.ip_address(info[4][0])
         except ValueError:
             return False
-        if not ip.is_global:
+        if not ip.is_global and ip not in _FAKE_IP_NETWORK and not fake_ip_dns:
             return False
     return True
 

@@ -490,6 +490,13 @@
   columns: 13rem;          /* 每列最小 ~208px，列数随窗口自适应，天然瀑布 */
   column-gap: var(--sp-3);
 }
+/* 长列表渲染优化：视口外单元格跳过布局与绘制；
+   contain-intrinsic-size 记住上次渲染高度，避免滚动回填跳动。 */
+.img-cell,
+.lora-market-grid > * {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 240px;
+}
 .img-cell {
   position: relative; break-inside: avoid;
   margin-bottom: var(--sp-3);

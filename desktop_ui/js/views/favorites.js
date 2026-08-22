@@ -132,7 +132,7 @@ export class FavoritesView {
     const cell = el("div", { class: "fav-cell" }, [
       el("div", { class: "fav-thumb", tabindex: "0", role: "button", "aria-label": "预览收藏" }, [
         hasImage
-          ? el("img", { src: it.image.url, alt: it.prompt || "收藏图片", loading: "lazy" })
+          ? el("img", { src: it.image.url, alt: it.prompt || "收藏图片", loading: "lazy", decoding: "async" })
           : el("div", { class: "fav-thumb-placeholder", "aria-hidden": "true" }, [ic("fav")]),
         el("div", { class: "cell-actions" }, [
           el("button", { class: "cell-btn", type: "button", "aria-label": "编辑备注", title: "编辑备注" }, [ic("gear")]),

@@ -99,30 +99,46 @@ class LoraLlmMatchService:
         self._llm_client_cache: Any = None
         self._llm_model = ""
         self._llm_checked = False
+        self._llm_signature: tuple = ()
         self._cache_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------ LLM 配置
     def _resolve_llm(self) -> Any:
-        if self._llm_checked:
-            return self._llm_client_cache
-        self._llm_checked = True
-        client: Any = None
         try:
             snapshot = self.config.snapshot()
             resolved = resolve_provider(snapshot, "text")
             secret = self.config.get_secret(resolved.secret_name) or ""
-            if resolved.enabled and resolved.base_url and resolved.model and secret:
-                client = self.llm_client_factory(
+            signature = (
+                bool(resolved.enabled),
+                str(resolved.base_url or ""),
+                str(resolved.model or ""),
+                int(resolved.timeout_seconds or 0),
+                secret,
+            )
+        except Exception as exc:
+            logger.warning("LoRA 匹配 LLM 不可用: %s", _safe_error(exc))
+            signature = ("error",)
+            resolved = None
+        # 签名变化时重建：此前一次性缓存会让用户改完 AI Provider 后 LoRA
+        # 匹配一直沿用旧配置（或保持禁用）直到重启 sidecar。
+        if self._llm_checked and signature == self._llm_signature:
+            return self._llm_client_cache
+        self._llm_checked = True
+        self._llm_signature = signature
+        self._llm_client_cache = None
+        self._llm_model = ""
+        if resolved is not None and resolved.enabled and resolved.base_url and resolved.model and signature[-1]:
+            try:
+                self._llm_client_cache = self.llm_client_factory(
                     resolved.base_url,
-                    api_key=secret,
+                    api_key=signature[-1],
                     timeout_seconds=resolved.timeout_seconds,
                 )
                 self._llm_model = resolved.model
-        except Exception as exc:
-            logger.warning("LoRA 匹配 LLM 不可用: %s", _safe_error(exc))
-            client = None
-        self._llm_client_cache = client
-        return client
+            except Exception as exc:
+                logger.warning("LoRA 匹配 LLM 客户端构造失败: %s", _safe_error(exc))
+                self._llm_client_cache = None
+        return self._llm_client_cache
 
     def llm_enabled(self) -> bool:
         return self._resolve_llm() is not None

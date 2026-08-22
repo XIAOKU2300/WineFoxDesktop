@@ -23,6 +23,7 @@ from typing import Any, Callable, Mapping
 from civitai_api import CivitaiClient, CivitaiRedClient, HuggingFaceClient
 
 from .llm_client import OpenAICompatibleLLMClient, resolve_provider
+from . import net_env
 
 logger = logging.getLogger("winefox.runtime.lora_search")
 
@@ -100,6 +101,7 @@ class LoraSearchService:
         self._llm_client_cache: Any = None
         self._llm_model = ""
         self._llm_checked = False
+        self._llm_signature: tuple = ()
 
     # ------------------------------------------------------------------ 配置
     def _lora_download_settings(self) -> dict[str, Any]:
@@ -112,12 +114,28 @@ class LoraSearchService:
 
     def _client_kwargs(self) -> dict[str, Any]:
         settings = self._lora_download_settings()
+        # 显式代理优先；留空时回退系统代理（环境变量/注册表），换机也能开箱即用。
+        proxy, _source = net_env.effective_proxy(str(settings.get("proxy") or "").strip())
         return {
-            "proxy": str(settings.get("proxy") or "").strip(),
+            "proxy": proxy,
             "timeout": max(10, min(int(settings.get("request_timeout") or 60), 180)),
             "split": max(1, min(int(settings.get("split") or 4), 8)),
             "network_max_retries": 2,
         }
+
+    def _client_signature(self, kwargs: dict[str, Any]) -> tuple:
+        """网络相关配置签名：签名变化时重建来源客户端。
+
+        用户在设置页修改代理/超时/分片或凭据后，旧客户端仍持有创建时的
+        proxy，这是"改了代理但搜索依旧直连"的直接原因。凭据一并纳入
+        签名，避免换 Token 后继续用旧客户端。
+        """
+        secrets = (
+            self.config.get_secret("civitai_api_token"),
+            self.config.get_secret("civitai_cookie"),
+            self.config.get_secret("huggingface_api_token"),
+        )
+        return (tuple(sorted(kwargs.items())), tuple(secrets))
 
     def _per_source_search_timeout(self) -> float:
         """单个来源/关键词的时间预算，必须短于前端整次搜索预算。"""
@@ -130,10 +148,13 @@ class LoraSearchService:
 
     def _source_client(self, source: str) -> Any:
         source = str(source or "civitai").strip().lower()
-        client = self._clients.get(source)
-        if client is not None:
-            return client
         kwargs = self._client_kwargs()
+        signature = self._client_signature(kwargs)
+        cached = self._clients.get(source)
+        # 配置（代理/超时/凭据）变化时必须重建客户端，否则搜索会一直
+        # 用旧代理或直连，表现为"设置里改了代理但搜索不生效"。
+        if cached is not None and cached[0] == signature:
+            return cached[1]
         if source == "civitai_red":
             client = self.red_client_factory(
                 # civitai.red 是独立来源，绝不能把 civitai.com 的凭据转发过去。
@@ -153,30 +174,43 @@ class LoraSearchService:
                 downloader="multithread",
                 **kwargs,
             )
-        self._clients[source] = client
+        self._clients[source] = (signature, client)
         return client
 
     def _resolve_llm(self) -> Any:
-        if self._llm_checked:
-            return self._llm_client_cache
-        self._llm_checked = True
-        client: Any = None
         try:
             snapshot = self.config.snapshot()
             resolved = resolve_provider(snapshot, "text")
             secret = self.config.get_secret(resolved.secret_name) or ""
-            if resolved.enabled and resolved.base_url and resolved.model and secret:
-                client = self.llm_client_factory(
+            signature = (
+                bool(resolved.enabled),
+                str(resolved.base_url or ""),
+                str(resolved.model or ""),
+                int(resolved.timeout_seconds or 0),
+                secret,
+            )
+        except Exception as exc:
+            logger.warning("LoRA 搜索 LLM 不可用: %s", _safe_error(exc))
+            signature = ("error",)
+            resolved = None
+        if self._llm_checked and signature == self._llm_signature:
+            return self._llm_client_cache
+        self._llm_checked = True
+        self._llm_signature = signature
+        self._llm_client_cache = None
+        self._llm_model = ""
+        if resolved is not None and resolved.enabled and resolved.base_url and resolved.model and signature[-1]:
+            try:
+                self._llm_client_cache = self.llm_client_factory(
                     resolved.base_url,
-                    api_key=secret,
+                    api_key=signature[-1],
                     timeout_seconds=resolved.timeout_seconds,
                 )
                 self._llm_model = resolved.model
-        except Exception as exc:
-            logger.warning("LoRA 搜索 LLM 不可用: %s", _safe_error(exc))
-            client = None
-        self._llm_client_cache = client
-        return client
+            except Exception as exc:
+                logger.warning("LoRA 搜索 LLM 客户端构造失败: %s", _safe_error(exc))
+                self._llm_client_cache = None
+        return self._llm_client_cache
 
     def _llm_enabled(self) -> bool:
         return self._resolve_llm() is not None
@@ -203,6 +237,14 @@ class LoraSearchService:
                 "alias": "",
                 "errors": [],
             }
+        # 先探测显式代理可达性：失效时 effective_proxy 会自动回退系统代理，
+        # 避免一次死配置让整场搜索全部超时。
+        try:
+            await net_env.ensure_probed(
+                str(self._lora_download_settings().get("proxy") or "").strip()
+            )
+        except Exception:
+            pass
         family = self._normalize_family(family)
         page = max(1, min(int(page or 1), 20))
         choice_limit = max(1, min(int(limit or 20), 20))
