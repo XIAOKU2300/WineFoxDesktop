@@ -429,6 +429,7 @@ kbd {
 .setup-step-pill.is-running { color: var(--primary); border-color: var(--primary); background: var(--primary-soft); animation: dotPulse 1.6s ease-in-out infinite; }
 .setup-step-pill.is-success { color: var(--success); border-color: var(--success); background: var(--success-soft); }
 .setup-step-pill.is-failed { color: var(--danger); border-color: var(--danger); background: var(--danger-soft); }
+.setup-step-pill.is-cancelled { color: var(--muted); border-color: var(--border-strong); background: var(--surface-2); }
 .setup-step-label { font-size: var(--fs-md); font-weight: 550; overflow-wrap: anywhere; }
 .setup-step-sub { font-size: var(--fs-xs); color: var(--muted); overflow-wrap: anywhere; line-height: 1.5; margin-top: 2px; }
 .setup-step-err { font-size: var(--fs-xs); color: var(--danger); overflow-wrap: anywhere; margin-top: 4px; }

@@ -675,6 +675,7 @@ export class EnvSetupView {
     if (step.status === "running") return "进行中";
     if (step.status === "success") return "完成";
     if (step.status === "failed") return "失败";
+    if (step.status === "cancelled") return "已取消";
     return "等待";
   }
 
@@ -825,7 +826,8 @@ export class EnvSetupView {
       }
       case "step_finished": {
         const step = job.steps?.[event.step];
-        if (step) step.status = "success";
+        // 后端取消路径会发 status="cancelled"，不能一律记成功
+        if (step) step.status = event.status === "cancelled" ? "cancelled" : "success";
         // item_finished 被后端节流（0.5s），步骤收尾时清掉残留的当前项
         if (this.currentItem && this.currentItem.step === event.step) this.currentItem = null;
         if (this.currentPip) this.currentPip = null;
