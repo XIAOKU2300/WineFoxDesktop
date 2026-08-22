@@ -36,8 +36,8 @@
   --shadow-2: 0 8px 28px rgba(32, 36, 38, 0.075), 0 2px 6px rgba(32, 36, 38, 0.045);
   --shadow-3: 0 22px 64px rgba(32, 36, 38, 0.16);
 
-  --font-ui: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
-  --font-display: "Yu Mincho", "YuMincho", "MS Mincho", "Songti SC", "SimSun", serif;
+  --font-ui: "Segoe UI Variable", "Segoe UI", "NSimSun", "新宋体", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+  --font-display: "Yu Mincho", "YuMincho", "MS Mincho", "Songti SC", "NSimSun", "新宋体", "SimSun", serif;
   --font-mono: "Cascadia Mono", "Segoe UI Mono", Consolas, monospace;
   --fs-xs: 11px;
   --fs-sm: 12px;
@@ -122,11 +122,97 @@
   --btn-border: #A95770;
 }
 
+[data-theme="pink"] {
+  color-scheme: light;
+  --canvas: #FBEFF3;
+  --surface: #FFF8FA;
+  --surface-2: #F9E4EB;
+  --glass: rgba(255, 248, 250, 0.86);
+  --glass-strong: rgba(255, 248, 250, 0.96);
+  --primary: #D94A7E;
+  --primary-strong: #C13366;
+  --primary-soft: rgba(217, 74, 126, 0.11);
+  --primary-soft-2: rgba(217, 74, 126, 0.18);
+  --accent: #B76E9E;
+  --accent-soft: rgba(183, 110, 158, 0.16);
+  --aizome: #8A5F7E;
+  --aizome-soft: rgba(138, 95, 126, 0.12);
+  --text: #3A2130;
+  --text-2: #5E3A4C;
+  --muted: #8A6072;
+  --faint: #B08E9D;
+  --success: #3E8E68;
+  --success-soft: rgba(62, 142, 104, 0.12);
+  --danger: #C2334D;
+  --danger-soft: rgba(194, 51, 77, 0.10);
+  --warn: #A2651F;
+  --warn-soft: rgba(183, 110, 158, 0.18);
+  --border: rgba(58, 33, 48, 0.12);
+  --border-strong: rgba(58, 33, 48, 0.20);
+  --hairline: rgba(58, 33, 48, 0.07);
+  --ring: rgba(217, 74, 126, 0.45);
+  --shadow-1: 0 1px 2px rgba(58, 33, 48, 0.04), 0 5px 18px rgba(58, 33, 48, 0.04);
+  --shadow-2: 0 8px 28px rgba(58, 33, 48, 0.08), 0 2px 6px rgba(58, 33, 48, 0.05);
+  --shadow-3: 0 22px 64px rgba(58, 33, 48, 0.17);
+}
+
+[data-theme="pink"] .btn-primary {
+  --btn-bg: #D94A7E;
+  --btn-bg-hover: #E55E90;
+  --btn-fg: #FFFFFF;
+  --btn-border: #D94A7E;
+}
+
+/* 减少动画 · 性能优先套装：显式开启（html[data-motion=reduce]）或
+   系统开启（且用户未强制完整动画）时生效。老机器收益来自：
+   动画时长归零、背景模糊禁用、动态网格背景隐藏、阴影轻量化、
+   hover 位移取消 —— 这些是 WebView 渲染最贵的部分。 */
 @media (prefers-reduced-motion: reduce) {
-  :root {
+  html:not([data-motion="full"]) {
     --dur-fast: 0ms;
     --dur: 0ms;
     --dur-slow: 0ms;
     --dur-scene: 0ms;
+    --shadow-2: 0 2px 8px rgba(0, 0, 0, 0.10);
+    --shadow-3: 0 8px 24px rgba(0, 0, 0, 0.16);
   }
+  html:not([data-motion="full"]) *,
+  html:not([data-motion="full"]) *::before,
+  html:not([data-motion="full"]) *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+  html:not([data-motion="full"]) body::before { display: none; }
+  html:not([data-motion="full"]) * {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+  html:not([data-motion="full"]) .img-cell:hover,
+  html:not([data-motion="full"]) .btn:hover { transform: none !important; }
 }
+
+html[data-motion="reduce"] {
+  --dur-fast: 0ms;
+  --dur: 0ms;
+  --dur-slow: 0ms;
+  --dur-scene: 0ms;
+  --shadow-2: 0 2px 8px rgba(0, 0, 0, 0.10);
+  --shadow-3: 0 8px 24px rgba(0, 0, 0, 0.16);
+}
+html[data-motion="reduce"] *,
+html[data-motion="reduce"] *::before,
+html[data-motion="reduce"] *::after {
+  animation-duration: 1ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 1ms !important;
+  scroll-behavior: auto !important;
+}
+html[data-motion="reduce"] body::before { display: none; }
+html[data-motion="reduce"] * {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+html[data-motion="reduce"] .img-cell:hover,
+html[data-motion="reduce"] .btn:hover { transform: none !important; }

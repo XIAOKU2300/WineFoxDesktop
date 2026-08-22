@@ -263,14 +263,52 @@ function bindConnectionRetry() {
   $("#conn-retry")?.addEventListener("click", () => refreshHealth({ manual: true }));
 }
 
+/* ============ 减少动画 · 性能优先引擎 ============
+ * 设置里的勾选项保存后立即生效（无需重启）：
+ *   勾选（默认）→ 跟随系统 prefers-reduced-motion，且低配设备（≤4 核或 ≤4GB）
+ *                 自动启用全套性能优化——这是老机器最直接的效果改变；
+ *   取消勾选   → 强制完整动画（html[data-motion=full]），无视系统设置。
+ * 生效载体是 <html data-motion>，CSS 性能套装见 tokens.css。 */
+function isLowPowerDevice() {
+  try {
+    const mem = navigator.deviceMemory || navigator.deviceMemory === 0 ? navigator.deviceMemory : Infinity;
+    const cores = navigator.hardwareConcurrency || Infinity;
+    return mem <= 4 || cores <= 4;
+  } catch { return false; }
+}
+
+function applyMotionPreference() {
+  const root = document.documentElement;
+  let pref = "1";
+  try { pref = localStorage.getItem("wfx-reduced-motion") ?? "1"; } catch { /* 忽略 */ }
+  if (pref === "0") {
+    root.dataset.motion = "full";
+    return;
+  }
+  const systemReduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (systemReduce || isLowPowerDevice()) root.dataset.motion = "reduce";
+  else delete root.dataset.motion;
+}
+
+window.__wfxApplyMotion = applyMotionPreference;
+window.__wfxReducedMotion = () =>
+  document.documentElement.dataset.motion === "reduce" ||
+  (!document.documentElement.dataset.motion &&
+    matchMedia("(prefers-reduced-motion: reduce)").matches === true);
+
 function bindTheme() {
   store.applyTheme();
+  applyMotionPreference();
+  try {
+    matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change", applyMotionPreference);
+  } catch { /* 旧内核无 addEventListener */ }
+  const THEME_TOASTS = { light: "已切换浅色主题", dark: "已切换深色主题", pink: "已切换猛男粉主题" };
   const toggle = () => {
     const change = () => store.toggleTheme();
-    const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const reduced = window.__wfxReducedMotion();
     if (!reduced && document.startViewTransition) document.startViewTransition(change);
     else change();
-    toast(store.get("theme") === "dark" ? "已切换深色主题" : "已切换浅色主题", "info");
+    toast(THEME_TOASTS[store.get("theme")] || "已切换主题", "info");
   };
   $("#theme-toggle")?.addEventListener("click", toggle);
   document.addEventListener("keydown", (event) => {

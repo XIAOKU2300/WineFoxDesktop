@@ -566,14 +566,16 @@ export class SettingsView {
           el("div", { class: "field" }, [
             el("label", {}, "主题"),
             el("div", { class: "row gap-2" }, [
-              el("button", { class: "cat-chip", type: "button", id: "s-theme-light", "aria-pressed": store.get("theme") !== "dark" ? "true" : "false" }, "浅色"),
+              el("button", { class: "cat-chip", type: "button", id: "s-theme-light", "aria-pressed": store.get("theme") === "light" ? "true" : "false" }, "浅色"),
               el("button", { class: "cat-chip", type: "button", id: "s-theme-dark", "aria-pressed": store.get("theme") === "dark" ? "true" : "false" }, "深色"),
+              el("button", { class: "cat-chip", type: "button", id: "s-theme-pink", "aria-pressed": store.get("theme") === "pink" ? "true" : "false" }, "猛男粉"),
             ]),
+            el("span", { class: "hint" }, "顶栏按钮或按 T 键循环切换。"),
           ]),
           el("label", { class: "check" }, [
             el("input", { type: "checkbox", id: "s-reduced", checked: u.reduced_motion ?? true }),
             el("span", { class: "box" }, [ic("check")]),
-            el("span", {}, esc("跟随系统减少动画（prefers-reduced-motion）")),
+            el("span", {}, esc("减少动画 · 性能优先（跟随系统设置；低配设备自动启用）")),
           ]),
         ]),
       ]),
@@ -608,10 +610,9 @@ export class SettingsView {
       if (e.target.closest("#s-lora-test")) {
         void this.testLoraConnection();
       }
-      const t = e.target.closest("#s-theme-light") || e.target.closest("#s-theme-dark");
+      const t = e.target.closest("#s-theme-light") || e.target.closest("#s-theme-dark") || e.target.closest("#s-theme-pink");
       if (t) {
-        const wantsDark = t.id === "s-theme-dark";
-        if ((store.get("theme") === "dark") !== wantsDark) store.toggleTheme();
+        store.setTheme(t.id === "s-theme-light" ? "light" : t.id === "s-theme-dark" ? "dark" : "pink");
         $$(".cat-chip[aria-pressed]", body).forEach((c) => c.setAttribute("aria-pressed", "false"));
         t.setAttribute("aria-pressed", "true");
       }
@@ -820,6 +821,11 @@ export class SettingsView {
       };
     } else if (section === "ui") {
       patch.ui = { reduced_motion: checked("s-reduced") };
+      // 立即生效，不必等后端持久化完成
+      try {
+        localStorage.setItem("wfx-reduced-motion", checked("s-reduced") ? "1" : "0");
+        window.__wfxApplyMotion?.();
+      } catch { /* 忽略 */ }
     }
     this.saving = true;
     if (button) disabledButton(button, true, "保存中…");
