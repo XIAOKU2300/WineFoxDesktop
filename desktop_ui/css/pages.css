@@ -13,7 +13,7 @@
 }
 .brand { display: flex; align-items: center; gap: var(--sp-3); min-width: 0; }
 .brand-mark {
-  width: 28px; height: 28px; flex: none; color: var(--primary);
+  width: 38px; height: 38px; flex: none;
 }
 .brand-name { font-size: var(--fs-lg); font-weight: 650; letter-spacing: 0; white-space: nowrap; }
 .brand-name em { font-style: normal; color: var(--accent); font-weight: 650; }
@@ -301,11 +301,10 @@
 }
 .gw-orbit-2::after { top: auto; bottom: -3px; background: var(--primary); box-shadow: 0 0 10px var(--primary); }
 .gw-core {
-  position: absolute; inset: 34px; display: grid; place-items: center;
-  border: 1px solid var(--primary); border-radius: 50%;
-  font-family: var(--font-display); font-size: 24px; color: var(--primary);
+  position: absolute; inset: 22px;
   animation: gwFloat 3.2s var(--ease-in-out) infinite;
 }
+.gw-core img { width: 100%; height: 100%; object-fit: contain; display: block; }
 
 /* 进度覆盖层 */
 .gen-progress {

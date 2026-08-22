@@ -70,7 +70,7 @@ export function loadingState(label = "正在加载", { compact = false } = {}) {
   }, [
     el("div", { class: "wfx-loading-mark", "aria-hidden": "true" }, [
       el("span", { class: "wfx-loading-ink" }),
-      el("span", { class: "wfx-loading-seal" }, "狐"),
+      el("span", { class: "wfx-loading-seal" }, [el("img", { src: "assets/app-logo.png", alt: "" })]),
     ]),
     el("span", { class: "wfx-loading-label" }, label),
   ]);

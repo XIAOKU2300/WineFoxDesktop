@@ -103,3 +103,18 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible {
 
 /* 隐藏但保留动画/滚动容器 */
 .scroll-y { overflow-y: auto; min-height: 0; }
+
+/* ================= 桌面应用文本选择策略 =================
+ * 界面文字默认不可选中复制（原生桌面手感）；输入框、日志、预览参数等
+ * 用户确有复制需求的区域显式放行。 */
+html, body {
+  user-select: none;
+  -webkit-user-select: none;
+}
+input, textarea, select,
+[contenteditable="true"],
+.log-box, .pm-val, .pm-block, pre, code, .mono {
+  user-select: text;
+  -webkit-user-select: text;
+}
+img { -webkit-user-drag: none; }
