@@ -577,7 +577,12 @@ class DesktopEngine:
             await self._queue.put(int(row["id"]))
         self._worker = asyncio.create_task(self._worker_loop(), name="winefox-job-worker")
         # 启动后台扫一次本机 LoRA 目录：把已有权重登记进本地库（幂等、尽力而为）
-        asyncio.create_task(self._background_scan_local_loras())
+        # task 持引用防 GC，完成自清理
+        if not hasattr(self, "_bg_tasks"):
+            self._bg_tasks: set[asyncio.Task] = set()
+        scan_task = asyncio.create_task(self._background_scan_local_loras(), name="winefox-lora-scan-startup")
+        self._bg_tasks.add(scan_task)
+        scan_task.add_done_callback(self._bg_tasks.discard)
 
     async def _background_scan_local_loras(self) -> None:
         try:

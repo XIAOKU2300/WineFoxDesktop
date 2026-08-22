@@ -579,51 +579,65 @@ class LoraLibraryService:
                 if key and key not in profiles_by_file:
                     character = str(profile.get("character") or rec.display_key or "")
                     profiles_by_file[key] = (family, rec.display_key, character)
+        # 文件系统扫描放线程池：大目录 iterdir/is_file/resolve 是同步 IO，
+        # 直接跑会阻塞事件循环（启动后台扫描、设置保存自动扫描都会触发）
+        candidates = await asyncio.to_thread(self._scan_lora_files, dirs)
         known: set[tuple[str, str]] = set()
         for asset in self.asset_store.list(limit=5000):
             known.add((asset.model_family, normalize_lora_key(asset.filename)))
         added = 0
         matched = 0
-        seen_files: set[str] = set()
+        for filename, parent_lower in candidates:
+            key = normalize_lora_key(filename)
+            if not key:
+                continue
+            profile_hit = profiles_by_file.get(key)
+            if profile_hit is not None:
+                family, _display, character = profile_hit
+            else:
+                family = "anima" if "anima" in parent_lower else "illustrious"
+                character = ""
+            if (family, key) in known:
+                continue
+            self.asset_store.register(
+                family,
+                filename,
+                display_name=character or Path(filename).stem,
+                source="local",
+                info={"scanned": True},
+            )
+            known.add((family, key))
+            added += 1
+            if profile_hit is not None:
+                matched += 1
+        return {
+            "added": added,
+            "matched_profiles": matched,
+            "scanned_dirs": [str(d) for d in dirs],
+        }
+
+    @staticmethod
+    def _scan_lora_files(dirs: list[Path]) -> list[tuple[str, str]]:
+        """同步扫描目录，返回 (文件名, 父目录小写) 列表（跨目录去重、按名排序）。"""
+        results: list[tuple[str, str]] = []
+        seen: set[str] = set()
         for directory in dirs:
             try:
                 entries = sorted(directory.iterdir())
             except OSError:
                 continue
             for entry in entries:
-                if not entry.is_file() or entry.suffix.lower() not in self._SCAN_SUFFIXES:
+                try:
+                    if not entry.is_file() or entry.suffix.lower() not in LoraLibraryService._SCAN_SUFFIXES:
+                        continue
+                    resolved = str(entry.resolve())
+                except OSError:
                     continue
-                resolved = str(entry.resolve())
-                if resolved in seen_files:
+                if resolved in seen:
                     continue
-                seen_files.add(resolved)
-                key = normalize_lora_key(entry.name)
-                if not key:
-                    continue
-                profile_hit = profiles_by_file.get(key)
-                if profile_hit is not None:
-                    family, _display, character = profile_hit
-                else:
-                    family = "anima" if "anima" in str(entry.parent).lower() else "illustrious"
-                    character = ""
-                if (family, key) in known:
-                    continue
-                self.asset_store.register(
-                    family,
-                    entry.name,
-                    display_name=character or entry.stem,
-                    source="local",
-                    info={"scanned": True},
-                )
-                known.add((family, key))
-                added += 1
-                if profile_hit is not None:
-                    matched += 1
-        return {
-            "added": added,
-            "matched_profiles": matched,
-            "scanned_dirs": [str(d) for d in dirs],
-        }
+                seen.add(resolved)
+                results.append((entry.name, str(entry.parent).lower()))
+        return results
 
     # -- 匹配预览 ------------------------------------------------------------
 
