@@ -15,7 +15,7 @@
       "huggingface.co", "hf-mirror.com",
       "github.com", "raw.githubusercontent.com", "objects.githubusercontent.com",
       "github-releases.githubusercontent.com", "release-assets.githubusercontent.com",
-      "codeload.github.com",
+      "codeload.github.com", "ghfast.top", "gh-proxy.com",
       "www.python.org", "mirrors.huaweicloud.com", "registry.npmmirror.com",
       "bootstrap.pypa.io",
       "pypi.org", "files.pythonhosted.org",
@@ -70,9 +70,15 @@
     },
     "comfyui": {
       "sources": [
-        {"host": "codeload.github.com", "url": "https://codeload.github.com/comfyanonymous/ComfyUI/zip/refs/heads/master"}
+        {"host": "codeload.github.com", "url": "https://codeload.github.com/comfyanonymous/ComfyUI/zip/refs/heads/master"},
+        {"host": "ghfast.top", "url": "https://ghfast.top/https://codeload.github.com/comfyanonymous/ComfyUI/zip/refs/heads/master"},
+        {"host": "gh-proxy.com", "url": "https://gh-proxy.com/https://codeload.github.com/comfyanonymous/ComfyUI/zip/refs/heads/master"}
       ]
     },
+    "github_mirror_prefixes": [
+      "https://ghfast.top/",
+      "https://gh-proxy.com/"
+    ],
     "pip": {
       "index_urls": [
         "https://pypi.tuna.tsinghua.edu.cn/simple",
@@ -461,6 +467,7 @@
       {"step": "requirements"},
       {"step": "nodes", "group": "minimal"},
       {"step": "models", "group": "core"},
+      {"step": "manual_resolve"},
       {"step": "bridge"}
     ],
     "lite": [
@@ -474,6 +481,18 @@
       {"step": "nodes", "group": "hq"},
       {"step": "nodes", "group": "anima"},
       {"step": "nodes", "group": "wan"},
+      {"step": "bridge"}
+    ],
+    "complete_manual": [
+      {"step": "nodes", "group": "minimal"},
+      {"step": "models", "group": "minimal"},
+      {"step": "nodes", "group": "hq"},
+      {"step": "nodes", "group": "anima"},
+      {"step": "models", "group": "anima"},
+      {"step": "nodes", "group": "wan"},
+      {"step": "models", "group": "wan"},
+      {"step": "models", "group": "wan_clip_vision"},
+      {"step": "manual_resolve"},
       {"step": "bridge"}
     ],
     "complete": [

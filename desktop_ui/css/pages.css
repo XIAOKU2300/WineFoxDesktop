@@ -1066,27 +1066,20 @@
 .lora-detail-preview.is-shared-pending.is-shared-complete img { opacity: 1 !important; transition: none !important; }
 
 /* ================= 详情浮层编排 =================
- * 遮罩 = 实色墨色层 + 独立恒定模糊层，各自只动 opacity。
- * 旧版把 backdrop-filter 从 blur(0) 插值到 blur(9px)，等于每帧对整页
- * 重新滤波，是“一卡一卡”的另一元凶；恒定半径 + 透明度过渡可完全交给合成器。 */
+ * 遮罩只用一层实色墨色，淡入交给合成器。曾有独立 backdrop-filter 模糊层：
+ * Chromium 在模糊层参与合成的首帧会出现整屏黑闪（老 GPU 尤其明显），
+ * 且整页模糊本身是 WebView 最贵的渲染效果之一——直接移除，双重收益。 */
 .lora-detail-overlay {
   animation: none;
   opacity: 0;
-  background: rgba(19, 17, 20, .42);
+  background: rgba(19, 17, 20, .52);
   backdrop-filter: none;
   transition: opacity 320ms var(--ease-out);
 }
-.lora-detail-overlay::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  backdrop-filter: blur(9px) saturate(114%);
-  opacity: 0;
-  transition: opacity 320ms var(--ease-out);
-}
-.lora-detail-overlay.is-visible,
-.lora-detail-overlay.is-visible::before { opacity: 1; }
+[data-theme="dark"] .lora-detail-overlay { background: rgba(8, 6, 8, .64); }
+[data-theme="pink"] .lora-detail-overlay { background: rgba(58, 33, 48, .38); }
+.lora-detail-overlay::before { content: none; }
+.lora-detail-overlay.is-visible { opacity: 1; }
 /* 面板自身：opacity + transform 入场（去掉旧版整面板 blur(3px) 滤镜过渡）；
  * 轻微 60ms 延迟让飞行图先动、纸面随后铺开，层级更从容。 */
 .lora-detail-overlay .modal {
@@ -1126,6 +1119,22 @@
 }
 .lora-detail-overlay.is-visible:not(.is-shared-transfer) .lora-detail-content { transition-delay: 40ms; }
 .lora-detail-overlay.is-visible:not(.is-shared-transfer) .modal-foot { transition-delay: 80ms; }
+/* 大卡片内可复制内容：标题、事实值、触发词与标签整词选中，
+ * 方便用户把触发词直接复制进提示词。 */
+.lora-detail-overlay .lora-detail-title,
+.lora-detail-overlay .lora-detail-facts,
+.lora-detail-overlay .lora-detail-facts * {
+  user-select: text;
+  -webkit-user-select: text;
+}
+.lora-detail-overlay .lora-detail-title { cursor: text; }
+.lora-detail-overlay .lora-detail-tags .tag {
+  user-select: all;
+  -webkit-user-select: all;
+  cursor: text;
+}
+.lora-detail-foot-alias { flex: 1; min-width: 180px; }
+
 /* 关闭：墨色层与面板同步收拢，为返航飞行让路。 */
 .lora-detail-overlay.is-closing,
 .lora-detail-overlay.is-closing::before { opacity: 0; transition-duration: 200ms; }

@@ -648,7 +648,7 @@ export class LoraLibraryView {
     const modal = el("div", { class: "modal lora-detail-modal" }, [
       el("div", { class: "modal-head" }, [
         el("div", { class: "lora-detail-heading" }, [
-          el("h3", { id: "lora-detail-title" }, esc(label)),
+          el("h3", { id: "lora-detail-title", class: "lora-detail-title" }, esc(label)),
           el("div", { class: "lora-detail-badges" }, [
             el("span", { class: "badge neutral" }, source),
             item.nsfw ? el("span", { class: "badge warn" }, "敏感") : null,
@@ -662,8 +662,10 @@ export class LoraLibraryView {
           el("div", { class: "lora-detail-facts" }, [
             this.detailFact("版本", item.version_name || "未提供"),
             this.detailFact("底模", item.base_model || "未知"),
+            this.detailFact("文件", item.file_name || "未提供"),
             this.detailFact("下载", item.download_count ? Number(item.download_count).toLocaleString() : "暂无数据"),
             this.detailFact("收藏", item.heart_count ? Number(item.heart_count).toLocaleString() : "暂无数据"),
+            this.detailFact("模型 ID", item.model_id || "—"),
           ]),
           el("section", { class: "lora-detail-section" }, [
             el("h4", {}, "触发词"),
@@ -675,14 +677,36 @@ export class LoraLibraryView {
             el("h4", {}, "标签"),
             el("div", { class: "lora-detail-tags" }, tags.map((tag) => el("span", { class: "tag" }, esc(tag)))),
           ]) : null,
+          el("section", { class: "lora-detail-section" }, [
+            el("h4", {}, "安装信息"),
+            el("p", { class: "hint" }, "安装时可填写中文别称，便于之后用中文直接匹配这个角色；来源与类型已自动识别。"),
+          ]),
         ]),
       ]),
       el("div", { class: "modal-foot" }, [
-        el("button", { class: "btn btn-primary", type: "button", dataset: { loraDetailClose: "" } }, "关闭"),
+        el("input", {
+          class: "input lora-detail-foot-alias",
+          type: "text",
+          maxlength: "80",
+          placeholder: "中文别称（可选）",
+          "aria-label": `${label} 的中文别称`,
+        }),
+        el("button", { class: "btn btn-primary", type: "button", dataset: { loraDownload: item.id } }, [ic("download"), esc("安装")]),
+        el("button", { class: "btn", type: "button", dataset: { loraDetailClose: "" } }, "关闭"),
       ]),
     ]);
     overlay.append(modal);
     document.body.append(overlay);
+    // 浮层挂在 body 下（root 之外），安装按钮单独委托；点击后带回别称并关闭浮层。
+    overlay.addEventListener("click", (event) => {
+      const downloadBtn = event.target.closest("[data-lora-download]");
+      if (downloadBtn && !downloadBtn.disabled) {
+        const aliasValue = modal.querySelector(".lora-detail-foot-alias")?.value?.trim() || "";
+        downloadBtn.dataset.loraAlias = aliasValue;
+        void this.startOnlineDownload(downloadBtn);
+        close();
+      }
+    });
 
     let closed = false;
     const reduceMotion = window.__wfxReducedMotion?.() === true;
@@ -978,9 +1002,12 @@ export class LoraLibraryView {
 
   async startOnlineDownload(button) {
     const row = button.closest(".lora-search-result");
-    const state = $(".lora-download-state", row);
-    const alias = $(".lora-alias-input", row)?.value?.trim() || "";
+    const state = row ? $(".lora-download-state", row) : null;
+    const alias = row
+      ? ($(".lora-alias-input", row)?.value?.trim() || "")
+      : (button.dataset.loraAlias || "");
     const item = this.onlineResults.find((entry) => String(entry.id) === button.dataset.loraDownload);
+    if (!row && item) toast(`开始安装：${item.name || "LoRA"}`, "ok");
     if (!item) return;
     let adultConsent = false;
     if (item.nsfw) {

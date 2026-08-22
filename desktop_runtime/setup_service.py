@@ -304,6 +304,7 @@ class Planner:
         "comfyui": "获取 ComfyUI 本体（GitHub 官方）",
         "python_runtime": "安装 Python 运行时（python.org 官方）",
         "requirements": "安装 PyTorch 与依赖（GPU 自动检测）",
+        "manual_resolve": "自动解析缺失文件（Civitai 检索）",
     }
 
     def plan_for_profile(self, status: EnvironmentStatus, profile: str, *, only_missing: bool = False) -> Plan:

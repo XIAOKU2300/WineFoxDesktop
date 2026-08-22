@@ -172,7 +172,15 @@ async def handle_catalog(request: web.Request) -> web.Response:
     engine = _ctx(request).get("engine")
     if engine is None:
         raise AppError(503, "core_engine_not_configured", "核心引擎未注入")
-    return _json(await engine.get_catalog())
+    result = await engine.get_catalog()
+    # 节点列表改由本地文件系统枚举（已安装 + 清单缺失），ComfyUI 离线也可见。
+    setup = _ctx(request).get("setup")
+    if setup is not None:
+        try:
+            result["nodes"] = await setup.nodes_overview()
+        except Exception:
+            logger.warning("节点枚举失败，回退引擎数据", exc_info=True)
+    return _json(result)
 
 
 async def handle_lora_search(request: web.Request) -> web.Response:

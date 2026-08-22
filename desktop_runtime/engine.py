@@ -208,7 +208,19 @@ class DesktopEngine:
             on_profiles_changed=self._on_lora_profiles_changed,
             settings_fn=self.config.snapshot,
             llm_service=self._lora_llm_match,
+            preview_service=self.lora_preview,
+            civitai_client_factory=self._civitai_client_for_library,
         )
+
+    def _civitai_client_for_library(self, **kwargs):
+        """为库补图构造 Civitai 客户端：凭据来自 SecretStore，代理来自设置。"""
+        try:
+            from civitai_api import CivitaiClient
+
+            kwargs.setdefault("api_token", self.config.get_secret("civitai_api_token") or "")
+            return CivitaiClient(**kwargs)
+        except Exception:
+            return None
 
     def _lora_search_service_factory(self, *, config: Any, data_root: Path) -> Any:
         """构造 LoraSearchService，把预览服务注入结果，使搜索结果带 preview_token。"""

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -88,6 +89,8 @@ class LoraLibraryService:
         on_profiles_changed: Callable | None = None,
         settings_fn: Callable[[], Any] | None = None,
         llm_service: Any = None,
+        preview_service: Any = None,
+        civitai_client_factory: Callable[..., Any] | None = None,
     ) -> None:
         self._db = db
         self.data_root = Path(data_root)
@@ -97,6 +100,9 @@ class LoraLibraryService:
         self.on_profiles_changed = on_profiles_changed
         self.settings_fn = settings_fn
         self.llm_service = llm_service
+        self.preview_service = preview_service
+        self.civitai_client_factory = civitai_client_factory
+        self._preview_backfilled: set[int] = set()
 
     # -- 配置 ----------------------------------------------------------------
 
@@ -223,7 +229,66 @@ class LoraLibraryService:
         )
         if not include_quarantined:
             records = [r for r in records if r.state != "quarantined"]
+        self._schedule_preview_backfill(records)
         return [self._asset_public(r) for r in records]
+
+    def _schedule_preview_backfill(self, records: list) -> None:
+        """旧版本安装的资产可能没有预览：后台按 Civitai 版本信息补全缩略图。
+
+        每次列表最多补 3 个，避免一次性打爆 Civitai；结果落盘缓存，刷新后可见。
+        """
+        if self.preview_service is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        pending = [
+            r for r in records
+            if r.preview_key is None
+            and getattr(r, "version_id", None)
+            and str(r.version_id).isdigit()
+            and r.id not in self._preview_backfilled
+        ][:3]
+        for record in pending:
+            self._preview_backfilled.add(record.id)
+            loop.create_task(self._backfill_one_preview(record))
+
+    async def _backfill_one_preview(self, record) -> None:
+        if self.civitai_client_factory is None:
+            return
+        try:
+            from civitai_api import CivitaiClient
+
+            from . import net_env
+
+            settings = self._settings()
+            proxy, _src = net_env.effective_proxy(str(settings.get("proxy") or ""))
+            token = ""
+            if self.settings_fn is not None:
+                # secret 不在 settings 快照里，交由 engine 注入的工厂处理凭据。
+                token = ""
+            client = self.civitai_client_factory(
+                api_token=token, proxy=proxy, timeout=45
+            ) or CivitaiClient(api_token=token, proxy=proxy, timeout=45)
+            version = await client.get_model_version(int(record.version_id))
+            images = [i for i in (version.get("images") or []) if isinstance(i, dict)]
+            image_url = ""
+            for image in images:
+                url = str(image.get("url") or "").strip()
+                if url:
+                    image_url = url
+                    break
+            if not image_url:
+                return
+            key = self.preview_service.register("", image_url, source="civitai")
+            if not key:
+                return
+            await self.preview_service.fetch(str(key))
+            self.asset_store.set_preview(record.id, str(key))
+        except Exception:
+            # 补图是尽力而为：失败不再重试本次会话（_preview_backfilled 已标记）。
+            return
 
     def get(self, asset_id: int) -> dict:
         return self._asset_public(self._require_asset(asset_id))
