@@ -73,3 +73,4 @@ git提交.py
 .claude/
 .kagent/
 comfyui_custom_nodes/ComfyUI-AstrBot-LoraBridge/config.json
+.tmp_*
