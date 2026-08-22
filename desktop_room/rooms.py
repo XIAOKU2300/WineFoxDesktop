@@ -39,17 +39,21 @@ MAX_JOIN_IP_KEY_LENGTH = 64
 def _client_ip(request: web.Request) -> str:
     """限流用客户端 IP 键。
 
-    网关只监听 127.0.0.1，公网流量必经 Cloudflare 隧道，因此优先信任
-    CF-Connecting-IP（由 CF 覆写，不可被访客伪造）；其次取 X-Forwarded-For 的
-    **最后**一项（代理链把真实远端 IP 追加在尾部，取末项可抵抗伪造头）。
-    直接连回环的请求退回 request.remote。
+    仅当请求确实经由用户配置并验证过的隧道域名到达（Host 命中
+    allow_tunnel_hosts，见 gateway.host_origin_middleware）时才采信
+    CF-Connecting-IP / X-Forwarded-For：此时 remote 是隧道服务端地址，
+    所有访客共享同一个 remote，只能依赖代理头区分来源。
+    其余路径（回环 / 局域网直连 / 房主令牌代理）remote 即真实对端 IP，
+    这两个头可被客户端任意伪造，一律不采信，否则按 IP 限流可被绕过。
     """
-    cf = request.headers.get("CF-Connecting-IP")
-    if cf:
-        return cf.strip()[:MAX_JOIN_IP_KEY_LENGTH] or "unknown"
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[-1].strip()[:MAX_JOIN_IP_KEY_LENGTH] or "unknown"
+    hostname = (request.headers.get("Host") or "").lower().split(":", 1)[0].strip("[]")
+    if hostname in request.app.get("allow_tunnel_hosts", ()):
+        cf = request.headers.get("CF-Connecting-IP")
+        if cf:
+            return cf.strip()[:MAX_JOIN_IP_KEY_LENGTH] or "unknown"
+        forwarded = request.headers.get("X-Forwarded-For")
+        if forwarded:
+            return forwarded.split(",")[-1].strip()[:MAX_JOIN_IP_KEY_LENGTH] or "unknown"
     return (request.remote or "unknown")[:MAX_JOIN_IP_KEY_LENGTH]
 
 

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from aiohttp import web
@@ -13,7 +14,7 @@ from aiohttp import web
 from . import protocol
 from .auth import error_response, resolve_member
 from .models import member_public, message_payload
-from .security import hash_password
+from .security import contains_lone_surrogate, hash_password
 from .storage import RoomStorage
 from .websocket import notify_member_left
 
@@ -172,7 +173,10 @@ async def _password_handler(request: web.Request) -> web.Response:
     password = str(body.get("password") or "")
     if len(password) < 4 or len(password) > 128:
         return error_response("密码长度需为 4-128 个字符", "INVALID_PASSWORD", 400)
-    algorithm, params_json, salt_b64, hash_b64 = hash_password(password)
+    if contains_lone_surrogate(password):
+        # 含孤立代理字符时 encode("utf-8") 会抛 UnicodeEncodeError，提前拒绝
+        return error_response("密码包含不支持的字符", "INVALID_CHARACTERS", 400)
+    algorithm, params_json, salt_b64, hash_b64 = await asyncio.to_thread(hash_password, password)
     storage: RoomStorage = request.app["room_storage"]
     storage.update_room_password(
         int(request.app["room_id"]),

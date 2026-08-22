@@ -865,6 +865,9 @@ export class SettingsView {
       ]),
     ];
     this.bindAboutEvents();
+    // “关于”分区每次重建都会走到这里，先退订旧监听再注册，
+    // 否则每轮 保存→重开 会净增一个永不移除的全局监听器。
+    if (this._aboutUnsub) this._aboutUnsub();
     this._aboutUnsub = updateBridge.onState((state) => this.renderUpdateState(state));
     updateBridge.getState().then((res) => {
       if (res.ok) this.renderUpdateState(res.state);

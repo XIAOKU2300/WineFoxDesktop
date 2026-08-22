@@ -133,7 +133,11 @@ def _iter_text_files(root: Path):
         if not path.is_file():
             continue
         rel = str(path.relative_to(root)).replace("\\", "/")
-        if any(part in HEAVY_DIRS for part in path.parts):
+        # Filter on the path RELATIVE to the scan root: path.parts contains
+        # every ancestor of the absolute path (e.g. packaging/dist/...), which
+        # would silently skip the entire scan when the root sits under a
+        # directory named dist/build/target and gate every check to a fake PASS.
+        if any(part in HEAVY_DIRS for part in rel.split("/")):
             continue
         if path.suffix.lower() in SKIP_SUFFIXES:
             continue

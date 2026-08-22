@@ -33,7 +33,15 @@ class StdinControl(threading.Thread):
                     continue
                 self._dispatch(line)
         except (EOFError, OSError):
-            return
+            pass
+        # stdin EOF / broken pipe = the shell process is gone. Exit now so we
+        # never outlive the parent (the stdin-EOF watchdog contract the Rust
+        # shell relies on when Job Object assignment fails, see job_object.rs).
+        try:
+            protocol.emit_log("info", "stdin closed (parent exited); stopping")
+        except Exception:
+            pass
+        os._exit(0)
 
     def _dispatch(self, line: str) -> None:
         try:

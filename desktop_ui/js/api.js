@@ -179,7 +179,9 @@ export class JobPoller {
 
   watch(jobId) {
     this.active.add(jobId);
-    if (!this.timer) this._poll(jobId, 200);
+    // 不能依赖 this.timer 判断：取消任务后残留的退避定时器会让新任务
+    // 永远等不到轮询链。每个任务独立起链，_poll 内部有终态自清理。
+    this._poll(jobId, 200);
   }
 
   _intervalFor(status) {
@@ -197,8 +199,8 @@ export class JobPoller {
       delay = this._intervalFor(job.status);
       this.onUpdate?.(job);
       if (["completed", "failed", "cancelled", "detached"].includes(job.status)) {
-        this.active.delete(jobId);
-        this.onDone?.(job);
+        // delete 返回 false 说明另一条链已处理过终态，避免重复 onDone
+        if (this.active.delete(jobId)) this.onDone?.(job);
         if (!this.active.size) return;
       }
     } catch (e) {

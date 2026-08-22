@@ -8,6 +8,7 @@ import re
 import shutil
 import time
 from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qs, quote, urlencode, urljoin, urlparse
 
 import aiohttp

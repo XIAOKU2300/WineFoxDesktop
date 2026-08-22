@@ -396,7 +396,9 @@ def execute_plan(
             if _safe_sha256(target) == item.sha256:
                 report.skipped_existing.append(item)
                 continue
-            if item.detail.get("conflict") and not overwrite_conflicts:
+            if not overwrite_conflicts:
+                # 以执行时的真实差异为准，不依赖建计划时的旁路标记
+                # （build_plan 不带 dest_root 时 detail["conflict"] 恒缺失）。
                 report.skipped_conflict.append(item)
                 continue
         if dry_run:

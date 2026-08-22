@@ -672,6 +672,8 @@ class GptMagicStore:
         try:
             loaded = json.loads(self.file.read_text(encoding="utf-8"))
             if not isinstance(loaded, dict):
+                # 结构损坏同样先留档再回退默认，避免半截文件被静默覆盖。
+                self._backup_corrupt_file()
                 return defaults
             loaded["config"] = _deep_merge(self.schema_defaults, loaded.get("config", {}))
             loaded.setdefault("users", {})
@@ -685,7 +687,17 @@ class GptMagicStore:
             return loaded
         except Exception as e:
             logger.warning(f"[GPT Magic] 读取 db.json 失败，使用默认数据: {e}")
+            self._backup_corrupt_file()
             return defaults
+
+    def _backup_corrupt_file(self) -> None:
+        """把损坏的 db.json 改名留档，避免随后的 save() 用空默认值覆盖掉仅存的现场。"""
+        try:
+            if self.file.exists():
+                stamp = time.strftime("%Y%m%d-%H%M%S")
+                self.file.replace(self.file.with_name(f"db.json.corrupt-{stamp}"))
+        except OSError as e:
+            logger.warning(f"[GPT Magic] db.json 损坏备份失败: {e}")
 
     def _iter_leaf_paths(self, value: Any, prefix: Tuple[str, ...] = ()):
         if isinstance(value, dict):
@@ -759,7 +771,20 @@ class GptMagicStore:
         self.ensure_dir()
         self.data.setdefault("config", {}).setdefault("stats", {})
         self.data["config"]["stats"]["updated_at"] = _now_ms()
-        self.file.write_text(json.dumps(self.data, ensure_ascii=False, indent=2), encoding="utf-8")
+        payload = json.dumps(self.data, ensure_ascii=False, indent=2)
+        # 原子写：先落临时文件再替换，避免中途崩溃/断电留下半截 db.json。
+        temp = self.file.with_name(f".{self.file.name}.{os.getpid()}.tmp")
+        try:
+            with temp.open("w", encoding="utf-8", newline="\n") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp, self.file)
+        finally:
+            try:
+                temp.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def config(self) -> dict:
         return self.data.setdefault("config", self.schema_defaults)

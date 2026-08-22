@@ -146,7 +146,20 @@ class GenerationBridge:
             row = storage.get_job(job_id)
             return job_public(row), False
 
-        engine_payload = await self._build_engine_payload(snapshot, mode)
+        try:
+            engine_payload = await self._build_engine_payload(snapshot, mode)
+        except GenerationError:
+            # 任务已落库为 queued，构建失败必须落到 failed 终态，
+            # 否则将永久占用成员/房间队列配额。
+            storage.set_job_state(job_id, protocol.JOB_STATE_FAILED,
+                                  completed_at=None)
+            row = storage.get_job(job_id)
+            await self._hub.broadcast("job.failed", {
+                "job": job_public(row),
+                "error": "任务参数构建失败",
+                "errorCode": "PAYLOAD_BUILD_FAILED",
+            })
+            raise
         try:
             core = await self._backend.submit(engine_payload)
         except GenerationError:
@@ -350,7 +363,8 @@ class GenerationBridge:
             return
         data, mime, filename = image
         try:
-            stored_mime, main_data, thumb_data, w, h = _process_image(data)
+            # 生成结果图的重编码同样放线程池，避免阻塞房间网关事件循环。
+            stored_mime, main_data, thumb_data, w, h = await asyncio.to_thread(_process_image, data)
         except ImageErrorDetail as exc:
             await self._fail(room_job_id, exc.message, exc.error_code)
             return
