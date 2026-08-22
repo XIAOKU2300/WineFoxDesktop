@@ -528,7 +528,7 @@ export class EnvSetupView {
     return el("ol", { class: "setup-steps is-plan" }, steps.map((step) => el("li", { class: "setup-step" }, [
       el("span", { class: "setup-step-pill" }, esc(STEP_LABELS[step.kind] || step.kind)),
       el("div", { class: "grow" }, [
-        el("div", { class: "setup-step-label" }, esc(localizeStepLabel(step.label)),
+        el("div", { class: "setup-step-label" }, esc(localizeStepLabel(step.label))),
         el("div", { class: "setup-step-sub" }, esc(this.stepItemNames(step))),
       ]),
     ])));
