@@ -128,6 +128,24 @@ class PythonSpec:
 
 
 @dataclass(frozen=True)
+class RuntimePythonEmbed:
+    version: str
+    install_dir: str
+    get_pip_url: str
+    sources: tuple[ModelSource, ...]
+
+
+@dataclass(frozen=True)
+class RuntimeSpec:
+    python_embed: RuntimePythonEmbed | None
+    comfyui_sources: tuple[ModelSource, ...]
+    pip_index_urls: tuple[str, ...]
+    torch_packages: tuple[str, ...]
+    torch_index_by_cuda: dict[str, str]
+    torch_cpu_index: str
+
+
+@dataclass(frozen=True)
 class SetupManifest:
     format_version: int
     manifest_version: str
@@ -140,6 +158,7 @@ class SetupManifest:
     nodes: dict[str, NodeSpec]
     tiers: dict[str, tuple[TierStep, ...]]
     manual_files: tuple[ManualFile, ...]
+    runtime: RuntimeSpec | None = None
 
     def models_in_group(self, group: str) -> list[ModelSpec]:
         return [m for m in self.models.values() if m.group == group]
@@ -278,6 +297,10 @@ def _parse_tiers(raw: dict, model_groups: set[str], node_groups: set[str]) -> di
                 _require("group" not in item, f"tier {name!r}: bridge step must not carry a group")
                 steps.append(TierStep(step="bridge"))
                 continue
+            if step in {"comfyui", "python_runtime", "requirements"}:
+                _require("group" not in item, f"tier {name!r}: {step} step must not carry a group")
+                steps.append(TierStep(step=step))
+                continue
             group = str(item.get("group", ""))
             if step == "nodes":
                 _require(group in node_groups, f"tier {name!r}: unknown node group {group!r}")
@@ -322,6 +345,26 @@ def validate_manifest(data: dict[str, Any]) -> None:
     _require(len(min_ver) == 2 and all(isinstance(v, int) for v in min_ver), "python.min_version must be [major, minor]")
     _require(python_raw.get("candidate_priority"), "python.candidate_priority must be non-empty")
 
+    runtime_raw = data.get("runtime")
+    if runtime_raw is not None:
+        _require(isinstance(runtime_raw, dict), "runtime must be an object")
+        embed_raw = runtime_raw.get("python_embed")
+        if embed_raw is not None:
+            for s in embed_raw.get("sources", []):
+                _require(
+                    s["host"] in allowed_hosts,
+                    f"runtime.python_embed host {s['host']!r} not in bridge allowed_hosts",
+                )
+        for s in runtime_raw.get("comfyui", {}).get("sources", []):
+            _require(
+                s["host"] in allowed_hosts,
+                f"runtime.comfyui host {s['host']!r} not in bridge allowed_hosts",
+            )
+        get_pip = str(runtime_raw.get("python_embed", {}).get("get_pip_url", ""))
+        if get_pip:
+            host = urlsplit(get_pip).hostname or ""
+            _require(host in allowed_hosts, f"runtime get_pip host {host!r} not in allowed_hosts")
+
 
 def parse_manifest(data: dict[str, Any]) -> SetupManifest:
     validate_manifest(data)
@@ -353,6 +396,34 @@ def parse_manifest(data: dict[str, Any]) -> SetupManifest:
         ManualFile(name=str(m["name"]), dest=str(m["dest"]), note=str(m.get("note", "")))
         for m in data.get("manual_files", [])
     )
+    runtime: RuntimeSpec | None = None
+    runtime_raw = data.get("runtime")
+    if isinstance(runtime_raw, dict):
+        embed_raw = runtime_raw.get("python_embed") or {}
+        python_embed = None
+        if embed_raw:
+            python_embed = RuntimePythonEmbed(
+                version=str(embed_raw.get("version", "")),
+                install_dir=_safe_relative_path(str(embed_raw.get("install_dir", "python_embeded")), "runtime.python_embed.install_dir"),
+                get_pip_url=str(embed_raw.get("get_pip_url", "")),
+                sources=tuple(
+                    ModelSource(host=str(s["host"]), url=str(s["url"])) for s in embed_raw.get("sources", [])
+                ),
+            )
+        torch_raw = runtime_raw.get("torch") or {}
+        runtime = RuntimeSpec(
+            python_embed=python_embed,
+            comfyui_sources=tuple(
+                ModelSource(host=str(s["host"]), url=str(s["url"]))
+                for s in (runtime_raw.get("comfyui") or {}).get("sources", [])
+            ),
+            pip_index_urls=tuple(str(u) for u in (runtime_raw.get("pip") or {}).get("index_urls", [])),
+            torch_packages=tuple(str(p) for p in torch_raw.get("packages", [])),
+            torch_index_by_cuda={
+                str(k): str(v) for k, v in (torch_raw.get("index_by_cuda") or {}).items()
+            },
+            torch_cpu_index=str(torch_raw.get("cpu_index", "")),
+        )
     return SetupManifest(
         format_version=int(data["format_version"]),
         manifest_version=str(data.get("manifest_version", "")),
@@ -365,6 +436,7 @@ def parse_manifest(data: dict[str, Any]) -> SetupManifest:
         nodes=nodes,
         tiers=tiers,
         manual_files=manual_files,
+        runtime=runtime,
     )
 
 

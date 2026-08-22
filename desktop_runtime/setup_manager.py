@@ -22,7 +22,7 @@ import aiohttp
 from .setup_errors import SetupError, SetupErrorCode
 from .setup_executor import JOB_CANCELLED, JOB_FAILED, SetupExecutor, SetupJob
 from .setup_manifest import SetupManifest, load_setup_manifest
-from .setup_paths import validate_comfyui_root
+from .setup_paths import test_root, validate_bootstrap_root, validate_comfyui_root
 from .setup_service import EnvironmentStatus, Plan, PlanItem, PlanStep, Planner, Scanner
 
 _GB = 1024 ** 3
@@ -246,8 +246,18 @@ class SetupManager:
         repair: bool = False,
         retry_job_id: str | None = None,
         only_missing: bool = True,
+        root: Path | None = None,
     ) -> dict[str, Any]:
-        status = await self._scan()
+        if profile == "bootstrap":
+            if root is None:
+                raise SetupError(SetupErrorCode.CONFIG_INVALID, "从零装机需要指定安装目录 (root)")
+            target = await asyncio.to_thread(validate_bootstrap_root, root, install_dir=self.install_dir)
+            status = await asyncio.to_thread(
+                self._scanner.scan, injected_roots=[target] if test_root(target) else []
+            )
+            status.root = target
+        else:
+            status = await self._scan()
         if retry_job_id:
             base_job = self._jobs.get(retry_job_id)
             if base_job is None:
@@ -283,10 +293,15 @@ class SetupManager:
     # ------------------------------------------------------------- jobs
 
     async def start_job(self, *, root: Path | None, plan_dict: dict[str, Any]) -> dict[str, Any]:
-        status = await self._scan()
-        chosen = status.root if root is None else None
-        if root is not None:
-            chosen = await asyncio.to_thread(validate_comfyui_root, root, install_dir=self.install_dir)
+        profile_name = str((plan_dict or {}).get("profile") or "")
+        if profile_name == "bootstrap" and root is not None:
+            status: EnvironmentStatus | None = None
+            chosen = await asyncio.to_thread(validate_bootstrap_root, root, install_dir=self.install_dir)
+        else:
+            status = await self._scan()
+            chosen = status.root if root is None else None
+            if root is not None:
+                chosen = await asyncio.to_thread(validate_comfyui_root, root, install_dir=self.install_dir)
         if chosen is None:
             raise SetupError(SetupErrorCode.ROOT_INVALID, "未指定 ComfyUI 根目录")
         plan = self._reconstruct_plan(plan_dict, root=chosen)
@@ -318,6 +333,9 @@ class SetupManager:
             label = str(raw.get("label") or kind)
             if kind == "bridge":
                 steps.append(PlanStep(kind="bridge", group=None, label=label))
+                continue
+            if kind in {"comfyui", "python_runtime", "requirements"}:
+                steps.append(PlanStep(kind=kind, group=None, label=label))
                 continue
             if kind == "pip":
                 steps.append(

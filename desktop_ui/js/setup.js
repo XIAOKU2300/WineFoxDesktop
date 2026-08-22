@@ -46,6 +46,9 @@ const STEP_LABELS = {
   models: "模型下载",
   bridge: "LoraBridge",
   pip: "Python 依赖",
+  comfyui: "ComfyUI 本体",
+  python_runtime: "Python 运行时",
+  requirements: "PyTorch 与依赖",
 };
 
 const ACTIVE_STATUSES = new Set(["pending", "running", "rolling_back"]);
@@ -115,6 +118,8 @@ export class EnvSetupView {
     this.mirrorProbing = false;
     this.mirrorResults = null;
     this.preferredHost = "";
+    this.installRoot = "";
+    this.runtimeNote = "";
   }
 
   // ------------------------------------------------------------- 生命周期
@@ -127,6 +132,7 @@ export class EnvSetupView {
       this._attachedListener = (event) => {
         if (event.target.closest("[data-pick-root]")) { void this.pickRoot(); return; }
         if (event.target.closest("#setup-rescan")) { void this.rescan(); return; }
+        if (event.target.closest("#setup-bootstrap")) { void this.startBootstrap(); return; }
         if (event.target.closest("#setup-repair")) { void this.repair(); return; }
         const preferBtn = event.target.closest("[data-mirror-prefer]");
         if (preferBtn) { void this.preferMirror(preferBtn.dataset.mirrorPrefer); return; }
@@ -206,6 +212,7 @@ export class EnvSetupView {
         el("div", { class: "lead" }, "扫描 ComfyUI 环境，按档案安装自定义节点、模型与 LoraBridge，全程可取消、重试与回滚。"),
       ]),
       el("div", { class: "row gap-2" }, [
+        el("button", { class: "btn btn-primary btn-sm", type: "button", id: "setup-bootstrap" }, [ic("play"), esc("从零装机")]),
         el("button", { class: "btn btn-sm", type: "button", dataset: { pickRoot: "1" } }, esc("选择目录")),
         el("button", { class: "btn btn-sm", id: "setup-rescan", type: "button" }, [ic("refresh"), esc("重新扫描")]),
       ]),
@@ -569,6 +576,7 @@ export class EnvSetupView {
     }
     if (this.currentItem) return "正在安装组件";
     if (this.currentPip) return `正在安装依赖 ${this.currentPip}`;
+    if (this.runtimeNote) return this.runtimeNote;
     if (job.status === "rolling_back") return this.rollbackFailure ? `回滚受阻：${this.rollbackFailure}` : "正在恢复安装前的文件…";
     if (job.status === "failed") return job.error_message || "某一步骤失败";
     if (job.status === "running") {
@@ -697,6 +705,7 @@ export class EnvSetupView {
     this.currentItem = null;
     this.currentPip = null;
     this.rollbackFailure = null;
+    this.runtimeNote = "";
     this.render();
     void this.syncJob();
     this.subscribeJob(jobId);
@@ -823,6 +832,19 @@ export class EnvSetupView {
         break;
       case "bridge_installed":
         break;
+      case "gpu_detected":
+        this.runtimeNote = event.cuda
+          ? `检测到 NVIDIA 显卡（CUDA ${event.cuda}），PyTorch 将使用 ${event.torch_index} 官方源`
+          : `未检测到 NVIDIA 显卡，PyTorch 将使用 CPU 版本`;
+        break;
+      case "runtime_skipped":
+        this.runtimeNote = `${event.component === "comfyui" ? "ComfyUI" : "Python"} 已存在，自动跳过`;
+        break;
+      case "runtime_installed":
+        this.runtimeNote = event.component === "requirements"
+          ? `依赖安装完成（${event.torch || ""}）`
+          : `${event.component === "comfyui" ? "ComfyUI" : "Python 运行时"} 安装完成`;
+        break;
       case "job_finished":
         job.status = event.status || "success";
         this.currentItem = null;
@@ -877,6 +899,35 @@ export class EnvSetupView {
 
   // ------------------------------------------------------------- 操作
 
+  async startBootstrap() {
+    if (this.planning) return;
+    const result = await pickDirectory("comfyui_root");
+    if (!result.ok || !result.path) {
+      if (result.error && !/未选择|取消/.test(result.error)) toast(result.error, "warn");
+      return;
+    }
+    this.profile = "bootstrap";
+    this.installRoot = result.path;
+    this.plan = null;
+    this.planning = true;
+    this.render();
+    try {
+      const plan = await api.setupPlan({ profile: "bootstrap", only_missing: false, root: result.path });
+      if (this.profile !== "bootstrap" || this._disposed) return;
+      this.plan = plan;
+      this.planning = false;
+      this.render();
+      toast("已生成从零装机计划，确认后点击“开始安装”", "ok");
+    } catch (error) {
+      if (this._disposed) return;
+      this.planning = false;
+      this.profile = null;
+      this.installRoot = "";
+      this.render();
+      toast("无法生成装机计划：" + error.message, "err");
+    }
+  }
+
   async chooseProfile(id) {
     if (this.planning) return;
     this.profile = id;
@@ -922,11 +973,12 @@ export class EnvSetupView {
     this.starting = true;
     this.render();
     try {
-      // root 由后端以缓存扫描结果决定，UI 只回传 plan，避免携带绝对路径
-      const job = await api.setupStartJob({ plan: this.plan });
+      // 常规安装 root 由后端扫描缓存决定；从零装机回传用户选定的安装目录
+      const job = await api.setupStartJob({ plan: this.plan, root: this.profile === "bootstrap" ? this.installRoot : undefined });
       this.starting = false;
       this.plan = null;
       this.profile = null;
+      this.installRoot = "";
       this.openJob(job.id);
     } catch (error) {
       this.starting = false;
