@@ -118,6 +118,77 @@ async def handle_patch_settings(request: web.Request) -> web.Response:
     return _json(mask_settings(updated))
 
 
+async def _resolve_ai_test_client(request: web.Request):
+    """按「body 临时值 → 已保存配置」解析 AI 测试客户端。
+
+    body 里可带 base_url / api_key / timeout_seconds / model 用于保存前验证，
+    临时 key 只在本次请求内使用，绝不持久化或写日志。
+    """
+    from ..desktop_runtime.llm_client import OpenAICompatibleLLMClient
+
+    config = _ctx(request).get("config")
+    if config is None:
+        raise AppError(503, "not_configured", "配置存储未注入")
+    body = await _json_body(request, required=False)
+    body = body if isinstance(body, dict) else {}
+    base_url = str(body.get("base_url") or "").strip()
+    api_key = str(body.get("api_key") or "").strip()
+    model = str(body.get("model") or "").strip()
+    try:
+        timeout_seconds = float(body.get("timeout_seconds") or 0)
+    except (TypeError, ValueError):
+        timeout_seconds = 0
+    if not base_url or not api_key:
+        settings = await config.get_settings()
+        provider = settings.get("ai_provider") if isinstance(settings.get("ai_provider"), dict) else {}
+        base_url = base_url or str(provider.get("base_url") or "").strip()
+        model = model or str(provider.get("model") or "").strip()
+        if not api_key:
+            api_key = str(config.get_secret("ai_api_key") or "")
+        if not timeout_seconds:
+            try:
+                timeout_seconds = float(provider.get("timeout_seconds") or 60)
+            except (TypeError, ValueError):
+                timeout_seconds = 60.0
+    if not timeout_seconds:
+        timeout_seconds = 60.0
+    try:
+        client = OpenAICompatibleLLMClient(base_url, api_key, timeout_seconds=min(timeout_seconds, 60.0))
+    except ValueError as exc:
+        raise ValidationError(str(exc)) from exc
+    return client, model
+
+
+async def handle_ai_list_models(request: web.Request) -> web.Response:
+    client, _model = await _resolve_ai_test_client(request)
+    try:
+        models = await client.list_models()
+    except Exception as exc:  # noqa: BLE001 - 统一转成可读错误
+        raise AppError(502, "ai_provider_error", f"获取模型列表失败：{exc}") from exc
+    if len(models) > 500:
+        models = models[:500]
+    return _json({"models": models, "count": len(models)})
+
+
+async def handle_ai_test_model(request: web.Request) -> web.Response:
+    client, model = await _resolve_ai_test_client(request)
+    if not model:
+        raise ValidationError("请先填写模型名（或保存当前配置）")
+    import time as _time
+
+    started = _time.monotonic()
+    try:
+        reply = await client.test_completion(model)
+    except Exception as exc:  # noqa: BLE001 - 统一转成可读错误
+        raise AppError(502, "ai_provider_error", f"模型测试失败：{exc}") from exc
+    return _json({
+        "ok": True,
+        "model": model,
+        "latency_ms": int((_time.monotonic() - started) * 1000),
+        "reply": reply,
+    })
+
+
 async def handle_put_secret(request: web.Request) -> web.Response:
     config = _ctx(request).get("config")
     if config is None:
@@ -415,6 +486,13 @@ async def handle_lora_library_match_preview(request: web.Request) -> web.Respons
         except (TypeError, ValueError) as exc:
             raise ValidationError("limit 必须是整数") from exc
     return _json(await engine.lora_library_match_preview(prompt, family=family, limit=max(1, min(limit, 20))))
+
+
+async def handle_lora_library_scan_local(request: web.Request) -> web.Response:
+    engine = _ctx(request).get("engine")
+    if engine is None or not hasattr(engine, "lora_library_scan_local"):
+        raise AppError(503, "lora_library_not_configured", "本地 LoRA 库服务未配置")
+    return _json(await engine.lora_library_scan_local())
 
 
 # ---------------- uploads ----------------
@@ -773,6 +851,8 @@ def register_routes(app: web.Application) -> None:
     app.router.add_get("/api/v1/settings", handle_get_settings)
     app.router.add_patch("/api/v1/settings", handle_patch_settings)
     app.router.add_put("/api/v1/settings", handle_patch_settings)
+    app.router.add_post("/api/v1/ai/models", handle_ai_list_models)
+    app.router.add_post("/api/v1/ai/test", handle_ai_test_model)
     app.router.add_get("/api/v1/secrets", handle_get_secrets)
     app.router.add_put("/api/v1/secrets/{name}", handle_put_secret)
     app.router.add_delete("/api/v1/secrets/{name}", handle_delete_secret)
@@ -793,6 +873,7 @@ def register_routes(app: web.Application) -> None:
     app.router.add_post("/api/v1/lora/library/{id}/quarantine", handle_lora_library_quarantine)
     app.router.add_post("/api/v1/lora/library/{id}/restore", handle_lora_library_restore)
     app.router.add_post("/api/v1/lora/library/match-preview", handle_lora_library_match_preview)
+    app.router.add_post("/api/v1/lora/library/scan-local", handle_lora_library_scan_local)
     app.router.add_post("/api/v1/lora/profiles/import-json", handle_lora_profiles_import_json)
     app.router.add_get("/api/v1/lora/profiles/export-json", handle_lora_profiles_export_json)
     app.router.add_post("/api/v1/uploads", handle_upload)

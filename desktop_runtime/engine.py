@@ -47,6 +47,7 @@ from . import net_env
 from .lora_profiles import (
     AutoLoraResolution,
     LoadedLoraProfiles,
+    apply_multi_lora_strength_caps,
     import_lora_profiles_into_db,
     lora_metadata_cache_key,
     merge_prompt_tags,
@@ -55,7 +56,7 @@ from .lora_profiles import (
     resolve_selected_lora_triggers,
 )
 from .upload_store import FileUploadStore
-from .workflow_builder import prepare_workflow
+from .workflow_builder import prepare_workflow, workflow_prompt_texts
 
 logger = logging.getLogger("winefox.runtime.engine")
 
@@ -510,8 +511,17 @@ class DesktopEngine:
             profile = profiles.get(normalize_lora_key(name))
             entry: dict[str, Any] = {"id": actual, "name": actual}
             if profile is not None:
-                entry["strength_model"] = profile.strength_model
-                entry["strength_clip"] = profile.strength_clip
+                # profile 未配置强度时给族默认值，None 直传会让 workflow 构建崩溃
+                entry["strength_model"] = (
+                    profile.strength_model
+                    if profile.strength_model is not None
+                    else 0.75
+                )
+                entry["strength_clip"] = (
+                    profile.strength_clip
+                    if profile.strength_clip is not None
+                    else 0.70
+                )
                 triggers.extend(profile.trigger_words)
                 evidence.append(profile.to_dict())
             else:
@@ -519,12 +529,17 @@ class DesktopEngine:
                     strength = float(item.get("strength"))
                 except (TypeError, ValueError):
                     strength = None
-                if strength is not None and strength > 0:
+                # 钳制到合理区间：前端兜底可能把匹配分数（>90）当强度传上来
+                if strength is not None and 0 < strength <= 1.5:
                     entry["strength_model"] = strength
                     entry["strength_clip"] = strength
+                else:
+                    entry["strength_model"] = 0.75
+                    entry["strength_clip"] = 0.70
             selected.append(entry)
         if not selected:
             return None
+        apply_multi_lora_strength_caps(selected)
         return AutoLoraResolution(
             loras=tuple(selected),
             triggers=tuple(
@@ -561,6 +576,17 @@ class DesktopEngine:
             self._update_job(int(row["id"]), "recovering")
             await self._queue.put(int(row["id"]))
         self._worker = asyncio.create_task(self._worker_loop(), name="winefox-job-worker")
+        # 启动后台扫一次本机 LoRA 目录：把已有权重登记进本地库（幂等、尽力而为）
+        asyncio.create_task(self._background_scan_local_loras())
+
+    async def _background_scan_local_loras(self) -> None:
+        try:
+            result = await self.lora_library.scan_local_dir()
+            added = int(result.get("added") or 0)
+            if added > 0:
+                logger.info("本机 LoRA 目录扫描：新登记 %s 个（%s 个匹配角色档案）", added, result.get("matched_profiles"))
+        except Exception:  # noqa: BLE001 - 后台扫描失败不影响启动
+            logger.debug("本机 LoRA 目录扫描失败（忽略）", exc_info=True)
 
     async def stop(self) -> None:
         self._accepting = False
@@ -863,6 +889,11 @@ class DesktopEngine:
         self, prompt: str, *, family: str = "illustrious", limit: int = 8
     ) -> dict[str, Any]:
         return await self.lora_library.match_preview(prompt, family=family, limit=limit)
+
+    async def lora_library_scan_local(self) -> dict[str, Any]:
+        """扫描本机 LoRA 目录，把已有权重文件登记进本地库（幂等）。"""
+        return await self.lora_library.scan_local_dir()
+
     async def _after_lora_installed(self) -> None:
         self._last_probe = None
         self._last_probe_at = 0.0
@@ -1156,6 +1187,7 @@ class DesktopEngine:
                 checkpoint=checkpoint,
                 uploaded_name=uploaded_name,
             )
+            self._attach_prompt_debug(job_id, raw_prompt, prompt_result, execution_payload, workflow)
             if self._consume_cancel(job_id):
                 return
             self._update_job(job_id, "running", comfy_prompt_id=resume_prompt_id)
@@ -1226,13 +1258,24 @@ class DesktopEngine:
                 "llm": {
                     "enabled": bool(provider.get("enabled")),
                     "model": str(provider.get("model") or ""),
-                    "max_tokens": 450,
-                    "temperature": 0.1,
+                    "max_tokens": 800,
+                    "temperature": 0.2,
                 },
             },
             llm_port=llm_client,
         )
-        return await service.process(str(payload.get("prompt") or ""))
+        result = await service.process(str(payload.get("prompt") or ""))
+        # 自定义提示词注入：LLM 转译完成后确定性追加（去重），
+        # 不进 LLM 请求 —— 每次生成零额外 token。
+        injection = str((settings.get("ui") or {}).get("prompt_injection") or "").strip()
+        if injection:
+            tags = [tag.strip() for tag in re.split(r"[,，\n]+", injection) if tag.strip()]
+            if tags:
+                merged = merge_prompt_tags(result.final_prompt, tags)
+                if merged != result.final_prompt:
+                    result.final_prompt = merged
+                    result.meta["prompt_injection"] = ", ".join(tags)
+        return result
 
     async def _reverse_prompt_with_vision(
         self,
@@ -1419,6 +1462,8 @@ class DesktopEngine:
         job_meta = {"comfy_prompt_id": row["comfy_prompt_id"]}
         if history_metadata.get("auto_lora"):
             job_meta["auto_lora"] = history_metadata["auto_lora"]
+        if isinstance(payload.get("prompt_debug"), dict):
+            job_meta["prompt_debug"] = payload["prompt_debug"]
         return JobRecord(
             id=str(row["id"]),
             status=state,
@@ -1433,6 +1478,60 @@ class DesktopEngine:
             image=image,
             seed=seed,
         )
+
+    def _attach_prompt_debug(
+        self,
+        job_id: int,
+        raw_prompt: str,
+        prompt_result,
+        execution_payload: dict[str, Any],
+        workflow: dict[str, Any] | None = None,
+    ) -> None:
+        """把提示词处理全貌写入 job 的 request_json.prompt_debug（调试模式展示用）。"""
+        final_positive = prompt_result.final_prompt
+        final_negative = str(execution_payload.get("negative_prompt") or "")
+        if workflow is not None:
+            try:
+                final_positive, final_negative = workflow_prompt_texts(workflow)
+            except Exception:  # noqa: BLE001 - 调试信息失败不影响生成
+                logger.debug("读取工作流最终提示词失败（忽略）", exc_info=True)
+        loras = [
+            {
+                "name": str(item.get("name") or item.get("id") or ""),
+                "strength": item.get("strength_model", item.get("strength")),
+            }
+            for item in (execution_payload.get("loras") or [])
+            if isinstance(item, dict)
+        ]
+        debug = {
+            "raw_prompt": raw_prompt,
+            "cleaned_prompt": prompt_result.cleaned_prompt,
+            "final_prompt": final_positive,
+            "negative_prompt": final_negative or prompt_result.negative_prompt,
+            "loras": loras,
+            "source": prompt_result.source,
+            "warnings": list(prompt_result.warnings),
+            "matches": [
+                {"kind": m.kind, "value": m.value, "score": m.score} for m in prompt_result.matches
+            ],
+            "family": prompt_result.meta.get("family"),
+            "llm_enabled": prompt_result.meta.get("llm_enabled"),
+            "seed": execution_payload.get("seed"),
+        }
+        try:
+            row = self.db.connection.execute(
+                "SELECT request_json FROM jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            payload = json.loads(row["request_json"] or "{}") if row else {}
+            if isinstance(payload, dict):
+                payload["prompt_debug"] = debug
+                with self.db.transaction():
+                    self.db.connection.execute(
+                        "UPDATE jobs SET request_json = ?, updated_at = ? WHERE id = ?",
+                        (json.dumps(payload, ensure_ascii=False), utcnow_iso(), job_id),
+                    )
+        except Exception:  # noqa: BLE001 - 调试信息写入失败不影响生成
+            logger.debug("写入 prompt_debug 失败（忽略）", exc_info=True)
 
     def _update_job(self, job_id: int, state: str, *, error: str | None = None, comfy_prompt_id: str | None = None) -> None:
         now = utcnow_iso()

@@ -100,7 +100,7 @@ class OpenAICompatibleLLMClient:
         payload = {
             "model": model_name,
             "messages": messages,
-            "max_tokens": max(128, min(int(max_tokens), 1200)),
+            "max_tokens": max(128, min(int(max_tokens), 2000)),
             "temperature": max(0.0, min(float(temperature), 2.0)),
         }
         async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
@@ -117,3 +117,51 @@ class OpenAICompatibleLLMClient:
         if not isinstance(data, dict):
             raise RuntimeError("AI 提供商返回格式无效")
         return data
+
+    async def list_models(self) -> list[str]:
+        """拉取 OpenAI 兼容的 /models 列表（用于设置页选择模型）。"""
+        models_url = self.endpoint
+        for suffix in ("/chat/completions",):
+            if models_url.lower().endswith(suffix):
+                models_url = models_url[: -len(suffix)] + "/models"
+                break
+        headers = {"Accept": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        timeout = aiohttp.ClientTimeout(total=self.timeout_seconds, connect=min(15.0, self.timeout_seconds))
+        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+            async with session.get(models_url) as response:
+                raw = await response.content.read(2 * 1024 * 1024 + 1)
+                if response.status >= 400:
+                    raise RuntimeError(f"获取模型列表失败（HTTP {response.status}）")
+                try:
+                    data = json.loads(raw.decode(response.charset or "utf-8"))
+                except (ValueError, UnicodeDecodeError) as exc:
+                    raise RuntimeError("AI 提供商返回了无效 JSON") from exc
+        items = data.get("data") if isinstance(data, dict) else None
+        if not isinstance(items, list):
+            items = data if isinstance(data, list) else []
+        models: list[str] = []
+        seen: set[str] = set()
+        for item in items:
+            model_id = str(item.get("id") or "").strip() if isinstance(item, dict) else str(item or "").strip()
+            if model_id and model_id not in seen:
+                seen.add(model_id)
+                models.append(model_id)
+        return sorted(models)
+
+    async def test_completion(self, model: str) -> str:
+        """最小 chat 请求验证连通性与模型可用性，返回模型回复文本。"""
+        data = await self.complete(
+            [{"role": "user", "content": "Reply with exactly: OK"}],
+            model=model,
+            max_tokens=128,
+            temperature=0.0,
+        )
+        choices = data.get("choices") if isinstance(data, dict) else None
+        message = choices[0].get("message") if isinstance(choices, list) and choices else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, str) or not content.strip():
+            reasoning = message.get("reasoning_content") if isinstance(message, dict) else None
+            content = str(reasoning or "") if isinstance(reasoning, str) else ""
+        return content.strip()[:200]

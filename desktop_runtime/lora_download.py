@@ -371,7 +371,7 @@ class LoraDownloadService:
             "enabled": True,
             "sources": ["civitai", "huggingface"],
             "mode": mode,
-            "local_configured": bool(str(settings.get("local_dir") or "").strip()),
+            "local_configured": bool(self._effective_local_dir(settings)),
             "bridge_configured": bool(str(settings.get("bridge_endpoint") or "/astrbot/lora").strip()),
             "civitai_token_configured": bool(self.config.get_secret("civitai_api_token")),
             "huggingface_token_configured": bool(self.config.get_secret("huggingface_api_token")),
@@ -647,6 +647,8 @@ class LoraDownloadService:
                     "model_id": str(cached.get("model_id") or ""),
                     "version_id": str(cached.get("version_id") or ""),
                     "file_name": cached_file_name,
+                    # 搜索关键词（尤其中文）随任务下发：装完后同词可再搜到
+                    "query": _bounded_text(str(cached.get("query") or ""), 120),
                     "adult_consent": bool(adult_consent),
                     "nsfw": bool(cached.get("nsfw")),
                 },
@@ -695,14 +697,46 @@ class LoraDownloadService:
 
     # -- 模式 / 安装 --------------------------------------------------------
 
+    def _effective_local_dir(self, settings: dict[str, Any]) -> str:
+        """auto 模式下可实际使用的本机 models/loras 目录。
+
+        显式 local_dir 优先；未配置时若已知 ComfyUI 根目录（环境中心选择或
+        从零装机时自动记住）且 ComfyUI 跑在本机，则推导其 models/loras。
+        此前 auto 无从推导本地目录就一律落 Bridge，是"选了自动却总在
+        bridge"的根因。
+        """
+        explicit = str(settings.get("local_dir") or "").strip()
+        if explicit:
+            return explicit
+        try:
+            snapshot = self.config.snapshot()
+        except Exception:  # noqa: BLE001 - 设置不可读时不推导
+            return ""
+        root_text = str(snapshot.get("comfyui_root") or "").strip()
+        if not root_text:
+            return ""
+        address = str((snapshot.get("comfyui") or {}).get("server_address") or "").strip()
+        host = address.split(":")[0].strip().lower() if address else ""
+        if host not in {"127.0.0.1", "localhost", "0.0.0.0", ""}:
+            return ""
+        candidate = Path(os.path.expandvars(os.path.expanduser(root_text))) / "models" / "loras"
+        try:
+            if candidate.is_dir():
+                return str(candidate)
+        except OSError:
+            pass
+        return ""
+
     def _mode(self) -> tuple[str, dict[str, Any]]:
         settings = self._settings()
         mode = str(settings.get("mode") or "auto").strip().lower()
-        local_dir = str(settings.get("local_dir") or "").strip()
+        local_dir = self._effective_local_dir(settings)
         if mode == "local" or (mode == "auto" and local_dir):
             if not local_dir:
                 raise RuntimeError("本地下载模式尚未配置 ComfyUI models/loras 目录")
-            return "local", settings
+            merged = dict(settings)
+            merged["local_dir"] = local_dir
+            return "local", merged
         if mode in {"auto", "comfyui_bridge"}:
             return "comfyui_bridge", settings
         raise RuntimeError(f"未知 LoRA 下载模式: {mode}")
@@ -1112,13 +1146,21 @@ class LoraDownloadService:
         summary = dict(summary)
         summary["file_name"] = safe_filename(filename)
         summary["search_query"] = _bounded_text(summary.get("search_query"), 120)
+        # 用户没手填中文别称时，把搜索用的中文关键词自动存为别名——
+        # 否则装完后同一个中文词在已安装列表搜不到，发现页种子词也推导不出
+        alias_text = str(alias or "").strip()
+        if not alias_text:
+            query_text = str(summary.get("search_query") or "")
+            cjk = re.search(r"[㐀-鿿぀-ヿ][㐀-鿿぀-ヿ·\s\-']{0,30}", query_text)
+            if cjk:
+                alias_text = cjk.group(0).strip(" -'·")
         # 仅用临时文件承载档案计算（load 为 {}），正常写入路径只有 SQLite。
         scratch_dir = self.data_root / ".tmp"
         scratch = scratch_dir / f"lora_profile_{uuid.uuid4().hex}.json"
         try:
             scratch_dir.mkdir(parents=True, exist_ok=True)
             store = LoraProfileStore(scratch)
-            profile = await asyncio.to_thread(store.upsert_from_civitai, summary, alias, 0.8, 0.8)
+            profile = await asyncio.to_thread(store.upsert_from_civitai, summary, alias_text, 0.8, 0.8)
         finally:
             try:
                 scratch.unlink(missing_ok=True)
@@ -1251,7 +1293,7 @@ class LoraDownloadService:
                     probe = await self.bridge_status()
                     if not probe.get("ok"):
                         configured = str(settings.get("mode") or "auto").strip().lower()
-                        if configured == "auto" and str(settings.get("local_dir") or "").strip():
+                        if configured == "auto" and self._effective_local_dir(settings):
                             mode = "local"
                         else:
                             raise RuntimeError(f"ComfyUI LoRA Bridge 不可用：{probe.get('message') or '未就绪'}")

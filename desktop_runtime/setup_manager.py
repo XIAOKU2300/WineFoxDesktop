@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import shutil
 import time
 from pathlib import Path
@@ -23,6 +24,8 @@ from .setup_errors import SetupError, SetupErrorCode
 from .setup_executor import JOB_CANCELLED, JOB_FAILED, SetupExecutor, SetupJob
 from .setup_manifest import SetupManifest, load_setup_manifest
 from .setup_paths import test_root, validate_bootstrap_root, validate_comfyui_root
+
+logger = logging.getLogger("winefox.runtime.setup")
 from .setup_service import EnvironmentStatus, Plan, PlanItem, PlanStep, Planner, Scanner
 
 _GB = 1024 ** 3
@@ -58,6 +61,7 @@ class SetupManager:
         self._session = session
         self._scanner = Scanner(self.manifest, install_dir=install_dir)
         self._planner = Planner(self.manifest)
+        self._persisted_root: str | None = None
         self._executor = SetupExecutor(
             self.manifest,
             install_dir=install_dir,
@@ -202,6 +206,7 @@ class SetupManager:
     async def _scan(self, *, force: bool = False, root: Path | None = None) -> EnvironmentStatus:
         if root is not None:
             resolved = await asyncio.to_thread(validate_comfyui_root, root, install_dir=self.install_dir)
+            self._remember_root(resolved)
             status = await asyncio.to_thread(self._scanner.scan, injected_roots=[resolved])
             self._cache_scan(status)
             return status
@@ -215,6 +220,25 @@ class SetupManager:
     def _cache_scan(self, status: EnvironmentStatus) -> None:
         self._scan_cache = status
         self._scan_cache_at = time.monotonic()
+
+    def _remember_root(self, resolved: Path) -> None:
+        """记住用户选定/装机成功的 ComfyUI 根目录（LoRA auto 模式推导本地目录用）。"""
+        try:
+            text = str(resolved)
+        except Exception:
+            return
+        if not text.strip() or text == self._persisted_root:
+            return
+        self._persisted_root = text
+        config = getattr(self.secret_store, "patch_settings", None)
+        if config is None:
+            return
+        try:
+            asyncio.get_running_loop().create_task(config({"comfyui_root": text}))
+        except RuntimeError:
+            pass
+        except Exception:  # noqa: BLE001 - 记住失败不影响扫描
+            logger.debug("持久化 comfyui_root 失败（忽略）", exc_info=True)
 
     async def scan(self, *, root: Path | None = None, force: bool = False) -> dict[str, Any]:
         status = await self._scan(force=force, root=root)
@@ -252,6 +276,7 @@ class SetupManager:
             if root is None:
                 raise SetupError(SetupErrorCode.CONFIG_INVALID, "从零装机需要指定安装目录 (root)")
             target = await asyncio.to_thread(validate_bootstrap_root, root, install_dir=self.install_dir)
+            self._remember_root(target)
             status = await asyncio.to_thread(
                 self._scanner.scan, injected_roots=[target] if test_root(target) else []
             )
@@ -297,13 +322,18 @@ class SetupManager:
         if profile_name == "bootstrap" and root is not None:
             status: EnvironmentStatus | None = None
             chosen = await asyncio.to_thread(validate_bootstrap_root, root, install_dir=self.install_dir)
+            self._remember_root(chosen)
         else:
             status = await self._scan()
             chosen = status.root if root is None else None
             if root is not None:
                 chosen = await asyncio.to_thread(validate_comfyui_root, root, install_dir=self.install_dir)
+                self._remember_root(chosen)
         if chosen is None:
-            raise SetupError(SetupErrorCode.ROOT_INVALID, "未指定 ComfyUI 根目录")
+            raise SetupError(
+                SetupErrorCode.ROOT_INVALID,
+                "未检测到 ComfyUI 根目录：请先在「根目录」卡片选择已有 ComfyUI 目录，或使用「从零装机」",
+            )
         plan = self._reconstruct_plan(plan_dict, root=chosen)
         estimated = await self._estimate_plan_bytes(plan)
         usage = await self._disk_usage(chosen)
@@ -336,6 +366,11 @@ class SetupManager:
                 continue
             if kind in {"comfyui", "python_runtime", "requirements"}:
                 steps.append(PlanStep(kind=kind, group=None, label=label))
+                continue
+            if kind == "manual_resolve":
+                # 执行器自取清单缺失文件，无需 items；此前漏登记导致
+                # 含该步骤的计划（complete/complete_manual）无法开始安装
+                steps.append(PlanStep(kind="manual_resolve", group=None, label=label))
                 continue
             if kind == "pip":
                 steps.append(

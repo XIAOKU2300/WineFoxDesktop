@@ -33,7 +33,8 @@ DEFAULT_STRENGTHS: dict[str, tuple[float, float]] = {
 }
 #: Illustrious 画风预设对角色 LoRA 的强度钳制（来自 main.py 的 lora_strength_cap）
 DEFAULT_STRENGTH_CAPS: dict[str, dict[str, Optional[float]]] = {
-    MODEL_FAMILY_ANIMA: {"model": None, "clip": None},
+    # anima 无钳制会让 Civitai 档案里的 1.2+ 强度原样生效，画面被单一 LoRA 吞掉
+    MODEL_FAMILY_ANIMA: {"model": 0.95, "clip": 0.95},
     MODEL_FAMILY_ILLUSTRIOUS: {"model": 0.82, "clip": 0.72},
 }
 

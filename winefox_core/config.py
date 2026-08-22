@@ -48,6 +48,7 @@ _MAX_LENGTHS = {
     "workflows.available": 512,
     "ui.command_prefix": 32,
     "ui.language": 16,
+    "ui.prompt_injection": 1000,
 }
 
 DEFAULTS: dict[str, Any] = {
@@ -77,6 +78,10 @@ DEFAULTS: dict[str, Any] = {
         "language": "zh-CN",
         "theme": "system",
         "command_prefix": "jh",
+        # 缺了它会因 _coerce 白名单被丢弃，「减少动画」勾选状态永远存不下来
+        "reduced_motion": True,
+        # 自定义提示词注入：LLM 转译后确定性追加，不进 LLM 请求（省 token）
+        "prompt_injection": "",
     },
     # 认证引用集合（可被多个服务复用），值只能是引用名。
     "auth_refs": {

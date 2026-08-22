@@ -70,7 +70,7 @@ function buildRail() {
     el("div", { class: "rail-foot" }, [
       el("span", { class: "rail-signature" }, [el("img", { src: "assets/app-logo.png", alt: "" })]),
       el("span", { class: "hint" }, "WineFox Desktop"),
-      el("span", { class: "hint" }, "v8.6.12 · 本地创作空间"),
+      el("span", { class: "hint" }, "v8.6.13 · 本地创作空间"),
     ]),
   );
 }
@@ -401,6 +401,15 @@ async function preloadWorkspace() {
   results.forEach((result, index) => {
     if (result.status === "fulfilled") store.set(entries[index][0], result.value);
   });
+  // 减少动画以服务端设置为准（localStorage 只是即时生效缓存），
+  // 否则勾选状态与实际动效会在重启后各说各话。
+  try {
+    const serverPref = store.get("settings")?.ui?.reduced_motion;
+    if (typeof serverPref === "boolean") {
+      localStorage.setItem("wfx-reduced-motion", serverPref ? "1" : "0");
+      window.__wfxApplyMotion?.();
+    }
+  } catch { /* 忽略 */ }
   if (store.get("catalog")) store.set("models", store.get("catalog"));
   applyHealth(store.get("health"));
   sendLaunchProgress("正在铺开创作界面");

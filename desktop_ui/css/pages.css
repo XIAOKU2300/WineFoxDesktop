@@ -307,6 +307,19 @@
 .gw-core img { width: 100%; height: 100%; object-fit: contain; display: block; }
 
 /* 进度覆盖层 */
+/* 提示词处理详情（调试模式） */
+.gen-debug {
+  margin-top: var(--sp-3); padding: var(--sp-3) var(--sp-4);
+  background: var(--surface-2); border: 1px dashed var(--border-strong);
+  border-radius: var(--r-md); font-size: var(--fs-sm);
+  display: flex; flex-direction: column; gap: var(--sp-2);
+  max-height: 240px; overflow-y: auto;
+}
+.gen-debug-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); }
+.gen-debug-row { display: grid; grid-template-columns: 150px 1fr; gap: var(--sp-2); align-items: baseline; }
+.gen-debug-label { color: var(--muted); white-space: nowrap; }
+.gen-debug-val { word-break: break-all; font-variant-numeric: tabular-nums; line-height: 1.5; }
+
 .gen-progress {
   position: absolute; left: var(--sp-4); right: var(--sp-4); bottom: var(--sp-4);
   padding: var(--sp-3) var(--sp-4);
