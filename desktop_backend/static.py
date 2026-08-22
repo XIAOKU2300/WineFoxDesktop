@@ -50,7 +50,23 @@ def make_static_handler(static_root: Path):
         if target is None:
             raise web.HTTPNotFound(text="Not Found")
         ctype = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
-        return web.FileResponse(target, headers={"Content-Type": ctype})
+        # 协商缓存：资源文件名不带哈希，升级后内容会变化，因此统一用
+        # no-cache + ETag —— WebView 切换视图时命中 304 省去重复传输；
+        # index.html 每次启动重新校验，不存在旧版本滞留问题。
+        try:
+            stat = target.stat()
+            etag = f'W/"{int(stat.st_mtime)}-{stat.st_size}"'
+        except OSError:
+            etag = ""
+        headers = {
+            "Content-Type": ctype,
+            "Cache-Control": "no-cache",
+        }
+        if etag:
+            headers["ETag"] = etag
+            if request.headers.get("If-None-Match") == etag:
+                return web.Response(status=304, headers=headers)
+        return web.FileResponse(target, headers=headers)
 
     return static_handler
 

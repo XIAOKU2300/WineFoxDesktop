@@ -39,8 +39,9 @@ class UiPerformanceContractTests(unittest.TestCase):
 
         self.assertIn("https://civitai.com/user/account", source)
         self.assertIn("API Keys", source)
-        self.assertIn("api/download/models", source)
         self.assertIn("Request Headers", source)
+        self.assertIn("整行复制", source)
+        self.assertIn("自动清理", source)
         self.assertIn("Cookie 等同账户登录凭证", source)
     def test_diagnostics_is_single_flight_bounded_and_defers_details(self) -> None:
         source = self.source("desktop_ui/js/views/diagnostics.js")

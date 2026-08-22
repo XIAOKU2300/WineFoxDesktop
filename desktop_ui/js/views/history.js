@@ -237,7 +237,7 @@ export class HistoryView {
       dataset: { id: it.id },
     }, [
       this.selectMode ? el("span", { class: "cell-check" + (selected ? " on" : ""), "aria-hidden": "true" }, [ic("check")]) : null,
-      el("img", { src: it.image?.url || "", alt: labelText, loading: "lazy" }),
+      el("img", { src: it.image?.url || "", alt: labelText, loading: "lazy", decoding: "async" }),
       fav ? el("span", { class: "fav-dot" }, [ic("fav")]) : null,
       el("figcaption", { class: "cell-meta" }, [
         el("span", {}, esc(promptText)),

@@ -44,6 +44,7 @@ from winefox_core.storage import Database, LoraAssetStore, LoraDownloadJobStore
 from winefox_core.storage import LoraProfileStore as SqlLoraProfileStore
 from winefox_core.storage_models import DOWNLOAD_TERMINAL_STATES, LoraDownloadState
 
+from . import net_env
 from .setup_verify import VerifyFailure, verify_safetensors
 
 logger = logging.getLogger("winefox.runtime.lora_download")
@@ -76,6 +77,46 @@ _SOURCE_DOWNLOAD_HOSTS = {
     "huggingface": {"huggingface.co", "www.huggingface.co", "hf.co", "www.hf.co"},
 }
 _ADULT_SOURCES = frozenset({"civitai_red"})
+#: Clash/mihomo TUN fake-ip 网段。开启 fake-ip 的本机 DNS 会把所有域名解析
+#: 成保留段内的地址（IPv4 常见 198.18.0.0/15，IPv6 还有 ULA 段）；这不代表
+#: 目标真是内网，而是由 TUN 代为转交真实主机。除该已知段外，再用对照探针
+#: 兜底识别其他 fake-ip 实现（见 ``_local_dns_is_fake_ip``）。仅放行“DNS
+#: 解析出来的”该类地址；URL 里直接写 IP 字面量仍然拒绝。
+_FAKE_IP_NETWORK = ipaddress.ip_network("198.18.0.0/15")
+_FAKE_IP_PROBE_HOST = "civitai.com"
+_FAKE_IP_PROBE_TTL = 60.0
+_fake_ip_probe_cache: dict[str, Any] = {"at": 0.0, "value": False}
+
+
+async def _local_dns_is_fake_ip() -> bool:
+    """探测本机 DNS 是否处于 fake-ip（TUN）模式。
+
+    对照域名 civitai.com 永远不应解析到非公网地址；若发生，说明本机
+    DNS 把所有域名映射进 fake-ip 段，由 TUN 转交真实主机。此时对重定向
+    主机继续做 is_global 硬校验只会误杀合法下载。
+    """
+    now = time.monotonic()
+    if now - float(_fake_ip_probe_cache.get("at") or 0) < _FAKE_IP_PROBE_TTL:
+        return bool(_fake_ip_probe_cache.get("value"))
+    value = False
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(
+            _FAKE_IP_PROBE_HOST, 443, type=0
+        )
+        for info in infos:
+            try:
+                address = ipaddress.ip_address(info[4][0])
+            except ValueError:
+                continue
+            if not address.is_global:
+                value = True
+                break
+    except OSError:
+        value = False
+    _fake_ip_probe_cache.update(at=now, value=value)
+    return value
+
+
 _FAMILY_BASE_MODELS = {
     "anima": ["Anima"],
     "illustrious": ["Illustrious"],
@@ -142,12 +183,18 @@ def _require_trusted_download_url(download_url: str, source: str) -> str:
     return url
 
 
-async def _require_public_redirect_url(download_url: str) -> bool:
+async def _require_public_redirect_url(download_url: str, *, proxy: str = "") -> bool:
     """Validate every redirect target before aiohttp follows it.
 
     The first URL is source-host allowlisted separately. Redirects may use a
     vendor CDN, so they are accepted only when HTTPS, credential-free, on the
     default port, and every resolved address is public.
+
+    When a proxy is configured the proxy performs DNS resolution itself; a
+    local ``getaddrinfo`` check is both redundant and wrong behind Clash/TUN
+    setups, where the local resolver may be unable to resolve (or may return
+    poisoned answers for) the Civitai CDN host even though the proxy can fetch
+    it. Structural checks above stay in force in proxy mode.
     """
     url = str(download_url or "").strip()
     try:
@@ -170,6 +217,8 @@ async def _require_public_redirect_url(download_url: str) -> bool:
         literal = None
     if literal is not None:
         raise RuntimeError("下载重定向不允许使用 IP 地址")
+    if str(proxy or "").strip():
+        return True
     try:
         infos = await asyncio.get_running_loop().getaddrinfo(
             host, port or 443, type=0
@@ -178,12 +227,19 @@ async def _require_public_redirect_url(download_url: str) -> bool:
         raise RuntimeError("下载重定向主机无法解析") from exc
     if not infos:
         raise RuntimeError("下载重定向主机无法解析")
+    # fake-ip/TUN 环境下本机解析结果全是保留段地址，交由 TUN 转发；
+    # 否则保持严格校验：任一解析地址非公网即拒绝。
+    fake_ip_dns = await _local_dns_is_fake_ip()
     for info in infos:
         try:
             address = ipaddress.ip_address(info[4][0])
         except ValueError as exc:
             raise RuntimeError("下载重定向主机解析结果无效") from exc
-        if not address.is_global:
+        if (
+            not address.is_global
+            and address not in _FAKE_IP_NETWORK
+            and not fake_ip_dns
+        ):
             raise RuntimeError("下载重定向到了非公网地址")
     return True
 
@@ -252,15 +308,21 @@ class LoraDownloadService:
 
     def _client(self, source: str = "civitai"):
         settings = self._settings()
+        # 显式代理优先；留空回退系统代理（环境变量/注册表）。
+        proxy, _proxy_source = net_env.effective_proxy(str(settings.get("proxy") or "").strip())
         kwargs = dict(
             api_token=self.config.get_secret("civitai_api_token") or "",
             cookie=self.config.get_secret("civitai_cookie") or "",
-            proxy=str(settings.get("proxy") or "").strip(),
+            proxy=proxy,
             timeout=max(10, min(int(settings.get("request_timeout") or 60), 180)),
             downloader="multithread",
             split=max(1, min(int(settings.get("split") or 4), 8)),
             network_max_retries=2,
-            download_redirect_validator=_require_public_redirect_url,
+            # 重定向校验需要知道是否配置了代理：代理模式下 DNS 由代理解析，
+            # 本地 getaddrinfo 在 DNS 污染环境下会误杀合法的 CDN 重定向。
+            download_redirect_validator=lambda url, _proxy=proxy: _require_public_redirect_url(
+                url, proxy=_proxy
+            ),
         )
         source = str(source or "civitai").strip().lower()
         if source == "civitai_red":
@@ -740,6 +802,143 @@ class LoraDownloadService:
         except Exception as exc:
             return {"ok": False, "installed": False, "message": _safe_error(exc)}
 
+    # -- 连接诊断 -----------------------------------------------------------
+
+    async def test_connection(self) -> dict[str, Any]:
+        """一键诊断搜索/下载链路：代理 → Civitai 连通性 → Token/Cookie。
+
+        每一步都返回明确的结论与下一步操作提示，让用户在任何机器上都知道
+        该改哪个设置，而不是只看到一串异常文本。
+        """
+        settings = self._settings()
+        explicit = str(settings.get("proxy") or "").strip()
+        try:
+            await net_env.ensure_probed(explicit)
+        except Exception:
+            pass
+        proxy, proxy_source = net_env.effective_proxy(explicit)
+        proxy_report: dict[str, Any] = {
+            "value": proxy,
+            "source": proxy_source,
+            "explicit": bool(explicit),
+            "explicit_value": net_env.normalize_proxy_url(explicit),
+            "scheme": urlparse(proxy).scheme if proxy else "",
+            "reachable": None,
+            "error": "",
+        }
+        guidance: list[str] = []
+        explicit_normalized = net_env.normalize_proxy_url(explicit)
+        if explicit_normalized and urlparse(explicit_normalized).scheme not in {"http", "https"}:
+            guidance.append(
+                f"当前代理协议 {urlparse(explicit_normalized).scheme}:// 不受支持，仅支持 HTTP(S) 代理；"
+                "Clash/v2rayN 请填 Mixed/HTTP 端口，例如 http://127.0.0.1:7890。"
+            )
+        if explicit and proxy_source != "explicit":
+            proxy_report["error"] = (
+                f"配置的代理 {net_env.normalize_proxy_url(explicit)} 当前不可达"
+                + (f"，已自动改用 {proxy}。" if proxy else "，已自动改为直连。")
+            )
+            guidance.append(
+                "设置中的代理不可达：请检查该代理是否开机/在线、局域网代理需开启 Allow LAN；"
+                "或清空代理栏改用本机系统代理。当前已自动回退，搜索/下载仍可继续。"
+            )
+        if proxy and urlparse(proxy).scheme in {"http", "https"}:
+            try:
+                parsed = urlparse(proxy)
+                port = parsed.port or (443 if parsed.scheme == "https" else 80)
+                reader, writer = await asyncio.wait_for(
+                    asyncio.open_connection(parsed.hostname, port), timeout=4.0
+                )
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except Exception:
+                    pass
+                proxy_report["reachable"] = True
+            except Exception as exc:
+                proxy_report["reachable"] = False
+                proxy_report["error"] = _safe_error(exc)
+                guidance.append(
+                    "代理端口连不上：确认代理软件正在运行、端口正确；使用局域网代理需开启 Allow LAN；"
+                    "也可以清空代理栏，让程序自动使用系统代理。"
+                )
+
+        api_report: dict[str, Any] = {"ok": False, "error": ""}
+        try:
+            probe_client = self.client_factory(
+                api_token="",
+                cookie="",
+                proxy=proxy,
+                timeout=min(20, max(10, int(settings.get("request_timeout") or 20))),
+                downloader="multithread",
+            )
+            await probe_client._get_json(f"{probe_client.api_base}/models?limit=1")
+            api_report["ok"] = True
+        except Exception as exc:
+            api_report["error"] = _safe_error(exc)
+            if not proxy:
+                guidance.append(
+                    "Civitai 直连失败：在 设置 → LoRA 下载 填写代理（如 http://127.0.0.1:7890），"
+                    "或开启 Windows 系统代理后清空该栏由程序自动检测。"
+                )
+            elif proxy_report.get("reachable"):
+                guidance.append(
+                    "代理本身可达但访问 Civitai 失败：请更换支持访问 civitai.com 的代理节点。"
+                )
+
+        token_report: dict[str, Any] = {"configured": False, "ok": None, "error": ""}
+        token = str(self.config.get_secret("civitai_api_token") or "").strip()
+        if token:
+            token_report["configured"] = True
+            try:
+                token_client = self.client_factory(
+                    api_token=token,
+                    cookie="",
+                    proxy=proxy,
+                    timeout=min(20, max(10, int(settings.get("request_timeout") or 20))),
+                    downloader="multithread",
+                )
+                await token_client._get_json(f"{token_client.api_base}/models?limit=1")
+                token_report["ok"] = True
+            except Exception as exc:
+                message = _safe_error(exc)
+                token_report["ok"] = False
+                token_report["error"] = message
+                if "401" in message:
+                    guidance.append(
+                        "Civitai API Token 无效：到 civitai.com → 账户设置 → API Keys 重新生成，"
+                        "然后在 设置 → 认证与密钥 更新。"
+                    )
+
+        cookie_report: dict[str, Any] = {"configured": False, "fields": 0, "looks_valid": None, "error": ""}
+        cookie = str(self.config.get_secret("civitai_cookie") or "").strip()
+        if cookie:
+            cookie_report["configured"] = True
+            fields = [part for part in cookie.split(";") if "=" in part]
+            cookie_report["fields"] = len(fields)
+            has_session = any(part.strip().lower().startswith("civitai_token=") for part in fields)
+            cookie_report["looks_valid"] = bool(has_session)
+            if not fields:
+                cookie_report["error"] = "Cookie 内容不像键值对（缺少 name=value 结构）。"
+                guidance.append(
+                    "Civitai Cookie 格式可疑：请重新从已登录浏览器复制完整 Cookie 请求头。"
+                )
+            elif not has_session:
+                guidance.append(
+                    "Cookie 里没有 civitai_token 字段，可能不是登录态 Cookie；"
+                    "受限资源若仍 401，请重新复制已登录浏览器的 Cookie。"
+                )
+
+        ok = bool(api_report.get("ok")) and proxy_report.get("reachable") is not False
+        return {
+            "ok": ok,
+            "proxy": proxy_report,
+            "api": api_report,
+            "token": token_report,
+            "cookie": cookie_report,
+            "guidance": guidance[:6],
+        }
+
     async def _install_bridge(self, client: Any, summary: dict[str, Any], settings: dict[str, Any], result_id: str, *, source: str = "civitai") -> dict[str, Any]:
         download_url = _require_trusted_download_url(str(summary.get("download_url") or ""), source)
         endpoint = self._bridge_endpoint(settings)
@@ -1002,6 +1201,13 @@ class LoraDownloadService:
                 source_ref = dict(record.source_ref or {})
                 self._store.update_state(result_id, LoraDownloadState.RESOLVING)
                 source = str(source_ref.get("source") or "civitai").strip().lower()
+                # 下载前探测显式代理；失效时自动回退系统代理而不是撞死端口。
+                try:
+                    await net_env.ensure_probed(
+                        str(self._settings().get("proxy") or "").strip()
+                    )
+                except Exception:
+                    pass
                 client = self._client(source)
                 summary = await client.resolve_model(
                     self._build_reference(source_ref),

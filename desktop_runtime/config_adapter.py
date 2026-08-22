@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -91,6 +92,41 @@ def _lora_download_patch(value: dict[str, Any]) -> dict[str, Any]:
             limit = 1024 if key == "local_dir" else 512
             cleaned[key] = str(item or "").strip()[:limit]
     return cleaned
+
+
+def normalize_civitai_cookie(value: Any) -> str:
+    """把用户随手粘贴的内容清洗成 Cookie 请求头值。
+
+    支持：整段复制的浏览器请求头（自动提取 ``Cookie:`` 行）、带
+    ``Cookie:`` 前缀的单行、多行断开的 cookie 串、首尾引号与分号。
+    """
+    text = str(value or "").replace("\r", "\n")
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    if not lines:
+        return ""
+    cookie_lines = [line for line in lines if re.match(r"(?i)^cookie\s*:", line)]
+    if cookie_lines:
+        text = "; ".join(re.sub(r"(?i)^cookie\s*:\s*", "", line) for line in cookie_lines)
+    else:
+        text = " ".join(lines)
+    text = re.sub(r"(?i)^cookie\s*:\s*", "", text.strip())
+    # 循环剥离成对出现的引号与分号（"a=1;" / '"a=1"' 等混合粘贴形态）
+    for _ in range(3):
+        stripped = text.strip().strip('"').strip("'").strip().rstrip(";").strip()
+        if stripped == text:
+            break
+        text = stripped
+    text = re.sub(r"\s+", " ", text)
+    return text[:8192]
+
+
+def normalize_secret_value(name: str, value: Any) -> str:
+    """按密钥类型做最小清洗；未知类型只去首尾空白。"""
+    name = str(name or "").strip()
+    if name == "civitai_cookie":
+        return normalize_civitai_cookie(value)
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    return text[:8192]
 
 
 class DesktopConfigAdapter:
@@ -269,7 +305,9 @@ class DesktopConfigAdapter:
 
     async def put_secret(self, name: str, value: str) -> None:
         try:
-            self._secret_store.set(name, value)
+            # 用户常常直接粘贴整段浏览器请求头或带前缀的 Cookie 行，
+            # 这里统一清洗，避免“照抄格式不对导致 401”。
+            self._secret_store.set(name, normalize_secret_value(name, value))
         except SecretStoreError as exc:
             raise AppError(500, "SECRET_STORE_FAILED", exc.message) from exc
 

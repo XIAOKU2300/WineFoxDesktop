@@ -13,6 +13,7 @@ mod handshake;
 mod http_client;
 mod job_object;
 mod panel_protocol;
+mod preflight;
 mod room_control;
 mod sanitize;
 mod sidecar;
@@ -29,6 +30,9 @@ use tauri::{Emitter, Manager};
 use tauri_plugin_single_instance::init as single_instance_init;
 
 pub fn run() {
+    // 窗口创建前先确认 WebView2 可用；缺失时给出官方安装引导。
+    preflight::preflight();
+
     let state = AppState::new();
     let protocol_state = Arc::clone(&state);
 

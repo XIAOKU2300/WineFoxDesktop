@@ -261,7 +261,9 @@ async def handle_lora_preview(request: web.Request) -> web.Response:
         body=data,
         content_type=content_type,
         headers={
-            "Cache-Control": "private, max-age=300",
+            # token 由预览 URL 派生且后端有磁盘缓存；放宽到 1 小时避免
+            # 反复滚动列表时重复请求同一缩略图。
+            "Cache-Control": "private, max-age=3600",
             "X-Content-Type-Options": "nosniff",
         },
     )
@@ -272,6 +274,14 @@ async def handle_probe_lora_bridge(request: web.Request) -> web.Response:
     if engine is None or not hasattr(engine, "probe_lora_bridge"):
         raise AppError(503, "lora_download_not_configured", "LoRA 下载服务未配置")
     return _json(await engine.probe_lora_bridge())
+
+
+async def handle_test_lora_connection(request: web.Request) -> web.Response:
+    """POST /api/v1/lora/test-connection：诊断代理/Civitai 连通性与凭证。"""
+    engine = _ctx(request).get("engine")
+    if engine is None or not hasattr(engine, "test_lora_connection"):
+        raise AppError(503, "lora_download_not_configured", "LoRA 下载服务未配置")
+    return _json(await engine.test_lora_connection())
 
 
 # ---------------- local lora library ----------------
@@ -762,6 +772,7 @@ def register_routes(app: web.Application) -> None:
     app.router.add_get("/api/v1/lora/downloads/{id}", handle_get_lora_download)
     app.router.add_get("/api/v1/lora/preview", handle_lora_preview)
     app.router.add_post("/api/v1/lora/bridge/probe", handle_probe_lora_bridge)
+    app.router.add_post("/api/v1/lora/test-connection", handle_test_lora_connection)
     app.router.add_get("/api/v1/lora/library", handle_lora_library_list)
     app.router.add_get("/api/v1/lora/library/{id}", handle_lora_library_get)
     app.router.add_patch("/api/v1/lora/library/{id}", handle_lora_library_update)

@@ -9,7 +9,10 @@ import io
 import json
 import logging
 import mimetypes
+import platform
 import re
+import shutil
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -40,6 +43,7 @@ from .lora_download import LoraDownloadService
 from .lora_library import LoraLibraryService
 from .lora_llm_match import LoraLlmMatchService
 from .lora_preview import LoraPreviewService
+from . import net_env
 from .lora_profiles import (
     AutoLoraResolution,
     LoadedLoraProfiles,
@@ -174,10 +178,11 @@ class DesktopEngine:
         self.lora_preview = LoraPreviewService(
             data_root=self.data_root,
             # 缩略图和搜索/下载共用设置中的代理；用回调读取最新值，
-            # 用户修改设置后无需重启 sidecar 才能加载新图。
-            proxy=lambda: str(
-                ((self.config.snapshot().get("lora_download") or {}).get("proxy") or "")
-            ),
+            # 用户修改设置后无需重启 sidecar 才能加载新图。显式代理留空时
+            # 自动回退系统代理（环境变量/注册表）。
+            proxy=lambda: net_env.effective_proxy(
+                str((self.config.snapshot().get("lora_download") or {}).get("proxy") or "")
+            )[0],
         )
         self.lora_download = LoraDownloadService(
             db=database,
@@ -545,6 +550,13 @@ class DesktopEngine:
     async def stop(self) -> None:
         self._accepting = False
         await self.lora_download.stop()
+        # 释放 civitai_api 的共享 HTTP 会话，避免关停时报 unclosed session。
+        try:
+            from civitai_api import close_shared_api_sessions
+
+            await close_shared_api_sessions()
+        except Exception:
+            logger.debug("关闭共享 HTTP 会话失败（忽略）", exc_info=True)
         metadata_task = self._lora_metadata_task
         self._lora_metadata_task = None
         if metadata_task is not None:
@@ -764,6 +776,10 @@ class DesktopEngine:
 
     async def probe_lora_bridge(self) -> dict[str, Any]:
         return await self.lora_download.bridge_status()
+
+    async def test_lora_connection(self) -> dict[str, Any]:
+        """诊断 LoRA 搜索/下载链路（代理/连通性/凭证），返回可操作的提示。"""
+        return await self.lora_download.test_connection()
 
     async def refresh_after_env_setup(self) -> dict[str, Any]:
         """环境中心装完 Bridge 后调用：清 probe 缓存、强制重探、重载 profiles。"""
@@ -1634,6 +1650,54 @@ class DesktopEngine:
                 "detail": "运行日志暂时无法读取。",
             }
 
+    def _runtime_environment_health(self) -> dict[str, Any]:
+        """安装/运行环境自检：WebView2、系统版本、数据盘剩余空间。"""
+        import winreg
+
+        webview2_version = ""
+        for root, subkey in (
+            (winreg.HKEY_LOCAL_MACHINE, r"Software\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"),
+            (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"),
+        ):
+            try:
+                with winreg.OpenKey(root, subkey) as key:
+                    value, _kind = winreg.QueryValueEx(key, "pv")
+                    value = str(value or "").strip()
+                    if value and value != "0.0.0.0":
+                        webview2_version = value
+                        break
+            except OSError:
+                continue
+        try:
+            disk_free_gb = shutil.disk_usage(str(self.data_root)).free / (1024 ** 3)
+        except OSError:
+            disk_free_gb = -1.0
+        frozen = bool(getattr(sys, "frozen", False))
+        details = [
+            f"系统 {platform.system()} {platform.release()}",
+            f"Python {platform.python_version()}{'（内置运行时）' if frozen else ''}",
+        ]
+        if webview2_version:
+            details.append(f"WebView2 {webview2_version}")
+        else:
+            details.append("WebView2 未见注册（固定版本部署或非 Windows 桌面环境）")
+        if disk_free_gb >= 0:
+            details.append(f"数据盘剩余 {disk_free_gb:.1f} GB")
+        status = "ok"
+        if not webview2_version and platform.system() == "Windows" and frozen:
+            status = "warn"
+        if 0 <= disk_free_gb < 2.0:
+            status = "warn"
+        return {
+            "id": "runtime_environment",
+            "label": "运行环境",
+            "status": status,
+            "detail": "；".join(details),
+            "code": "WEBVIEW2_NOT_DETECTED" if status == "warn" and not webview2_version else ("DISK_SPACE_LOW" if status == "warn" else None),
+            "retryable": False,
+            "action": "窗口显示异常时安装 Microsoft WebView2 运行时（官方 Evergreen 包）；磁盘不足请清理后重试。" if status == "warn" else "",
+        }
+
     async def diagnostics(self) -> dict[str, Any]:
         probe = await self.probe_comfyui()
         connected = bool(probe.get("online"))
@@ -1649,6 +1713,8 @@ class DesktopEngine:
             integrity = ["quick_check failed"]
             database_ok = False
             database_detail = "SQLite 数据库校验无法完成"
+        config_health.append(self._runtime_environment_health())
+
         config_health.append({
             "id": "database",
             "label": "本地数据库",

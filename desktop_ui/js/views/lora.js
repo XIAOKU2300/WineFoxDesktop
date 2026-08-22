@@ -181,6 +181,7 @@ export class LoraLibraryView {
     image = el("img", {
       alt: "",
       loading: "lazy",
+      decoding: "async",
       referrerpolicy: "no-referrer",
       onload: () => {
         applyNaturalRatio();
@@ -505,14 +506,26 @@ export class LoraLibraryView {
     const nodes = [];
     if (this.onlineErrors.length) {
       const firstDetail = this.onlineErrors[0] || "";
-      const summary = this.onlineResults.length
-        ? "部分来源连接失败，已展示其余可用结果。"
-        : (firstDetail.includes("代理") || firstDetail.includes("proxy") || firstDetail.includes("Clash"))
-          ? "搜索失败：疑似代理或网络连接问题。"
-          : "搜索失败，来源无法连接。";
+      const isProxyIssue = /代理|proxy|Clash|超时|timeout|连接/i.test(firstDetail);
+      const isCredentialIssue = /401|Cookie|cookie|登录|Token 拒绝|拒访问/.test(firstDetail);
+      let summary;
+      let action = "";
+      if (this.onlineResults.length) {
+        summary = "部分来源连接失败，已展示其余可用结果。";
+      } else if (isCredentialIssue) {
+        summary = "搜索/下载需要 Civitai 登录凭证。";
+        action = "到 设置 → 认证与密钥 配置 Civitai API Token（优先）或登录 Cookie。";
+      } else if (isProxyIssue) {
+        summary = "搜索失败：疑似代理或网络连接问题。";
+        action = "到 设置 → LoRA 下载 填写代理（如 http://127.0.0.1:7890；留空自动用系统代理），或点“测试下载链路”诊断。";
+      } else {
+        summary = "搜索失败，来源无法连接。";
+        action = "可到 设置 → LoRA 下载 点击“测试下载链路”定位问题。";
+      }
       nodes.push(el("div", { class: "notice warn lora-search-diagnostics", role: "status" }, [
         el("b", {}, summary),
         el("span", { class: "lora-search-error-detail" }, esc(firstDetail)),
+        action ? el("span", { class: "lora-search-error-detail" }, esc(action)) : null,
         (this.onlineErrors.length > 1)
           ? el("span", { class: "lora-search-error-more" }, `另有 ${this.onlineErrors.length - 1} 条错误信息` )
           : null,
