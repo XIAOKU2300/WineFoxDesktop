@@ -403,7 +403,9 @@
         break;
       case "job.failed":
         trackJob(data?.job);
-        toast(data?.error || "任务失败", "err");
+        if (data?.job && data.job.memberId === state.member.id) {
+          toast(data?.error || "任务失败", "err");
+        }
         break;
       case "room.catalog_changed":
       case "room.settings_changed":
@@ -649,6 +651,9 @@
 
   /* ---------------- 生成 ---------------- */
   function maybeShowResult(message) {
+    // 只让结果消息驱动「我」的画布；否则并发生成时别人的结果
+    // 会覆盖自己正在进行中的任务状态。
+    if (message.senderId !== state.member.id) return;
     const att = (message.attachments || [])[0];
     const job = state.jobs.get(message.generationJobId);
     if (!att) return;

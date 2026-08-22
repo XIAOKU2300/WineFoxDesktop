@@ -388,6 +388,8 @@ class ComfyUITransport:
                 last_error = exc
                 if exc.kind in (ErrorKind.AUTH, ErrorKind.PAYLOAD_TOO_LARGE):
                     raise exc  # 认证/超限不重试
+                if exc.status is not None and not self._is_retryable_http_status(exc.status):
+                    raise exc  # 服务器已明确拒绝（404/400 等），重试无意义
             if attempt + 1 < attempts:
                 delay = self._backoff(attempt)
                 logger.debug(
@@ -542,6 +544,8 @@ class ComfyUITransport:
                 last_error = exc
                 if exc.kind in (ErrorKind.AUTH, ErrorKind.PAYLOAD_TOO_LARGE):
                     raise exc
+                if exc.status is not None and not self._is_retryable_http_status(exc.status):
+                    raise exc  # 不可重试的 4xx 立即失败
             if attempt + 1 < attempts:
                 await asyncio.sleep(self._backoff(attempt))
         assert last_error is not None

@@ -139,7 +139,13 @@ Section "WineFox" SEC_MAIN
   IfFileExists "$INSTDIR\WineFox.exe" 0 fresh_install
     IfFileExists "$INSTDIR.old" 0 +2
       RMDir /r "$INSTDIR.old"      ; clean stale backup from a previous run
+    ; Windows 不允许重命名进程的当前目录，而上面的 SetOutPath "$INSTDIR"
+    ; 恰好把 CWD 设成了 $INSTDIR：先把工作目录挪到 $TEMP 再 Rename，
+    ; 成功后 SetOutPath 会重建（空白的）$INSTDIR 供 File 解包。
+    ClearErrors
+    SetOutPath "$TEMP"
     Rename "$INSTDIR" "$INSTDIR.old"
+    SetOutPath "$INSTDIR"
     IfErrors 0 fresh_install
       IfSilent +2
       MessageBox MB_OK|MB_ICONSTOP "笨蛋，现有安装被占用，没办法安全备份：$\r$\n$INSTDIR$\r$\n$\r$\n先彻底退出 WineFox，再重新运行安装包吧。"
@@ -191,6 +197,9 @@ SectionEnd
 ; ---------------------------------------------------------------------------
 Section "Uninstall"
   SetShellVarContext current
+  ; 卸载器可能从 $INSTDIR 内启动（CWD 落在安装目录），Windows 不允许
+  ; 删除进程的当前目录：先把工作目录挪开。
+  SetOutPath "$TEMP"
   !insertmacro StopRunningApps
   Sleep 500
 
@@ -199,11 +208,15 @@ Section "Uninstall"
   Delete "$DESKTOP\WineFox.lnk"
 
   ; restore a leftover rollback dir if present
-  IfFileExists "$INSTDIR.old\WineFox.exe" 0 +2
+  IfFileExists "$INSTDIR.old\WineFox.exe" 0 no_rollback_restore
     RMDir /r "$INSTDIR"
     Rename "$INSTDIR.old" "$INSTDIR"
+    ; 旧版本已恢复，跳过下面对 $INSTDIR 的最终删除
+    Goto uninstall_files_done
+  no_rollback_restore:
 
   RMDir /r "$INSTDIR"
+  uninstall_files_done:
 
   DeleteRegKey HKCU "${UNINST_KEY}"
   DeleteRegKey /ifempty HKCU "Software\${PUBLISHER}"

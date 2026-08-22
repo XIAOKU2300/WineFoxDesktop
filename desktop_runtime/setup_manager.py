@@ -343,11 +343,11 @@ class SetupManager:
                 )
                 continue
             if kind == "models":
-                items = [PlanItem(kind="model", spec=self.manifest.models[item["id"]]) for item in raw.get("items", [])]
+                items = [self._plan_item(raw, item, "model", self.manifest.models) for item in raw.get("items", [])]
                 steps.append(PlanStep(kind="models", group=group, label=label, items=items))
                 continue
             if kind == "nodes":
-                items = [PlanItem(kind="node", spec=self.manifest.nodes[item["id"]]) for item in raw.get("items", [])]
+                items = [self._plan_item(raw, item, "node", self.manifest.nodes) for item in raw.get("items", [])]
                 pip: tuple[str, ...] = ()
                 if group and group in self.manifest.node_groups:
                     pip = self.manifest.node_groups[group].pip_packages
@@ -357,6 +357,15 @@ class SetupManager:
         if not steps:
             raise SetupError(SetupErrorCode.CONFIG_INVALID, "plan 不含任何步骤")
         return Plan(root=root, profile=str(plan_dict.get("profile") or "custom"), steps=steps)
+
+    def _plan_item(self, raw: dict, item: Any, kind: str, catalog: dict) -> PlanItem:
+        """校验客户端提交的条目引用，非法输入返回 CONFIG_INVALID 而非 500。"""
+        if not isinstance(item, dict):
+            raise SetupError(SetupErrorCode.CONFIG_INVALID, f"plan step {raw.get('kind')!r} 的 items 条目必须是对象")
+        spec = catalog.get(str(item.get("id") or ""))
+        if spec is None:
+            raise SetupError(SetupErrorCode.CONFIG_INVALID, f"清单中不存在 {kind}: {item.get('id')!r}")
+        return PlanItem(kind=kind, spec=spec)
 
     def _spawn(self, job: SetupJob) -> None:
         self._tasks[job.id] = asyncio.create_task(self._run_job_safely(job))

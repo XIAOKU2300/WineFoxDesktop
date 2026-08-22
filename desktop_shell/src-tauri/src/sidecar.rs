@@ -118,14 +118,30 @@ impl SidecarManager {
             }
         }
 
-        // Dev tree: <repo>/desktop_shell/sidecar/...
-        let dev_pkg = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("sidecar")
-            .join("winefox_sidecar");
-        if dev_pkg.join("__main__.py").is_file() {
-            let entry = dev_pkg.join("__main__.py");
+        // Dev tree: cargo-manifest-dir/binaries/winefox-sidecar.exe
+        // (build.ps1 stages the packaged exe here for dev runs)
+        let dev_bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("binaries")
+            .join("winefox-sidecar.exe");
+        if dev_bin.is_file() {
+            return Ok((dev_bin.to_string_lossy().into_owned(), vec![]));
+        }
+
+        // Dev tree: <repo>/desktop_shell/sidecar/...  The package uses
+        // relative imports, so it must run as a module (python -m) with the
+        // package root on sys.path; spawn() does not set a cwd, so bootstrap
+        // via -c instead of relying on the working directory.
+        let dev_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("sidecar");
+        if dev_root.join("winefox_sidecar").join("__main__.py").is_file() {
             let py = std::env::var("WINE_FOX_PYTHON").unwrap_or_else(|_| "python".into());
-            return Ok((py, vec![entry.to_string_lossy().into_owned()]));
+            let boot = format!(
+                "import sys; sys.path.insert(0, {root:?}); import runpy; \
+                 runpy.run_module('winefox_sidecar', run_name='__main__')",
+                root = dev_root.canonicalize().unwrap_or(dev_root.clone())
+            );
+            return Ok((py, vec!["-c".into(), boot]));
         }
 
         Err("sidecar binary not found: set WINE_FOX_SIDECAR or run packaging/build.ps1".into())

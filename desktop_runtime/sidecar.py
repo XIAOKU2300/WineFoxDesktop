@@ -45,7 +45,11 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _start_stdin_reader(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue[dict[str, Any]]) -> threading.Thread:
+def _start_stdin_reader(
+    loop: asyncio.AbstractEventLoop,
+    queue: asyncio.Queue[dict[str, Any]],
+    stop_event: asyncio.Event,
+) -> threading.Thread:
     def read() -> None:
         try:
             for raw in sys.stdin:
@@ -56,7 +60,12 @@ def _start_stdin_reader(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue[di
                 if isinstance(message, dict):
                     loop.call_soon_threadsafe(queue.put_nowait, message)
         except (OSError, ValueError):
-            return
+            pass
+        finally:
+            # stdin EOF / 管道破裂 = 父进程已退出：置 stop_event 让主循环
+            # 走优雅关停。这是 Rust 壳层 Job Object 之外的第二道孤儿保险
+            # （见 desktop_shell/src-tauri/src/job_object.rs 的契约注释）。
+            loop.call_soon_threadsafe(stop_event.set)
     thread = threading.Thread(target=read, name="winefox-stdin", daemon=True)
     thread.start()
     return thread
@@ -139,7 +148,7 @@ async def run(args: argparse.Namespace) -> int:
     commands: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
-    _start_stdin_reader(loop, commands)
+    _start_stdin_reader(loop, commands, stop_event)
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
             loop.add_signal_handler(sig, stop_event.set)

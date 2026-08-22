@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import io
 import secrets
@@ -210,7 +211,9 @@ async def _upload_handler(request: web.Request) -> web.Response:
             if not raw:
                 return error_response("空文件", "EMPTY_FILE", 400)
             try:
-                files.append(_process_image(raw))
+                # 解码+重编码是 CPU 密集操作，放线程池避免阻塞事件循环
+                # （期间全房间的聊天/WS/HTTP 都会冻结）。
+                files.append(await asyncio.to_thread(_process_image, raw))
             except ImageErrorDetail as exc:
                 return error_response(exc.message, exc.error_code, exc.status)
     except (ValueError, TypeError):

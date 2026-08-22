@@ -1058,7 +1058,15 @@ class DesktopEngine:
                 self._update_job(job_id, "failed", error=str(exc)[:2000])
             finally:
                 self._current_job_id = None
+                self._cancel_requested.discard(job_id)
                 self._queue.task_done()
+
+    def _consume_cancel(self, job_id: int) -> bool:
+        """执行期间收到取消：确保落回 cancelled 终态，避免被后续状态覆盖。"""
+        if job_id not in self._cancel_requested:
+            return False
+        self._update_job(job_id, "cancelled", error="用户已取消本地等待；未中断 ComfyUI 全局队列")
+        return True
 
     async def _run_job(self, job_id: int) -> None:
         row = self.db.connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
@@ -1068,6 +1076,8 @@ class DesktopEngine:
         self._update_job(job_id, "preparing")
         raw_prompt = str(payload.get("prompt") or "")
         prompt_result = await self._prepare_prompt(payload)
+        if self._consume_cancel(job_id):
+            return
         execution_payload = dict(payload)
         execution_payload["prompt"] = prompt_result.final_prompt
         vision_meta: dict[str, Any] = {"status": "not_requested"}
@@ -1146,6 +1156,8 @@ class DesktopEngine:
                 checkpoint=checkpoint,
                 uploaded_name=uploaded_name,
             )
+            if self._consume_cancel(job_id):
+                return
             self._update_job(job_id, "running", comfy_prompt_id=resume_prompt_id)
             result = await executor.run(
                 ExecutionSnapshot(

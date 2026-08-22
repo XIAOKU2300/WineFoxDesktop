@@ -185,9 +185,10 @@ impl CloudflaredProvider {
         let t1 = std::thread::spawn(move || {
             for line in BufRead::lines(BufReader::new(stdout)) {
                 let Ok(line) = line else { break };
-                if tx1.send(Some(line)).is_err() {
-                    break;
-                }
+                // rx dropped after the URL was found: keep draining anyway.
+                // cloudflared logs continuously; a full pipe would block the
+                // child and stall the tunnel for the rest of the session.
+                let _ = tx1.send(Some(line));
             }
             let _ = tx1.send(None);
         });
@@ -195,9 +196,7 @@ impl CloudflaredProvider {
         let t2 = std::thread::spawn(move || {
             for line in BufRead::lines(BufReader::new(stderr)) {
                 let Ok(line) = line else { break };
-                if tx2.send(Some(line)).is_err() {
-                    break;
-                }
+                let _ = tx2.send(Some(line));
             }
             let _ = tx2.send(None);
         });

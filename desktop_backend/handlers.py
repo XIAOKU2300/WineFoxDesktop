@@ -531,12 +531,18 @@ async def handle_list_history(request: web.Request) -> web.Response:
     if engine is None:
         raise AppError(503, "core_engine_not_configured", "核心引擎未注入")
     limit, offset, favorite = _history_query(request)
+    cursor = request.query.get("cursor")
+    if cursor:
+        try:
+            int(cursor)
+        except (TypeError, ValueError):
+            raise AppError(422, "invalid_cursor", "cursor 需要为整数")
     if hasattr(engine, "list_history_page"):
         page = await engine.list_history_page(
             limit=limit,
             offset=offset,
             favorite_only=favorite,
-            cursor=request.query.get("cursor"),
+            cursor=cursor,
             q=request.query.get("q"),
             status=request.query.get("status"),
             trash=request.query.get("trash"),

@@ -32,7 +32,7 @@ from typing import Any
 import aiohttp
 
 from .setup_errors import SetupError, SetupErrorCode
-from .setup_manifest import ModelSpec, NodeSpec, SetupManifest
+from .setup_manifest import ModelSource, ModelSpec, NodeSpec, SetupManifest
 from .setup_paths import safe_comfyui_path
 from .setup_python import PythonProbe, resolve_python_executable
 from .setup_verify import sha256_of, verify_model_file, verify_node_dir
@@ -363,6 +363,14 @@ class SetupExecutor:
             job.emit("step_started", step=state.index, kind=state.kind, group=state.group)
             try:
                 await self._run_step(job, state, plan_step)
+                if job.cancel_requested.is_set():
+                    # 条目级取消（_run_models/_run_nodes 循环顶部静默返回）：
+                    # 该步不能记成功，否则最后一步取消会把整个 job 判成 SUCCESS。
+                    state.status = "cancelled"
+                    job.emit("step_finished", step=state.index, status="cancelled")
+                    job.status = JOB_CANCELLED
+                    job.emit("job_cancelled", id=job.id)
+                    return
                 state.status = "success"
                 job.emit("step_finished", step=state.index, status="success")
             except asyncio.CancelledError:
@@ -371,6 +379,16 @@ class SetupExecutor:
                 job.emit("job_cancelled", id=job.id)
                 raise
             except SetupError as exc:
+                if exc.code == SetupErrorCode.CANCELLED:
+                    # 下载/安装中途的取消要落到 CANCELLED 终态，
+                    # 不能当普通失败处理（更不能继续后续步骤）。
+                    state.status = "cancelled"
+                    state.error_code = exc.code
+                    state.error_message = exc.message
+                    job.status = JOB_CANCELLED
+                    job.emit("step_finished", step=state.index, status="cancelled")
+                    job.emit("job_cancelled", id=job.id)
+                    return
                 state.status = "failed"
                 state.error_code = exc.code
                 state.error_message = exc.message

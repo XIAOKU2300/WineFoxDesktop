@@ -131,8 +131,11 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
         log.info("ws connection dropped for member %s", member["id"], exc_info=True)
     finally:
         hub.disconnect(int(member["id"]), ws)
-        storage.mark_disconnected(int(member["id"]))
-        await hub.broadcast("member.left", member_public(member))
+        # 多标签页/断线重连窗口下，该成员可能还有其他活跃连接：
+        # 只有最后一条连接关闭时才标记离线并广播 member.left。
+        if hub.member_socket_count(int(member["id"])) == 0:
+            storage.mark_disconnected(int(member["id"]))
+            await hub.broadcast("member.left", member_public(member))
     return ws
 
 

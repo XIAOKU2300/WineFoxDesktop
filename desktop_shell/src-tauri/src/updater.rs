@@ -332,6 +332,12 @@ impl UpdateManager {
         self.emit(app);
 
         let manager = app.state::<Arc<SidecarManager>>();
+        {
+            // 标记退出意图：否则 sidecar 的退出会被当成意外崩溃而自动重启，
+            // exit_done 信号也不会发出，request_shutdown_and_wait 只能空耗满超时。
+            let mut inner = manager.state.inner.lock().unwrap();
+            inner.quitting = true;
+        }
         manager.request_shutdown_and_wait("now", Duration::from_secs(15));
         let _ = manager.force_kill();
 
