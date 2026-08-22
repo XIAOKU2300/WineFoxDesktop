@@ -25,14 +25,18 @@ export const store = {
   },
   subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
   applyTheme() {
-    const t = state.theme === "dark" ? "dark" : "light";
+    const t = ["dark", "pink"].includes(state.theme) ? state.theme : "light";
     document.documentElement.dataset.theme = t;
-    document.documentElement.style.colorScheme = t;
+    document.documentElement.style.colorScheme = t === "pink" ? "light" : t;
   },
-  toggleTheme() {
-    state.theme = state.theme === "dark" ? "light" : "dark";
+  setTheme(name) {
+    state.theme = ["dark", "pink"].includes(name) ? name : "light";
     localStorage.setItem("wfx-theme", state.theme);
     this.applyTheme();
+  },
+  toggleTheme() {
+    const order = ["light", "dark", "pink"];
+    this.setTheme(order[(order.indexOf(state.theme) + 1) % order.length]);
   },
   setJobTally(queued, running) {
     state.jobTally = { queued, running };

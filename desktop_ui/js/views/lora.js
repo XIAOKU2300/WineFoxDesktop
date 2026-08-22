@@ -685,7 +685,7 @@ export class LoraLibraryView {
     document.body.append(overlay);
 
     let closed = false;
-    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
+    const reduceMotion = window.__wfxReducedMotion?.() === true;
     // settled = 开场飞行已落地（或本就没有飞行），详情图已经就位。
     let settled = !canReuseImage || reduceMotion;
     let openFlight = null;
