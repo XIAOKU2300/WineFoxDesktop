@@ -150,12 +150,14 @@ async def handle_setup_plan(request: web.Request) -> web.Response:
     profile = str(body["profile"]) if body.get("profile") else None
     if profile and profile not in manager.manifest.tiers:
         raise ValidationError(f"未知 profile: {profile}")
+    root_value = body.get("root")
     plan = await manager.plan(
         profile=profile,
         custom=custom,
         repair=bool(body.get("repair", False)),
         retry_job_id=str(body["retry_of"]) if body.get("retry_of") else None,
         only_missing=only_missing,
+        root=Path(str(root_value)) if root_value else None,
     )
     return _json(plan)
 

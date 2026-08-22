@@ -14,7 +14,13 @@
       "civitai.com", "civitai.red", "civitaired.com",
       "huggingface.co", "hf-mirror.com",
       "github.com", "raw.githubusercontent.com", "objects.githubusercontent.com",
-      "github-releases.githubusercontent.com", "release-assets.githubusercontent.com"
+      "github-releases.githubusercontent.com", "release-assets.githubusercontent.com",
+      "codeload.github.com",
+      "www.python.org", "mirrors.huaweicloud.com", "registry.npmmirror.com",
+      "bootstrap.pypa.io",
+      "pypi.org", "files.pythonhosted.org",
+      "pypi.tuna.tsinghua.edu.cn", "mirrors.aliyun.com",
+      "download.pytorch.org"
     ],
     "config_defaults": {
       "token": "",
@@ -31,8 +37,7 @@
   "python": {
     "min_version": [3, 10],
     "probe_requires_pip": true,
-    "candidate_priority": [
-      "env:COMFYUI_PYTHON",
+    "candidate_priority": [      "env:COMFYUI_PYTHON",
       "running_processes",
       "paths:root_parent/python_embeded/python.exe",
       "paths:root_parent/python/python.exe",
@@ -50,6 +55,41 @@
       "conda_envs",
       "system_python"
     ]
+  },
+
+  "runtime": {
+    "python_embed": {
+      "version": "3.11.9",
+      "install_dir": "python_embeded",
+      "get_pip_url": "https://bootstrap.pypa.io/get-pip.py",
+      "sources": [
+        {"host": "www.python.org", "url": "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip"},
+        {"host": "mirrors.huaweicloud.com", "url": "https://mirrors.huaweicloud.com/python/3.11.9/python-3.11.9-embed-amd64.zip"},
+        {"host": "registry.npmmirror.com", "url": "https://registry.npmmirror.com/-/binary/python/3.11.9/python-3.11.9-embed-amd64.zip"}
+      ]
+    },
+    "comfyui": {
+      "sources": [
+        {"host": "codeload.github.com", "url": "https://codeload.github.com/comfyanonymous/ComfyUI/zip/refs/heads/master"}
+      ]
+    },
+    "pip": {
+      "index_urls": [
+        "https://pypi.tuna.tsinghua.edu.cn/simple",
+        "https://mirrors.aliyun.com/pypi/simple/",
+        "https://pypi.org/simple"
+      ]
+    },
+    "torch": {
+      "packages": ["torch", "torchvision", "torchaudio"],
+      "index_by_cuda": {
+        "12.8": "https://download.pytorch.org/whl/cu128",
+        "12.6": "https://download.pytorch.org/whl/cu126",
+        "12.4": "https://download.pytorch.org/whl/cu124",
+        "12.2": "https://download.pytorch.org/whl/cu121"
+      },
+      "cpu_index": "https://download.pytorch.org/whl/cpu"
+    }
   },
 
   "directories": {
@@ -415,6 +455,14 @@
   ],
 
   "tiers": {
+    "bootstrap": [
+      {"step": "comfyui"},
+      {"step": "python_runtime"},
+      {"step": "requirements"},
+      {"step": "nodes", "group": "minimal"},
+      {"step": "models", "group": "core"},
+      {"step": "bridge"}
+    ],
     "lite": [
       {"step": "nodes", "group": "minimal"},
       {"step": "models", "group": "core"},

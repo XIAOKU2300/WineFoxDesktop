@@ -300,11 +300,20 @@ class Planner:
     def __init__(self, manifest: SetupManifest) -> None:
         self.manifest = manifest
 
+    _RUNTIME_STEP_LABELS = {
+        "comfyui": "获取 ComfyUI 本体（GitHub 官方）",
+        "python_runtime": "安装 Python 运行时（python.org 官方）",
+        "requirements": "安装 PyTorch 与依赖（GPU 自动检测）",
+    }
+
     def plan_for_profile(self, status: EnvironmentStatus, profile: str, *, only_missing: bool = False) -> Plan:
         if profile not in self.manifest.tiers:
             raise ValueError(f"unknown profile {profile!r}")
         steps: list[PlanStep] = []
         for tier_step in self.manifest.tiers[profile]:
+            if tier_step.step in self._RUNTIME_STEP_LABELS:
+                steps.append(PlanStep(kind=tier_step.step, group=None, label=self._RUNTIME_STEP_LABELS[tier_step.step]))
+                continue
             if tier_step.step == "bridge":
                 if only_missing and status.bridge.installed:
                     continue

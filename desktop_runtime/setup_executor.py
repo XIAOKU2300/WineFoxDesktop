@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import secrets
 import shutil
 import time
@@ -194,8 +195,16 @@ class PythonRunner:
             raise SetupError(SetupErrorCode.PYTHON_UNSUPPORTED, f"无法解析 Python 版本: {out!r}")
         return int(parts[0]), int(parts[1])
 
-    async def pip_install(self, packages: list[str], *, requirements: Path | None = None) -> None:
+    async def pip_install(
+        self,
+        packages: list[str],
+        *,
+        requirements: Path | None = None,
+        index_url: str | None = None,
+    ) -> None:
         args = ["-m", "pip", "install", "--disable-pip-version-check"]
+        if index_url:
+            args += ["-i", index_url]
         if requirements is not None:
             args += ["-r", str(requirements)]
         else:
@@ -204,6 +213,12 @@ class PythonRunner:
         if code != 0:
             detail = (err or out).strip()[:500]
             raise SetupError(SetupErrorCode.PIP_FAILED, f"pip 安装失败: {detail}")
+
+
+def _sanitize_error_text(value: str) -> str:
+    """去掉异常文本里的绝对路径，只保留文件名（公开契约：不外泄本机路径）。"""
+    pattern = r"(?:[A-Za-z]:[\\/]|\\\\)[^\r\n,;\"']*"
+    return re.sub(pattern, lambda m: Path(m.group(0)).name or "[path]", value)[:500]
 
 
 class _SpeedTracker:
@@ -360,9 +375,9 @@ class SetupExecutor:
             except Exception as exc:  # pragma: no cover - defensive
                 state.status = "failed"
                 state.error_code = SetupErrorCode.INTERNAL
-                state.error_message = str(exc)
+                state.error_message = _sanitize_error_text(str(exc))
                 job.error_code = SetupErrorCode.INTERNAL
-                job.emit("step_failed", step=state.index, code=SetupErrorCode.INTERNAL, message=str(exc))
+                job.emit("step_failed", step=state.index, code=SetupErrorCode.INTERNAL, message=state.error_message)
         if job.status == JOB_RUNNING:
             if job.error_code:
                 job.status = JOB_FAILED
@@ -405,6 +420,12 @@ class SetupExecutor:
             await self._run_bridge(job, state, plan_step)
         elif plan_step.kind == "pip":
             await self._run_pip(job, state, plan_step)
+        elif plan_step.kind == "comfyui":
+            await self._run_comfyui(job, state)
+        elif plan_step.kind == "python_runtime":
+            await self._run_python_runtime(job, state)
+        elif plan_step.kind == "requirements":
+            await self._run_requirements(job, state)
         else:  # pragma: no cover
             raise SetupError(SetupErrorCode.UNKNOWN, f"未知步骤类型: {plan_step.kind}")
 
@@ -459,6 +480,217 @@ class SetupExecutor:
             job.emit("pip_started", step=state.index, package=package)
             await runner.pip_install([package])
             state.items_done += 1
+
+    # ------------------------------------------------------------- runtime bootstrap
+
+    async def _download_runtime_file(self, job: SetupJob, sources, dest: Path, label: str) -> None:
+        """复用模型下载管线（多连接/断点/校验）下载运行时组件。"""
+        spec = ModelSpec(
+            id=label,
+            name=dest.name,
+            kind="bin",
+            dest=label,
+            min_gb=0.0,
+            sha256="",
+            sources=tuple(sources),
+            group="runtime",
+        )
+        part = dest.with_name(dest.name + ".part")
+        last_error = None
+        for source in self._ordered_sources(spec):
+            if source.host not in self.manifest.bridge.allowed_hosts:
+                continue
+            url = await self._resolve_url(source.url)
+            try:
+                await self._download_to_part(job, url, part, spec)
+            except SetupError as exc:
+                last_error = exc
+                if exc.code == SetupErrorCode.CANCELLED:
+                    raise
+                continue
+            self._snapshot(job, dest)
+            await asyncio.to_thread(os.replace, part, dest)
+            return
+        raise last_error or SetupError(SetupErrorCode.DOWNLOAD_FAILED, f"{label} 无可用来源")
+
+    async def _run_comfyui(self, job: SetupJob, state: StepState) -> None:
+        """从 GitHub 官方 zip 安装 ComfyUI 本体到 job.root。"""
+        runtime = self.manifest.runtime
+        if runtime is None or not runtime.comfyui_sources:
+            raise SetupError(SetupErrorCode.CONFIG_INVALID, "清单未提供 ComfyUI 本体来源")
+        if (job.root / "main.py").is_file():
+            job.emit("runtime_skipped", component="comfyui", reason="已存在")
+            return
+        if job.work_dir is None:
+            raise SetupError(SetupErrorCode.INTERNAL, "job 缺少工作目录")
+        if job.root.exists() and any(job.root.iterdir()):
+            raise SetupError(
+                SetupErrorCode.ROOT_INVALID,
+                "目标目录非空且不含 ComfyUI（main.py 缺失），请选择空目录",
+            )
+        staging = job.work_dir / "comfyui"
+        staging.mkdir(parents=True, exist_ok=True)
+        zip_path = staging / "ComfyUI-master.zip"
+        await self._download_runtime_file(job, runtime.comfyui_sources, zip_path, "comfyui.zip")
+        extracted = staging / "extract"
+        if extracted.exists():
+            await asyncio.to_thread(shutil.rmtree, extracted)
+        await asyncio.to_thread(self._extract_zip_safe, zip_path, extracted)
+        top = self._single_top_dir(extracted)
+        await asyncio.to_thread(self._copytree_into, top, job.root)
+        if not (job.root / "main.py").is_file():
+            raise SetupError(SetupErrorCode.DOWNLOAD_FAILED, "ComfyUI 压缩包缺少 main.py")
+        job.emit("runtime_installed", component="comfyui")
+
+    async def _run_python_runtime(self, job: SetupJob, state: StepState) -> None:
+        """安装 python.org 官方 embeddable Python + pip（含国内镜像回退）。"""
+        runtime = self.manifest.runtime
+        embed = runtime.python_embed if runtime else None
+        if embed is None or not embed.sources:
+            raise SetupError(SetupErrorCode.CONFIG_INVALID, "清单未提供 Python 运行时来源")
+        if job.work_dir is None:
+            raise SetupError(SetupErrorCode.INTERNAL, "job 缺少工作目录")
+
+        probe = resolve_python_executable(job.root, self.manifest.python)
+        if probe.found and probe.executable:
+            runner = PythonRunner(probe.executable)
+            try:
+                major, minor = await runner.probe_version()
+                min_major, min_minor = self.manifest.python.min_version
+                if (major, minor) >= (min_major, min_minor):
+                    code, _out, _err = await runner.run("-m", "pip", "--version")
+                    if code == 0:
+                        job.emit("runtime_skipped", component="python", reason=f"检测到 Python {major}.{minor}")
+                        return
+            except SetupError:
+                pass
+
+        target_dir = job.root.parent / embed.install_dir
+        if (target_dir / "python.exe").is_file():
+            job.emit("runtime_skipped", component="python", reason="python_embeded 已存在")
+            return
+        if target_dir.exists() and any(target_dir.iterdir()):
+            raise SetupError(SetupErrorCode.ROOT_INVALID, f"{embed.install_dir} 目录非空，拒绝覆盖")
+
+        staging = job.work_dir / "python"
+        staging.mkdir(parents=True, exist_ok=True)
+        zip_path = staging / f"python-{embed.version}-embed.zip"
+        await self._download_runtime_file(job, embed.sources, zip_path, "python_embed.zip")
+        extracted = staging / "extract"
+        if extracted.exists():
+            await asyncio.to_thread(shutil.rmtree, extracted)
+        await asyncio.to_thread(self._extract_zip_safe, zip_path, extracted)
+        await asyncio.to_thread(shutil.copytree, str(extracted), str(target_dir))
+
+        await asyncio.to_thread(self._enable_embed_site, target_dir, embed.version)
+
+        python_exe = target_dir / "python.exe"
+        get_pip = staging / "get-pip.py"
+        if embed.get_pip_url:
+            host = urlsplit(embed.get_pip_url).hostname or ""
+            if host in self.manifest.bridge.allowed_hosts:
+                pip_source = ModelSource(host=host, url=embed.get_pip_url)
+                await self._download_runtime_file(job, [pip_source], get_pip, "get-pip.py")
+                last_error = None
+                for index_url in runtime.pip_index_urls:
+                    runner = PythonRunner(str(python_exe), timeout=600.0)
+                    try:
+                        code, out, err = await runner.run(
+                            str(get_pip), "--no-warn-script-location", "--index-url", index_url
+                        )
+                        if code == 0:
+                            last_error = None
+                            break
+                        last_error = SetupError(
+                            SetupErrorCode.PIP_FAILED,
+                            f"get-pip 失败 (index {index_url}): {(err or out).strip()[:200]}",
+                        )
+                    except SetupError as exc:
+                        last_error = exc
+                if last_error is not None:
+                    raise last_error
+
+        runner = PythonRunner(str(python_exe))
+        code, _out, _err = await runner.run("-m", "pip", "--version")
+        if code != 0:
+            raise SetupError(SetupErrorCode.PIP_FAILED, "pip 引导后仍不可用")
+        job.emit("runtime_installed", component="python", version=embed.version)
+
+    @staticmethod
+    def _copytree_into(src: Path, dest: Path) -> None:
+        shutil.copytree(str(src), str(dest), dirs_exist_ok=True)
+
+    @staticmethod
+    def _enable_embed_site(target_dir: Path, version: str) -> None:
+        """取消 python3xx._pth 中 import site 的注释，启用 site-packages。"""
+        major_minor = "".join(version.split(".")[:2])
+        pth = target_dir / f"python{major_minor}._pth"
+        if not pth.is_file():
+            candidates = list(target_dir.glob("python*._pth"))
+            if not candidates:
+                return
+            pth = candidates[0]
+        content = pth.read_text(encoding="utf-8", errors="replace")
+        if "#import site" in content:
+            pth.write_text(content.replace("#import site", "import site"), encoding="utf-8")
+
+    async def _run_requirements(self, job: SetupJob, state: StepState) -> None:
+        """安装 PyTorch 与 ComfyUI 依赖：GPU 检测选官方 wheel 线，pip 走镜像。"""
+        runner = await self._python_runner_for(job)
+        runtime = self.manifest.runtime
+        if runtime is None:
+            raise SetupError(SetupErrorCode.CONFIG_INVALID, "清单未提供运行时配置")
+
+        cuda = await self._detect_cuda(job)
+        if cuda:
+            index = runtime.torch_index_by_cuda.get(cuda)
+            if not index:
+                known = sorted(runtime.torch_index_by_cuda, key=float, reverse=True)
+                for candidate in known:
+                    if float(candidate) <= float(cuda):
+                        index = runtime.torch_index_by_cuda[candidate]
+                        break
+            label = f"CUDA {cuda}"
+        else:
+            index = runtime.torch_cpu_index
+            label = "CPU"
+        job.emit("gpu_detected", cuda=cuda or "", torch_index=label)
+
+        if index and runtime.torch_packages:
+            await runner.pip_install([*runtime.torch_packages, "--index-url", index])
+
+        requirements = job.root / "requirements.txt"
+        if requirements.is_file():
+            last_error = None
+            for index_url in runtime.pip_index_urls:
+                try:
+                    await runner.pip_install([], requirements=requirements, index_url=index_url)
+                    last_error = None
+                    break
+                except SetupError as exc:
+                    last_error = exc
+            if last_error is not None:
+                raise last_error
+        job.emit("runtime_installed", component="requirements", torch=label)
+
+    async def _detect_cuda(self, job: SetupJob) -> str | None:
+        """nvidia-smi 探测驱动支持的 CUDA 版本（如 "12.8"）。"""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "nvidia-smi",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except OSError:
+            return None
+        try:
+            stdout, _stderr = await asyncio.wait_for(proc.communicate(), 10.0)
+        except asyncio.TimeoutError:
+            return None
+        match = re.search(r"CUDA Version:\s*([0-9]+)\.([0-9]+)", stdout.decode("utf-8", "replace"))
+        if not match:
+            return None
+        return f"{match.group(1)}.{match.group(2)}"
 
     # ------------------------------------------------------------- python
 

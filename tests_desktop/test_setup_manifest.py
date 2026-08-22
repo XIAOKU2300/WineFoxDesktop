@@ -112,7 +112,16 @@ class SetupManifestTests(unittest.TestCase):
         self.assertEqual(defaults["proxy_cooldown"], 60)
         self.assertEqual(defaults["proxy"], "")
         self.assertEqual(defaults["token"], "")
-        self.assertEqual(len(self.manifest.bridge.allowed_hosts), 10)
+        required_hosts = {
+            "civitai.com", "civitai.red", "civitaired.com", "huggingface.co", "hf-mirror.com",
+            "github.com", "raw.githubusercontent.com", "objects.githubusercontent.com",
+            "github-releases.githubusercontent.com", "release-assets.githubusercontent.com",
+            # 运行时装机新增：python.org/镜像、pip 引导、PyPI 镜像、PyTorch 官方。
+            "www.python.org", "mirrors.huaweicloud.com", "registry.npmmirror.com",
+            "bootstrap.pypa.io", "pypi.org", "files.pythonhosted.org",
+            "pypi.tuna.tsinghua.edu.cn", "mirrors.aliyun.com", "download.pytorch.org",
+        }
+        self.assertTrue(required_hosts.issubset(set(self.manifest.bridge.allowed_hosts)))
         # Desktop hardens: local requests without a token are refused.
         self.assertFalse(self.manifest.bridge.allow_local_requests_without_token)
         self.assertEqual(self.manifest.bridge.version, "1.4.2")

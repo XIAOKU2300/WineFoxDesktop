@@ -119,6 +119,54 @@ def validate_comfyui_root(
     return resolved
 
 
+def validate_bootstrap_root(
+    path: Path | str,
+    *,
+    install_dir: Path | str | None = None,
+) -> Path:
+    """Validate a target directory for from-scratch ComfyUI installation.
+
+    Accepts a non-existent or empty directory (or an already-valid root);
+    rejects drive roots, system dirs and anything inside the install dir.
+    """
+    resolved = _resolve(path)
+    if is_root_drive(resolved):
+        raise SetupError(SetupErrorCode.ROOT_INVALID, "不能把盘符根目录作为安装目标", details={"path": str(resolved)})
+    if is_system_dir(resolved):
+        raise SetupError(SetupErrorCode.ROOT_INVALID, "系统目录不能作为安装目标", details={"path": str(resolved)})
+    if install_dir is not None and is_inside(resolved, install_dir):
+        raise SetupError(
+            SetupErrorCode.ROOT_READ_ONLY,
+            "不能使用 WineFox 安装目录作为安装目标（只读）",
+            details={"path": str(resolved), "install_dir": str(_resolve(install_dir))},
+        )
+    if resolved.exists():
+        if not resolved.is_dir():
+            raise SetupError(SetupErrorCode.ROOT_INVALID, "安装目标不是目录", details={"path": str(resolved)})
+        if test_root(resolved):
+            return resolved
+        if any(resolved.iterdir()):
+            raise SetupError(
+                SetupErrorCode.ROOT_INVALID,
+                "目录非空且不是有效 ComfyUI 根；从零装机请选择空目录",
+                details={"path": str(resolved)},
+            )
+    parent = resolved.parent
+    if not parent.exists() or not parent.is_dir():
+        raise SetupError(SetupErrorCode.ROOT_INVALID, "父目录不存在", details={"path": str(parent)})
+    try:
+        probe = parent / ".winefox_write_probe"
+        probe.write_bytes(b"x")
+        probe.unlink()
+    except OSError as exc:
+        raise SetupError(
+            SetupErrorCode.ROOT_READ_ONLY,
+            f"父目录不可写: {exc.strerror or exc}",
+            details={"path": str(parent)},
+        ) from exc
+    return resolved
+
+
 def _is_readonly_acl(path: Path) -> bool:
     """Best-effort ACL writability check (Windows/macOS)."""
     if platform.system() == "Windows":
