@@ -956,9 +956,10 @@ class CivitaiClient:
             "matchingStrategy": "all",
             "showRankingScore": True,
         }
-        # Meilisearch 单次查询通常 6-9s（代理节点波动时可达 15s+）。给它一个不超
-        # 整体网页预算的独立窗口，避免内部重试 + 慢响应把整条通道拖出外层 timeout。
-        meili_budget = max(10.0, min(16.0, self._combined_search_timeout() - 2.0))
+        # Meilisearch 健康时 1-2s 返回；代理节点劣化时可能数秒。给它一个
+        # 受整体网页预算约束的独立窗口，超时立刻走 REST 回退，避免单个
+        # 慢通道把整场多词并发搜索拖满时限（桌面端整场预算 9s）。
+        meili_budget = max(4.0, min(6.0, self._combined_search_timeout() - 2.0))
         data = await asyncio.wait_for(
             self._post_json(
                 f"{host}/indexes/{index}/search",

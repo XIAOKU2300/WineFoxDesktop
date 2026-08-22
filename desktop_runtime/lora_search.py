@@ -36,6 +36,9 @@ _FAMILIES = frozenset({"anima", "illustrious"})
 _DEFAULT_SOURCES = ["civitai", "huggingface"]
 _LLM_CACHE_TTL = 60 * 60
 _LLM_CACHE_MAX = 500
+#: 整场搜索硬预算：到点立刻返回已收集的结果（"搜到一个出一个"）。
+#: 覆盖首轮 / LLM 扩展 / 兜底 / 补救全部轮次，目标是 P95 在 10s 内出结果。
+_SEARCH_TOTAL_BUDGET = 9.0
 
 
 def _bounded_text(value: Any, limit: int) -> str:
@@ -123,7 +126,10 @@ class LoraSearchService:
             "proxy": proxy,
             "timeout": max(10, min(int(settings.get("request_timeout") or 60), 180)),
             "split": max(1, min(int(settings.get("split") or 4), 8)),
-            "network_max_retries": 2,
+            # 搜索是"多词 × 多源"并发扇出：单请求被源站拒绝（503/429）时
+            # 靠其余并发请求兜住结果即可，原地退避重试只会拖满整场时限。
+            # 下载链路（lora_download._client）保留自己的重试策略，不受影响。
+            "network_max_retries": 1,
         }
 
     def _client_signature(self, kwargs: dict[str, Any]) -> tuple:
@@ -141,13 +147,17 @@ class LoraSearchService:
         return (tuple(sorted(kwargs.items())), tuple(secrets))
 
     def _per_source_search_timeout(self) -> float:
-        """单个来源/关键词的时间预算，必须短于前端整次搜索预算。"""
+        """单个来源/关键词的时间预算，必须短于整场搜索预算。
+
+        Civitai 健康节点单请求 <2s；病态节点（503/超时）时靠并发扇出的
+        其他请求兜底，单个请求拖满预算毫无价值。
+        """
         settings = self._lora_download_settings()
         try:
             request_timeout = max(10, min(int(settings.get("request_timeout") or 60), 180))
         except (TypeError, ValueError):
             request_timeout = 60
-        return min(18.0, max(8.0, request_timeout * 0.25))
+        return min(8.0, max(4.0, request_timeout * 0.1))
 
     def _source_client(self, source: str) -> Any:
         source = str(source or "civitai").strip().lower()
@@ -255,9 +265,15 @@ class LoraSearchService:
         source_list = self._parse_lora_search_sources(
             sources if sources is not None else _DEFAULT_SOURCES
         )
+        # 整场硬预算：所有轮次共享；到点返回已收集的结果。
+        search_deadline = time.monotonic() + _SEARCH_TOTAL_BUDGET
+
+        def remaining_budget() -> float:
+            return search_deadline - time.monotonic()
+
         initial_terms = self._dedupe_civitai_search_terms(
             [query] + self._local_lora_search_seed_terms(query) + self._profile_seed_terms(query, family)
-        )[:6]
+        )[:3]
         search_terms = list(initial_terms or [query])
         query_source_matches = self._lora_source_alias_matches_in_text(query, limit=4)
         alias = self._default_alias_for_search_query(query)
@@ -349,7 +365,7 @@ class LoraSearchService:
 
             search_semaphore = None
             if source_key in {"civitai", "civitai_red"}:
-                concurrency = 2 if source_key == "civitai_red" else 4
+                concurrency = 2 if source_key == "civitai_red" else 6
                 search_semaphore = self._search_semaphores.get(source_key)
                 if search_semaphore is None:
                     search_semaphore = asyncio.Semaphore(concurrency)
@@ -440,16 +456,31 @@ class LoraSearchService:
                 seen.add(key)
                 candidates.append(enriched)
 
-        llm_plan: dict[str, Any] = {}
-        first_results = await asyncio.gather(
-            *[
-                run_one_search(source, term, term_idx, source_idx)
-                for term_idx, term in enumerate(initial_terms or [query])
-                for source_idx, source in enumerate(source_list)
-            ]
-        )
-        for source, term, index, source_idx, items in first_results:
-            absorb_items(source, term, index, source_idx, items)
+        async def run_search_round(coroutines: list) -> bool:
+            """带整场预算执行一轮：到点收割已完成任务并取消其余，返回是否发生截断。"""
+            tasks = [asyncio.ensure_future(coro) for coro in coroutines]
+            if not tasks:
+                return False
+            budget = max(0.2, remaining_budget())
+            done, pending = await asyncio.wait(tasks, timeout=budget)
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+            for task in done:
+                try:
+                    result = task.result()
+                except Exception:
+                    continue  # run_one_search 内部已把失败写进 errors
+                if result is not None:
+                    absorb_items(*result)
+            return bool(pending)
+
+        truncated = await run_search_round([
+            run_one_search(source, term, term_idx, source_idx)
+            for term_idx, term in enumerate(initial_terms or [query])
+            for source_idx, source in enumerate(source_list)
+        ])
 
         if discovered_terms:
             for term in discovered_terms[:6]:
@@ -457,10 +488,17 @@ class LoraSearchService:
                     search_terms.append(term)
             logger.info("LoRA 搜索从候选证据发现别名: %s", ", ".join(discovered_terms[:6]))
 
+        llm_plan: dict[str, Any] = {}
         should_expand = self._should_expand_lora_search_with_llm(query, candidates, source_list, choice_limit)
-        if should_expand:
+        if should_expand and remaining_budget() > 0.8:
             try:
-                llm_plan = await self._llm_civitai_search_terms(query, family, sources=source_list)
+                # LLM 扩展只占剩余预算的一小部分：超时立刻放弃，首轮结果优先返回。
+                llm_plan = await asyncio.wait_for(
+                    self._llm_civitai_search_terms(query, family, sources=source_list),
+                    timeout=max(0.3, min(5.0, remaining_budget() / 3.0)),
+                )
+            except asyncio.TimeoutError:
+                logger.info("Civitai 搜索词 LLM 扩展超时，跳过（首轮结果优先返回）")
             except Exception as exc:
                 logger.warning("Civitai 搜索词 LLM 扩展失败: %s", _safe_error(exc))
         llm_terms = self._dedupe_civitai_search_terms(llm_plan.get("queries") or [])[:6]
@@ -485,10 +523,9 @@ class LoraSearchService:
             for idx, term in enumerate(search_terms[searched_count:6], searched_count)
             for source_idx, source in enumerate(source_list)
         ]
-        if tasks:
-            for source, term, index, source_idx, items in await asyncio.gather(*tasks):
-                absorb_items(source, term, index, source_idx, items)
-        if not candidates:
+        if tasks and remaining_budget() > 1.0:
+            truncated |= await run_search_round(tasks)
+        if not candidates and remaining_budget() > 1.2:
             fallback_terms = self._lora_search_fallback_terms(query, search_terms, llm_plan)
             if fallback_terms:
                 fallback_start = len(search_terms)
@@ -501,15 +538,20 @@ class LoraSearchService:
                     for idx, term in enumerate(fallback_terms)
                     for source_idx, source in enumerate(source_list)
                 ]
-                for source, term, index, source_idx, items in await asyncio.gather(*fallback_tasks):
-                    absorb_items(source, term, index, source_idx, items)
-        if not candidates:
+                truncated |= await run_search_round(fallback_tasks)
+        if not candidates and remaining_budget() > 1.5:
             try:
-                rescue_terms = await self._llm_civitai_rescue_search_terms(query, family, search_terms, sources=source_list)
+                rescue_terms = await asyncio.wait_for(
+                    self._llm_civitai_rescue_search_terms(query, family, search_terms, sources=source_list),
+                    timeout=max(0.3, min(5.0, remaining_budget() / 3.0)),
+                )
+            except asyncio.TimeoutError:
+                rescue_terms = []
+                logger.info("Civitai 搜索词 LLM 补救扩展超时，跳过")
             except Exception as exc:
                 logger.warning("Civitai 搜索词 LLM 补救扩展失败: %s", _safe_error(exc))
                 rescue_terms = []
-            if rescue_terms:
+            if rescue_terms and remaining_budget() > 1.0:
                 rescue_start = len(search_terms)
                 for term in rescue_terms:
                     if term.lower() not in {x.lower() for x in search_terms}:
@@ -520,8 +562,7 @@ class LoraSearchService:
                     for idx, term in enumerate(rescue_terms)
                     for source_idx, source in enumerate(source_list)
                 ]
-                for source, term, index, source_idx, items in await asyncio.gather(*rescue_tasks):
-                    absorb_items(source, term, index, source_idx, items)
+                truncated |= await run_search_round(rescue_tasks)
         if not candidates and reserve_candidates:
             logger.info("LoRA 搜索无强相关结果，保留低置信候选 %s 个", len(reserve_candidates))
             for item in reserve_candidates:
@@ -554,6 +595,10 @@ class LoraSearchService:
             or (total_hint > end and fetch_window < 240)
         )
         items = [self._public_item(item, family) for item in page_candidates]
+        if truncated:
+            errors.append(
+                f"已优先返回 {_SEARCH_TOTAL_BUDGET:g} 秒内收到的结果，部分来源尚未返回"
+            )
         return {
             "query": query,
             "family": family,
