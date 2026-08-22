@@ -213,8 +213,10 @@ class LoraPreviewService:
         data_root: Path,
         max_bytes: int = _DEFAULT_MAX_BYTES,
         proxy: str | Callable[[], str] = "",
+        proxy_probe: Callable[[], object] | None = None,
     ) -> None:
         self.data_root = Path(data_root)
+        self._proxy_probe = proxy_probe
         self.max_bytes = max(64 * 1024, int(max_bytes or _DEFAULT_MAX_BYTES))
         self._registry: dict[str, tuple[str, str]] = {}
         self._memory_cache: dict[str, tuple[str, bytes]] = {}
@@ -372,6 +374,13 @@ class LoraPreviewService:
             host = (urlparse(url).hostname or "").strip().lower()
         except ValueError:
             return None
+        # 先探测显式代理可达性：死代理自动回退系统代理，避免预览图
+        # 反复撞一个拒绝连接的端口（用户侧表现为缩略图批量失败）。
+        if self._proxy_probe is not None:
+            try:
+                await self._proxy_probe()
+            except Exception:
+                pass
         proxy = self._current_proxy()
         # When a proxy is configured, the proxy performs DNS resolution.  A
         # local socket.getaddrinfo() check is both redundant and wrong behind

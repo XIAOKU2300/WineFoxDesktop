@@ -216,8 +216,12 @@ class PythonRunner:
 
 
 def _sanitize_error_text(value: str) -> str:
-    """去掉异常文本里的绝对路径，只保留文件名（公开契约：不外泄本机路径）。"""
-    pattern = r"(?:[A-Za-z]:[\\/]|\\\\)[^\r\n,;\"']*"
+    """去掉异常文本里的绝对路径，只保留文件名（公开契约：不外泄本机路径）。
+
+    盘符前是字母/数字时不是盘符（如 ``http://`` 里的 ``p:/``），必须排除，
+    否则 URL 会被截成 ``htt[path]``。
+    """
+    pattern = r"(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\r\n,;\"']*|\\\\[^\r\n,;\"']*"
     return re.sub(pattern, lambda m: Path(m.group(0)).name or "[path]", value)[:500]
 
 

@@ -263,6 +263,7 @@ class LoraLibraryService:
             from . import net_env
 
             settings = self._settings()
+            await net_env.ensure_probed(str(settings.get("proxy") or ""))
             proxy, _src = net_env.effective_proxy(str(settings.get("proxy") or ""))
             token = ""
             if self.settings_fn is not None:
