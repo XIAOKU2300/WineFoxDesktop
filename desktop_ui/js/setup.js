@@ -40,7 +40,10 @@ function withDeadline(run, ms, message) {
   });
 }
 
-const PROFILE_LABELS = { lite: "精简", full: "进阶", complete: "完整", bootstrap: "从零装机" };
+const PROFILE_LABELS = { lite: "精简", full: "进阶", complete: "完整", complete_manual: "完整·自动补齐", bootstrap: "从零装机" };
+/* 不显示为普通选项的档案：bootstrap 需要先选安装目录（有专属按钮走专门流程），
+ * complete_manual 是内部档案（完整装机已自动附带其自动补齐步骤）。 */
+const HIDDEN_PROFILES = new Set(["bootstrap", "complete_manual"]);
 /* 计划步骤标签里的组名映射为中文；文件名/仓库名是内容标识，保留原文。 */
 const GROUP_LABELS = {
   minimal: "精简节点",
@@ -452,7 +455,8 @@ export class EnvSetupView {
   // ------------------------------------------------------------- 计划
 
   renderPlan() {
-    const profiles = this.capabilities?.profiles || [];
+    const profiles = (this.capabilities?.profiles || [])
+      .filter((id) => !HIDDEN_PROFILES.has(id) && PROFILE_LABELS[id]);
     const plan = this.plan;
     const chips = profiles.map((id) => {
       const chip = el("button", {
@@ -476,6 +480,14 @@ export class EnvSetupView {
     } else {
       planArea = el("div", { class: "setup-plan-area hint" }, "选择一个档案以生成安装计划。");
     }
+    // 未配置 ComfyUI 根目录时，普通档案装不了（后端会拒绝），直接给出指引
+    const noRoot = !this.summary?.root;
+    const profileRow = noRoot
+      ? el("div", { class: "notice warn" }, [
+          "未检测到 ComfyUI 根目录：请先在上方「根目录」卡片点击「选择目录」，",
+          "或点右上角「从零装机」选定空目录自动安装全套环境。",
+        ])
+      : el("div", { class: "setup-profile-row", role: "radiogroup", "aria-label": "安装档案" }, chips);
 
     const insufficient = this.planDiskInsufficient(plan);
     const startBtn = el("button", {
@@ -496,7 +508,7 @@ export class EnvSetupView {
         el("button", { class: "btn btn-sm", type: "button", id: "setup-bootstrap" }, [ic("play"), esc("从零装机")]),
       ]),
       el("div", { class: "sec-body" }, [
-        el("div", { class: "setup-profile-row", role: "radiogroup", "aria-label": "安装档案" }, chips),
+        profileRow,
         planArea,
         plan ? this.renderPlanMeta(plan) : null,
         el("div", { class: "row gap-2 setup-start-row" }, [startBtn]),

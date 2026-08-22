@@ -285,6 +285,13 @@ class DesktopConfigAdapter:
                 value = patch.get(key)
                 if isinstance(value, dict):
                     _merge(self._desktop.setdefault(key, {}), value)
+            # 用户在环境中心选择/从零装机指定的 ComfyUI 根目录：
+            # 持久化后供 LoRA 下载 auto 模式推导本机 models/loras
+            comfy_root = patch.get("comfyui_root")
+            if isinstance(comfy_root, str):
+                cleaned_root = comfy_root.strip()[:600]
+                if cleaned_root:
+                    self._desktop["comfyui_root"] = cleaned_root
             for key in _PROVIDER_FIELDS:
                 value = patch.get(key)
                 if isinstance(value, dict):

@@ -102,12 +102,15 @@ _DEFAULT_NEGATIVE_ANIMA = (
 )
 
 _TRANSLATE_SYSTEM_PROMPT = (
-    "You are a conservative Stable Diffusion prompt translator. "
-    "Convert the user's plain-language image request into concise English comma-separated "
-    "tags. Preserve character names, outfit, pose, expression, framing, camera angle, scene "
-    "and mood. Do not invent content that is not in the request. "
-    "Output only the final English prompt tags; no explanations, markdown, JSON, "
-    "reasoning notes, or multiple lines."
+    "You are a precise Stable Diffusion prompt translator. "
+    "The user request may be written in Chinese, English, or mixed; always understand it fully. "
+    "Convert it into concise English comma-separated Danbooru-style tags. "
+    "Every element the user explicitly described — character identity, hair, outfit, pose, "
+    "expression, framing, camera angle, background, lighting and mood — MUST appear in the tags. "
+    "Do not invent content that is not in the request, do not drop details, and do not change "
+    "the art style the user asked for. "
+    "Output only the final English prompt tags on a single line; "
+    "no explanations, markdown, JSON, reasoning notes, or multiple lines."
 )
 
 
@@ -317,7 +320,7 @@ class PromptService:
         if not isinstance(llm_conf, dict):
             return 450
         try:
-            return max(128, min(int(llm_conf.get("max_tokens", 450)), 1200))
+            return max(128, min(int(llm_conf.get("max_tokens", 800)), 2000))
         except Exception:
             return 450
 
@@ -407,17 +410,16 @@ class PromptService:
         system_prompt = str(self.config.get("llm", {}).get("system_prompt") or "").strip()
         if not system_prompt:
             system_prompt = _TRANSLATE_SYSTEM_PROMPT
-        user_payload = {
-            "raw_user_request": raw,
-            "cleaned_prompt": cleaned,
-            "family": self.family,
-        }
+        # 纯文本用户消息：JSON 包装会干扰小模型，导致它漏译或复读结构
+        request_text = cleaned or raw
+        user_content = (
+            f"Model family: {self.family}\n"
+            f"User request (translate faithfully into English SD tags):\n{request_text}"
+        )
         try:
-            import json
-
             messages = [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False, separators=(",", ":"))},
+                {"role": "user", "content": user_content},
             ]
             data = await self.llm_port.complete(
                 messages,
@@ -434,6 +436,10 @@ class PromptService:
             warnings.append(f"LLM 端口不可用，使用确定性 fallback: {exc}")
         except Exception as exc:  # noqa: BLE001 - 任何失败都回退
             warnings.append(f"LLM 调用失败，使用确定性 fallback: {type(exc).__name__}")
+        if re.search(r"[\u4e00-\u9fff]", cleaned):
+            warnings.append(
+                "转译失败：中文提示词未翻译，直接出图会导致画面严重偏离描述，请检查 AI 配置"
+            )
         return cleaned, "fallback"
 
 

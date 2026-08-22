@@ -366,6 +366,8 @@ export class GenerateView {
         ]),
         this.progressCard(),
       ];
+      const dbg = this.promptDebugCard();
+      if (dbg) content.push(dbg);
     } else if (result) {
       const img = el("img", { class: "canvas-img", src: result.url, alt: "生成结果预览" });
       img.addEventListener("click", () => {
@@ -400,6 +402,7 @@ export class GenerateView {
     return el("section", { class: "gen-panel gen-center", "aria-label": "画布" }, [
       el("div", { class: "canvas-wrap" }, [
         el("div", { class: "canvas-area" + (s.mode === "img2img" ? "" : ""), id: "canvas-area", tabindex: "0", role: "img" }, content),
+        this.promptDebugCard(),
         this.autoLoraPanel(),
         el("div", { class: "gen-actions gen-submit-bar" }, [
           el("button", { class: "btn btn-primary", id: "g-submit", type: "button", disabled: !!s.job }, [
@@ -426,6 +429,45 @@ export class GenerateView {
         el("span", { class: "gp-pct" }, esc(j.progress ? `${Math.round(j.progress * 100)}%` : "")),
       ]),
       el("div", { class: "progress" + (j.progress ? "" : " indeterminate") }, [el("i", { style: j.progress ? `width:${Math.round(j.progress * 100)}%` : "" })]),
+    ]);
+  }
+
+  /* 调试模式（连点 Logo 10 次开启）下展示提示词处理全貌：
+   * 原文 → 清理后 → 转译最终 prompt / 负面词，以及来源（llm/fallback）与告警。 */
+  promptDebugCard() {
+    if (!store.get("debugEnabled")) return null;
+    const s = this.state;
+    const dbg = s.job?.meta?.prompt_debug || s.result?.job?.meta?.prompt_debug;
+    if (!dbg) return null;
+    const rows = [
+      ["原始输入", dbg.raw_prompt],
+      ["清理后（去 seed/标记）", dbg.cleaned_prompt],
+      ["最终正向 prompt", dbg.final_prompt],
+      ["最终负面 prompt", dbg.negative_prompt],
+      ["转译来源", `${dbg.source === "llm" ? "LLM 转译" : "未转译（原文直出）"} · ${dbg.family || "—"}`],
+    ];
+    if (Array.isArray(dbg.matches) && dbg.matches.length) {
+      rows.push(["LoRA/角色匹配", dbg.matches.map((m) => `${m.kind}:${m.value}`).join("、")]);
+    }
+    if (Array.isArray(dbg.loras) && dbg.loras.length) {
+      rows.push(["应用 LoRA", dbg.loras.map((l) => `${l.name}${l.strength != null ? ` @${Number(l.strength).toFixed(2)}` : ""}`).join("、")]);
+    }
+    if (Array.isArray(dbg.warnings) && dbg.warnings.length) {
+      rows.push(["告警", dbg.warnings.join("；")]);
+    }
+    return el("div", { class: "gen-debug", id: "g-prompt-debug" }, [
+      el("div", { class: "gen-debug-head" }, [
+        el("b", {}, "提示词处理详情（调试）"),
+        el("button", {
+          class: "btn btn-sm", type: "button", title: "复制最终正向 prompt",
+          onclick: () => { void copyText(dbg.final_prompt || "").then(() => toast("已复制最终 prompt", "ok")); },
+        }, [ic("copy"), esc("复制")]),
+      ]),
+      ...rows.map(([label, value]) =>
+        el("div", { class: "gen-debug-row" }, [
+          el("span", { class: "gen-debug-label" }, esc(label)),
+          el("span", { class: "gen-debug-val" }, esc(value || "—")),
+        ])),
     ]);
   }
 
@@ -909,9 +951,11 @@ export class GenerateView {
     if (s.autoLoraPreviewReady && !s.autoLoraBusy) {
       payload.auto_lora_confirmations = s.autoLoraMatches.map((m) => ({
         name: m.name || m.key || m.filename,
-        strength: Number.isFinite(Number(m.strength_model))
+        // 只传真实的档案强度；缺省交给后端按 profile/族默认处理，
+        // 绝不能把匹配分数（>90）当强度传。
+        strength: Number.isFinite(Number(m.strength_model)) && Number(m.strength_model) > 0 && Number(m.strength_model) <= 1.5
           ? Number(m.strength_model)
-          : Number.isFinite(Number(m.score)) ? Number(m.score) : undefined,
+          : undefined,
       }));
     }
     if (s.workflowOverrides) {
@@ -984,6 +1028,11 @@ export class GenerateView {
         const subline = heading?.nextElementSibling;
         if (heading) heading.textContent = running ? "正在生成…" : "排队中…";
         if (subline) subline.textContent = running ? "墨色正在画布上汇聚" : "前方还有任务，稍候片刻";
+      }
+      // 调试模式：prompt 处理完成后（meta.prompt_debug 出现）即时插入详情卡。
+      if (job.meta?.prompt_debug && !area.querySelector("#g-prompt-debug")) {
+        const dbg = this.promptDebugCard();
+        if (dbg) (area.querySelector(".canvas-area") || area).after(dbg);
       }
     }
     // 队列计数与左栏/提交栏实时状态

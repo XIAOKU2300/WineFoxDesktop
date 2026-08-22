@@ -114,6 +114,7 @@ export const api = {
   loraLibraryRestore: (id, options = {}) => request(`/lora/library/${encodeURIComponent(id)}/restore`, { ...options, method: "POST" }),
   loraLibraryMatchPreview: (prompt, family, limit, options = {}) => request("/lora/library/match-preview", { ...options, method: "POST", body: JSON.stringify({ prompt, family, limit }) }),
   loraMatchPreview: ({ prompt, family, limit = 10 } = {}) => request("/lora/library/match-preview", { method: "POST", body: JSON.stringify({ prompt, family, limit }) }),
+  loraScanLocal: (options = {}) => request("/lora/library/scan-local", { ...options, method: "POST", body: JSON.stringify({}) }),
   loraProfilesImportJson: (options = {}) => request("/lora/profiles/import-json", { ...options, method: "POST", body: JSON.stringify({}) }),
   loraProfilesExportJson: (options = {}) => request("/lora/profiles/export-json", options),
 
@@ -143,6 +144,8 @@ export const api = {
     };
   },
   submitJob: (payload) => request("/jobs", { method: "POST", body: JSON.stringify(payload) }),
+  aiListModels: (payload = {}, options = {}) => request("/ai/models", { ...options, method: "POST", body: JSON.stringify(payload) }),
+  aiTestModel: (payload = {}, options = {}) => request("/ai/test", { ...options, method: "POST", body: JSON.stringify(payload) }),
   job: (id) => request(`/jobs/${encodeURIComponent(id)}`),
   cancelJob: (id) => request(`/jobs/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
   history: (query, options = {}) => request("/history", { ...options, query }),

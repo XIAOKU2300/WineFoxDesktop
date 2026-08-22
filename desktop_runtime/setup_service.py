@@ -342,6 +342,12 @@ class Planner:
                             items=[PlanItem(kind="model", spec=m) for m in models],
                         )
                     )
+        if profile in {"complete", "complete_manual"} and not any(
+            step.kind == "manual_resolve" for step in steps
+        ):
+            # 完整装机自动附带缺失文件自动解析（尽力而为，失败不阻塞），
+            # 不必再暴露 complete_manual 这个内部档案给用户。
+            steps.append(PlanStep(kind="manual_resolve", group=None, label="自动补齐缺失文件"))
         return Plan(root=status.root, profile=profile, steps=steps)
 
     def plan_for_custom(self, status: EnvironmentStatus, steps: list[tuple[str, str | None]], *, only_missing: bool = False) -> Plan:

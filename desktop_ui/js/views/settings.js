@@ -161,12 +161,15 @@ export class SettingsView {
               ["local", "本地下载"],
               ["comfyui_bridge", "ComfyUI Bridge"],
             ], l.mode || "auto"),
-            el("span", { class: "hint" }, "auto：填了本地目录就本地下载，否则交给 ComfyUI 所在机器下载。"),
+            el("span", { class: "hint" }, "auto：填了（或自动识别到）本地目录就本地下载，否则交给 ComfyUI 所在机器下载。"),
           ]),
           el("div", { class: "field" }, [
             el("label", { for: "s-lora-dir" }, "本地下载目录"),
-            this.input("s-lora-dir", l.local_dir || "", { placeholder: "ComfyUI 的 models/loras 目录", autocomplete: "off", spellcheck: "false" }),
-            el("span", { class: "hint" }, "必须指向 ComfyUI 实际读取的 models/loras；跨机器建议使用 ComfyUI Bridge，可留空。"),
+            el("div", { class: "row gap-2" }, [
+              this.input("s-lora-dir", l.local_dir || "", { placeholder: "ComfyUI 的 models/loras 目录，可留空自动识别", autocomplete: "off", spellcheck: "false" }),
+              el("button", { class: "btn btn-sm", type: "button", id: "s-lora-scan", title: "扫描本机 LoRA 目录，把已有文件登记进本地库" }, [ic("refresh"), esc("扫描本机 LoRA")]),
+            ]),
+            el("span", { class: "hint" }, "指向 ComfyUI 实际读取的 models/loras；留空时若已知本机 ComfyUI 根目录（环境中心选择或从零装机）会自动推导。已有文件可点「扫描本机 LoRA」自动登记并匹配角色。"),
           ]),
           el("div", { class: "field" }, [
             el("label", { for: "s-lora-proxy" }, "搜索与下载代理（可选）"),
@@ -436,8 +439,13 @@ export class SettingsView {
           el("div", { class: "form-row" }, [
             el("div", { class: "field" }, [
               el("label", { for: "s-ai-model" }, "主模型"),
-              this.input("s-ai-model", provider.model || "", { placeholder: "例如 gpt-4.1", autocomplete: "off", spellcheck: "false" }),
-              el("span", { class: "hint" }, "用于提示词优化与主要文本任务。"),
+              el("div", { class: "row gap-2" }, [
+                this.input("s-ai-model", provider.model || "", { placeholder: "例如 gpt-4.1", autocomplete: "off", spellcheck: "false", list: "s-ai-model-list" }),
+                el("button", { class: "btn btn-sm", type: "button", id: "s-ai-fetch-models", title: "从 Base URL 拉取可用模型列表" }, [ic("refresh"), esc("获取模型列表")]),
+                el("button", { class: "btn btn-sm", type: "button", id: "s-ai-test-model", title: "用当前填写的配置发送一次最小请求" }, [ic("play"), esc("模型测试")]),
+              ]),
+              el("datalist", { id: "s-ai-model-list" }),
+              el("span", { class: "hint", id: "s-ai-model-status" }, "用于提示词优化与主要文本任务。可拉取模型列表后直接选择。"),
             ]),
             el("div", { class: "field" }, [
               el("label", { for: "s-ai-utility-model" }, "轻量模型"),
@@ -577,6 +585,16 @@ export class SettingsView {
             el("span", { class: "box" }, [ic("check")]),
             el("span", {}, esc("减少动画 · 性能优先（跟随系统设置；低配设备自动启用）")),
           ]),
+          el("div", { class: "field" }, [
+            el("label", { for: "s-prompt-injection" }, "自定义提示词注入"),
+            el("textarea", {
+              id: "s-prompt-injection",
+              rows: 3,
+              placeholder: "例如：masterpiece, best quality, detailed background, soft lighting",
+              spellcheck: "false",
+            }, esc(u.prompt_injection || "")),
+            el("span", { class: "hint" }, "逗号分隔的英文 tags，在 AI 转译完成后自动追加到最终提示词（自动去重，不额外消耗 AI token）。留空关闭。"),
+          ]),
         ]),
       ]),
     ];
@@ -609,6 +627,15 @@ export class SettingsView {
       }
       if (e.target.closest("#s-lora-test")) {
         void this.testLoraConnection();
+      }
+      if (e.target.closest("#s-lora-scan")) {
+        void this.scanLocalLoras(e.target.closest("#s-lora-scan"));
+      }
+      if (e.target.closest("#s-ai-fetch-models")) {
+        void this.fetchAiModels(e.target.closest("#s-ai-fetch-models"));
+      }
+      if (e.target.closest("#s-ai-test-model")) {
+        void this.testAiModel(e.target.closest("#s-ai-test-model"));
       }
       const t = e.target.closest("#s-theme-light") || e.target.closest("#s-theme-dark") || e.target.closest("#s-theme-pink");
       if (t) {
@@ -649,6 +676,87 @@ export class SettingsView {
     } finally {
       this.probing = false;
       if (btn) disabledButton(btn, false, "测试连接");
+    }
+  }
+
+  /* 用输入框当前的 Base URL（未保存也能测）拉取模型列表；密钥用已保存的 Secret */
+  aiTestPayload() {
+    const payload = {};
+    const baseUrl = $("#s-ai-base-url", this.root)?.value?.trim();
+    if (baseUrl) payload.base_url = baseUrl;
+    const model = $("#s-ai-model", this.root)?.value?.trim();
+    if (model) payload.model = model;
+    const timeout = parseInt($("#s-ai-timeout", this.root)?.value, 10);
+    if (Number.isFinite(timeout)) payload.timeout_seconds = timeout;
+    return payload;
+  }
+
+  setAiModelStatus(text, cls) {
+    const status = $("#s-ai-model-status", this.root);
+    if (status) {
+      status.textContent = text;
+      status.className = cls ? `hint ${cls}` : "hint";
+    }
+  }
+
+  async fetchAiModels(btn) {
+    if (this.fetchingAiModels) return;
+    this.fetchingAiModels = true;
+    if (btn) disabledButton(btn, true, "拉取中…");
+    this.setAiModelStatus("正在获取模型列表…");
+    try {
+      const result = await api.aiListModels(this.aiTestPayload());
+      const models = Array.isArray(result?.models) ? result.models : [];
+      const list = $("#s-ai-model-list", this.root);
+      if (list) list.replaceChildren(...models.slice(0, 300).map((m) => el("option", { value: m })));
+      this.setAiModelStatus(
+        models.length ? `获取到 ${result.count} 个模型，在主模型输入框中输入或选择` : "接口未返回任何模型",
+        models.length ? "" : "warn",
+      );
+      if (models.length) $("#s-ai-model", this.root)?.focus();
+    } catch (e) {
+      this.setAiModelStatus("获取失败：" + e.message, "err");
+    } finally {
+      this.fetchingAiModels = false;
+      if (btn) disabledButton(btn, false);
+    }
+  }
+
+  async testAiModel(btn) {
+    if (this.testingAiModel) return;
+    this.testingAiModel = true;
+    if (btn) disabledButton(btn, true, "测试中…");
+    this.setAiModelStatus("正在测试模型…");
+    try {
+      const result = await api.aiTestModel(this.aiTestPayload());
+      this.setAiModelStatus(`测试通过 · ${result.model} · ${result.latency_ms}ms · 回复「${(result.reply || "").slice(0, 40) || "—"}」`);
+    } catch (e) {
+      this.setAiModelStatus("测试失败：" + e.message, "err");
+    } finally {
+      this.testingAiModel = false;
+      if (btn) disabledButton(btn, false);
+    }
+  }
+
+  async scanLocalLoras(btn) {
+    if (this.scanningLoras) return;
+    this.scanningLoras = true;
+    if (btn) disabledButton(btn, true, "扫描中…");
+    try {
+      const result = await api.loraScanLocal();
+      const added = result?.added ?? 0;
+      const matched = result?.matched_profiles ?? 0;
+      toast(
+        added > 0
+          ? `已登记 ${added} 个本机 LoRA（${matched} 个匹配到角色档案）`
+          : "扫描完成：目录里没有新文件（已登记的自动跳过）",
+        "ok",
+      );
+    } catch (e) {
+      toast("扫描失败：" + e.message, "err");
+    } finally {
+      this.scanningLoras = false;
+      if (btn) disabledButton(btn, false);
     }
   }
 
@@ -820,7 +928,10 @@ export class SettingsView {
         request_timeout: Math.max(10, Math.min(parseInt(val("s-lora-timeout"), 10) || 60, 180)),
       };
     } else if (section === "ui") {
-      patch.ui = { reduced_motion: checked("s-reduced") };
+      patch.ui = {
+        reduced_motion: checked("s-reduced"),
+        prompt_injection: val("s-prompt-injection")?.trim() || "",
+      };
       // 立即生效，不必等后端持久化完成
       try {
         localStorage.setItem("wfx-reduced-motion", checked("s-reduced") ? "1" : "0");
@@ -838,6 +949,8 @@ export class SettingsView {
       // time the section is opened without discarding drafts in other tabs.
       this.sectionNodes.delete(section);
       toast("已保存", "ok");
+      // LoRA 设置保存后自动扫描登记本机目录（后台进行，不打断用户）
+      if (section === "lora") void this.scanLocalLoras();
     } catch (error) {
       toast("保存失败：" + error.message, "err");
     } finally {

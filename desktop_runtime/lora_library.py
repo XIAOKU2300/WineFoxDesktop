@@ -562,6 +562,69 @@ class LoraLibraryService:
                 (json_dumps(info), utcnow_iso(), int(asset_id)),
             )
 
+    # -- 本机目录扫描登记 ------------------------------------------------------
+
+    _SCAN_SUFFIXES = (".safetensors", ".ckpt", ".pt")
+
+    async def scan_local_dir(self) -> dict:
+        """扫描本机 LoRA 目录（local_dir / ComfyUI 根目录推导 / 应用数据目录），
+        把已有权重文件登记进本地库并尽量关联角色档案。幂等：已登记的跳过。
+        """
+        dirs = self._source_dirs()
+        profiles_by_file: dict[str, tuple[str, str, str]] = {}
+        for family in SUPPORTED_MODEL_FAMILIES:
+            for rec in self.profile_store.get_family(family):
+                profile = dict(rec.profile or {})
+                key = normalize_lora_key(profile.get("lora") or profile.get("lora_name") or "")
+                if key and key not in profiles_by_file:
+                    character = str(profile.get("character") or rec.display_key or "")
+                    profiles_by_file[key] = (family, rec.display_key, character)
+        known: set[tuple[str, str]] = set()
+        for asset in self.asset_store.list(limit=5000):
+            known.add((asset.model_family, normalize_lora_key(asset.filename)))
+        added = 0
+        matched = 0
+        seen_files: set[str] = set()
+        for directory in dirs:
+            try:
+                entries = sorted(directory.iterdir())
+            except OSError:
+                continue
+            for entry in entries:
+                if not entry.is_file() or entry.suffix.lower() not in self._SCAN_SUFFIXES:
+                    continue
+                resolved = str(entry.resolve())
+                if resolved in seen_files:
+                    continue
+                seen_files.add(resolved)
+                key = normalize_lora_key(entry.name)
+                if not key:
+                    continue
+                profile_hit = profiles_by_file.get(key)
+                if profile_hit is not None:
+                    family, _display, character = profile_hit
+                else:
+                    family = "anima" if "anima" in str(entry.parent).lower() else "illustrious"
+                    character = ""
+                if (family, key) in known:
+                    continue
+                self.asset_store.register(
+                    family,
+                    entry.name,
+                    display_name=character or entry.stem,
+                    source="local",
+                    info={"scanned": True},
+                )
+                known.add((family, key))
+                added += 1
+                if profile_hit is not None:
+                    matched += 1
+        return {
+            "added": added,
+            "matched_profiles": matched,
+            "scanned_dirs": [str(d) for d in dirs],
+        }
+
     # -- 匹配预览 ------------------------------------------------------------
 
     async def match_preview(self, prompt: str, *, family: str, limit: int = 8) -> dict:

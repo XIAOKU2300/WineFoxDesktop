@@ -445,6 +445,43 @@ def load_lora_profiles(
     return LoadedLoraProfiles(profiles=profiles, sources=tuple(dict.fromkeys(source_names)))
 
 
+#: 多角色 LoRA 强度上限（对齐插件 safe_chain：2 个 0.65/0.72，>2 个 0.58/0.64）。
+#: 多个角色 LoRA 全强度叠跑会互相渗透，是"画面与描述不符"的主要来源之一。
+_MULTI_MODEL_CAPS = {2: 0.65}
+_MULTI_CLIP_CAPS = {2: 0.72}
+_DEFAULT_MODEL_STRENGTH = 0.75
+_DEFAULT_CLIP_STRENGTH = 0.70
+
+
+def apply_multi_lora_strength_caps(selected: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """对多 LoRA 选择应用 safe_chain 强度上限，并补齐/清洗缺失强度。"""
+    count = len(selected or [])
+    if not count:
+        return selected
+    model_cap = _MULTI_MODEL_CAPS.get(count, 0.58 if count > 2 else 1.0)
+    clip_cap = _MULTI_CLIP_CAPS.get(count, 0.64 if count > 2 else 1.0)
+    for entry in selected:
+        if not isinstance(entry, dict):
+            continue
+        model = _coerce_strength(entry.get("strength_model"), _DEFAULT_MODEL_STRENGTH)
+        clip = _coerce_strength(entry.get("strength_clip"), _DEFAULT_CLIP_STRENGTH)
+        entry["strength_model"] = round(min(model, model_cap), 4)
+        entry["strength_clip"] = round(min(clip, clip_cap), 4)
+        if "strength" in entry:
+            entry["strength"] = entry["strength_model"]
+    return selected
+
+
+def _coerce_strength(value: Any, default: float) -> float:
+    try:
+        strength = float(value)
+    except (TypeError, ValueError):
+        return default
+    if strength <= 0 or strength > 1.5:
+        return default
+    return strength
+
+
 def resolve_prompt_loras(
     service: LoraService,
     text: str,
@@ -460,7 +497,8 @@ def resolve_prompt_loras(
         for name in inventory
         if normalize_lora_key(name) and normalize_lora_key(name) not in excluded
     }
-    matched = service.match(text, family=family, limit=3)
+    # 静默自动注入只认精确命中：模糊匹配的近似词不该替用户决定用哪个 LoRA。
+    matched = service.match(text, family=family, limit=3, include_fuzzy=False)
     candidates = matched.matches if matched.multi else matched.matches[:1]
     selected: list[dict[str, Any]] = []
     triggers: list[str] = []
@@ -478,6 +516,7 @@ def resolve_prompt_loras(
         })
         triggers.extend(match.trigger_words)
         evidence.append(match.to_dict())
+    apply_multi_lora_strength_caps(selected)
     metadata: dict[str, Any] = {
         "family": family,
         "multi": matched.multi,

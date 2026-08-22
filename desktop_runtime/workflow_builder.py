@@ -31,6 +31,70 @@ def _bypass_lora(workflow: dict[str, Any], node_id: str, node: Mapping[str, Any]
     workflow.pop(node_id, None)
 
 
+_QUALITY_MARKERS = (
+    "masterpiece", "best quality", "amazing quality", "high quality",
+    "score_9", "score_8", "score_7", "very aesthetic", "absurdres", "highres",
+)
+
+
+def _is_quality_or_style_stack(text: str) -> bool:
+    """模板默认正向是否是值得保留的质量/风格栈（而非占位垃圾）。"""
+    lowered = str(text or "").lower()
+    tags = [tag for tag in lowered.split(",") if tag.strip()]
+    return len(tags) >= 4 and any(marker in lowered for marker in _QUALITY_MARKERS)
+
+
+def _merge_tag_texts(base: str, extra: str) -> str:
+    """base 在前、extra 在后合并，按大小写不敏感去重（保留原 tag 写法与权重）。"""
+    parts: list[str] = []
+    seen: set[str] = set()
+    for tag in f"{base},{extra}".split(","):
+        value = str(tag or "").strip()
+        marker = value.casefold()
+        if not value or marker in seen:
+            continue
+        parts.append(value)
+        seen.add(marker)
+    return ", ".join(parts)
+
+
+def workflow_prompt_texts(workflow: Mapping[str, Any]) -> tuple[str, str]:
+    """读取已构建工作流里最终生效的正/负提示词文本（调试展示用）。"""
+    return _template_prompt_defaults(workflow)
+
+
+def _template_prompt_defaults(workflow: Mapping[str, Any]) -> tuple[str, str]:
+    """返回模板自带的 (positive, negative) 默认文本（首个 CLIPTextEncode 各取其一）。"""
+    positive = ""
+    negative = ""
+    for node_id, node in workflow.items():
+        if not isinstance(node, dict):
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict) or "text" not in inputs:
+            continue
+        if "cliptextencode" not in str(node.get("class_type") or "").lower():
+            continue
+        title = str((node.get("_meta") or {}).get("title") or "").lower()
+        text = str(inputs.get("text") or "")
+        if "negative" in title or str(node_id) in {"12", "33"}:
+            if not negative:
+                negative = text
+        elif not positive:
+            positive = text
+    return positive, negative
+
+
+def _coerce_lora_strength(value: Any, default: float = 0.75) -> float:
+    try:
+        strength = float(value)
+    except (TypeError, ValueError):
+        return default
+    if strength <= 0 or strength > 1.5:
+        return default
+    return strength
+
+
 def prepare_workflow(
     source: Mapping[str, Any],
     payload: Mapping[str, Any],
@@ -41,6 +105,14 @@ def prepare_workflow(
     workflow: dict[str, Any] = copy.deepcopy(dict(source))
     prompt = str(payload.get("prompt") or "").strip()
     negative = str(payload.get("negative_prompt") or "").strip()
+    # 模板自带的质量/风格基底与用户 prompt 合并而不是整段替换：
+    # Illustrious/Pony 系底模缺了 quality 前缀会明显"不听提示词"，
+    # LoRA 自带内容乘虚主导画面（表现为部分 LoRA 下用户描述无效）。
+    template_positive, template_negative = _template_prompt_defaults(workflow)
+    if template_positive and _is_quality_or_style_stack(template_positive):
+        prompt = _merge_tag_texts(template_positive, prompt)
+    if not negative:
+        negative = template_negative
     seed_value = payload.get("seed")
     seed = random.SystemRandom().randrange(0, 2**63 - 1) if seed_value in (None, -1, "-1") else int(seed_value)
     width = max(64, int(payload.get("width") or 832))
@@ -96,11 +168,13 @@ def prepare_workflow(
             selected_lora = selected_loras[lora_index] if lora_index < len(selected_loras) else None
             if selected_lora:
                 inputs["lora_name"] = str(selected_lora.get("name") or selected_lora.get("id") or inputs["lora_name"])
-                strength = float(selected_lora.get("strength", selected_lora.get("strength_model", 1.0)))
+                strength = _coerce_lora_strength(
+                    selected_lora.get("strength", selected_lora.get("strength_model")), 0.75
+                )
                 if "strength_model" in inputs:
                     inputs["strength_model"] = strength
                 if "strength_clip" in inputs:
-                    inputs["strength_clip"] = float(selected_lora.get("strength_clip", strength))
+                    inputs["strength_clip"] = _coerce_lora_strength(selected_lora.get("strength_clip"), strength)
                 lora_index += 1
             else:
                 _bypass_lora(workflow, str(node_id), node)
