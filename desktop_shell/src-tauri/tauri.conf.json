@@ -32,6 +32,7 @@
     "active": true,
     "targets": ["nsis"],
     "category": "Utility",
+    "publisher": "SakuraFan",
     "shortDescription": "WineFox 本地绘图服务桌面端",
     "longDescription": "WineFox Desktop: Tauri 2 shell + Python sidecar (ComfyUI 绘图插件桌面封装)",
     "icon": [

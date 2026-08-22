@@ -40,6 +40,8 @@ Unicode true
 
 !define PRODUCT_NAME "WineFox"
 !define PUBLISHER "WineFox"
+; 显示用发布者名称（软件信息/卸载列表/版本资源）；注册表路径仍用 PUBLISHER，避免迁移破坏旧安装
+!define PUBLISHER_NAME "SakuraFan"
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\WineFox"
 !define DATA_DIR "$LOCALAPPDATA\WineFox"
 
@@ -57,11 +59,11 @@ ShowUninstDetails show
 
 VIProductVersion "${APP_VERSION}.0"
 VIAddVersionKey /LANG=2052 "ProductName" "${PRODUCT_NAME}"
-VIAddVersionKey /LANG=2052 "LegalCopyright" "WineFox"
+VIAddVersionKey /LANG=2052 "LegalCopyright" "© SakuraFan"
 VIAddVersionKey /LANG=2052 "FileDescription" "WineFox Desktop 安装程序"
 VIAddVersionKey /LANG=2052 "FileVersion" "${APP_VERSION}"
 VIAddVersionKey /LANG=2052 "ProductVersion" "${APP_VERSION}"
-VIAddVersionKey /LANG=2052 "CompanyName" "${PUBLISHER}"
+VIAddVersionKey /LANG=2052 "CompanyName" "${PUBLISHER_NAME}"
 
 ; ---------------------------------------------------------------------------
 ; UI
@@ -168,7 +170,7 @@ Section "WineFox" SEC_MAIN
   ; ----------------------------------------------------------------- registry
   WriteRegStr HKCU "${UNINST_KEY}" "DisplayName" "${PRODUCT_NAME}"
   WriteRegStr HKCU "${UNINST_KEY}" "DisplayVersion" "${APP_VERSION}"
-  WriteRegStr HKCU "${UNINST_KEY}" "Publisher" "${PUBLISHER}"
+  WriteRegStr HKCU "${UNINST_KEY}" "Publisher" "${PUBLISHER_NAME}"
   WriteRegStr HKCU "${UNINST_KEY}" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "${UNINST_KEY}" "DisplayIcon" "$INSTDIR\WineFox.exe,0"
   WriteRegStr HKCU "${UNINST_KEY}" "UninstallString" '"$INSTDIR\Uninstall WineFox.exe"'

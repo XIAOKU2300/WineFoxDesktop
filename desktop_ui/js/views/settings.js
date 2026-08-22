@@ -744,6 +744,7 @@ export class SettingsView {
         el("div", { class: "sec-body stack-3" }, [
           el("div", { class: "row wrap gap-3" }, [
             el("div", { class: "pm-block" }, [el("span", { class: "pm-label" }, "当前版本"), el("span", { class: "pm-val mono", id: "up-version" }, "—")]),
+            el("div", { class: "pm-block" }, [el("span", { class: "pm-label" }, "作者"), el("span", { class: "pm-val" }, "SakuraFan")]),
             el("div", { class: "pm-block" }, [el("span", { class: "pm-label" }, "更新渠道"), el("span", { class: "pm-val" }, "稳定版")]),
             el("div", { class: "pm-block" }, [el("span", { class: "pm-label" }, "上次检查"), el("span", { class: "pm-val", id: "up-last-check" }, "—")]),
           ]),
