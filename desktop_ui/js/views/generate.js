@@ -359,7 +359,7 @@ export class GenerateView {
             el("span", { class: "gw-halo" }),
             el("span", { class: "gw-orbit gw-orbit-1" }),
             el("span", { class: "gw-orbit gw-orbit-2" }),
-            el("span", { class: "gw-core" }, "狐"),
+            el("span", { class: "gw-core" }, [el("img", { src: "assets/app-logo.png", alt: "" })]),
           ]),
           el("b", {}, s.job.status === "running" ? "正在生成…" : "排队中…"),
           el("span", {}, s.job.status === "running" ? "墨色正在画布上汇聚" : "前方还有任务，稍候片刻"),

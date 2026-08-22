@@ -351,18 +351,11 @@
 .wfx-loading-seal {
   position: absolute;
   right: 0;
-  width: 24px;
-  height: 24px;
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--primary);
-  color: var(--primary);
-  background: var(--surface);
-  font-family: var(--font-display);
-  font-size: 13px;
-  line-height: 1;
+  width: 28px;
+  height: 28px;
   animation: wfxSealPulse 1.15s var(--ease-out) infinite;
 }
+.wfx-loading-seal img { width: 100%; height: 100%; display: block; }
 .wfx-loading-label { font-size: var(--fs-sm); }
 @keyframes wfxInkPass {
   0% { transform: translateX(-100%) scaleX(.45); opacity: .25; }

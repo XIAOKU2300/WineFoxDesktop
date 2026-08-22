@@ -68,7 +68,7 @@ function buildRail() {
   rail.append(
     el("div", { class: "rail-sep" }),
     el("div", { class: "rail-foot" }, [
-      el("span", { class: "rail-signature" }, "狐"),
+      el("span", { class: "rail-signature" }, [el("img", { src: "assets/app-logo.png", alt: "" })]),
       el("span", { class: "hint" }, "WineFox Desktop"),
       el("span", { class: "hint" }, "v8.6.11 · 本地创作空间"),
     ]),
@@ -389,6 +389,15 @@ function bindJobTally() {
 
 async function boot() {
   await maybeLoadMock();
+  // 桌面应用体验：屏蔽 WebView 自带的浏览器右键菜单（输入框保留系统菜单，
+  // 便于粘贴/拼写）。图片同样禁止拖拽出鬼影。
+  window.addEventListener("contextmenu", (event) => {
+    const editable = event.target.closest("input, textarea, [contenteditable='true']");
+    if (!editable) event.preventDefault();
+  });
+  window.addEventListener("dragstart", (event) => {
+    if (event.target instanceof HTMLImageElement) event.preventDefault();
+  });
   bindTheme();
   bindConnectionRetry();
   bindLogoDebug();
