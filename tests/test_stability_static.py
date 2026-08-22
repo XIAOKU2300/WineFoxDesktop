@@ -2284,7 +2284,8 @@ class StabilityStaticTests(unittest.TestCase):
         self.assertIn("return bool(ip.is_loopback)", bridge_text)
         self.assertNotIn('request.query.get("token")', bridge_text)
         self.assertNotIn('payload.get("token")', bridge_text)
-        self.assertIn("if not _host_resolves_public(url):", bridge_text)
+        self.assertIn("def _host_resolves_public(", bridge_text)
+        self.assertIn("if not _host_resolves_public(url, proxy_configured=", bridge_text)
         self.assertIn(
             "trace_configs=_redirect_trace_configs(require_allowlisted=True)",
             bridge_text,

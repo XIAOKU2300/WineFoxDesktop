@@ -5,11 +5,58 @@
 
 use std::ffi::c_void;
 use std::time::Duration;
+use windows_sys::Win32::Foundation::GlobalFree;
 use windows_sys::Win32::Networking::WinHttp::*;
 
 fn last_error(context: &str) -> String {
     let code = unsafe { windows_sys::Win32::Foundation::GetLastError() };
     format!("{context}（WinHTTP 错误 {code}）")
+}
+
+/// WinHTTP 的 DEFAULT_PROXY 只读机器级代理（`netsh winhttp`，通常为空），
+/// 不会自动采用用户系统代理——Clash / v2rayN 等写入 WinINET（IE）配置的
+/// 那一套。国内环境直连 github.com 检查更新几乎必失败，表现为
+/// “更新一直有问题”。这里读取 IE/系统代理配置并显式套用到会话上；
+/// 未配置手动代理时保持原行为（直连 / 机器级代理）。
+unsafe fn apply_user_proxy(session: *mut c_void) {
+    let mut cfg = WINHTTP_CURRENT_USER_IE_PROXY_CONFIG {
+        fAutoDetect: 0,
+        lpszAutoConfigUrl: std::ptr::null_mut(),
+        lpszProxy: std::ptr::null_mut(),
+        lpszProxyBypass: std::ptr::null_mut(),
+    };
+    if WinHttpGetIEProxyConfigForCurrentUser(&mut cfg) == 0 {
+        return;
+    }
+    if !cfg.lpszProxy.is_null() {
+        let mut fallback_bypass = to_wide("localhost;127.0.0.1;<local>");
+        let bypass = if cfg.lpszProxyBypass.is_null() {
+            fallback_bypass.as_mut_ptr()
+        } else {
+            cfg.lpszProxyBypass
+        };
+        let info = WINHTTP_PROXY_INFO {
+            dwAccessType: WINHTTP_ACCESS_TYPE_NAMED_PROXY,
+            lpszProxy: cfg.lpszProxy,
+            lpszProxyBypass: bypass,
+        };
+        WinHttpSetOption(
+            session,
+            WINHTTP_OPTION_PROXY,
+            &info as *const WINHTTP_PROXY_INFO as *mut c_void,
+            std::mem::size_of::<WINHTTP_PROXY_INFO>() as u32,
+        );
+    }
+    // WinHTTP 返回的字符串需用 GlobalFree 释放
+    if !cfg.lpszAutoConfigUrl.is_null() {
+        GlobalFree(cfg.lpszAutoConfigUrl.cast());
+    }
+    if !cfg.lpszProxy.is_null() {
+        GlobalFree(cfg.lpszProxy.cast());
+    }
+    if !cfg.lpszProxyBypass.is_null() {
+        GlobalFree(cfg.lpszProxyBypass.cast());
+    }
 }
 
 /// 解析 https://host[:port]/path，返回 (host, port, path)。
@@ -55,6 +102,7 @@ pub fn https_get(
             return Err(last_error("无法初始化 WinHTTP"));
         }
         let _guard_session = HandleGuard(session);
+        apply_user_proxy(session);
 
         let connect = WinHttpConnect(session, host_w.as_ptr(), port, 0);
         if connect.is_null() {

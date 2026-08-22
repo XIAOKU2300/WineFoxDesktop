@@ -21,7 +21,9 @@ export class GenerateView {
     );
     this.state = {
       mode: "txt2img",
-      family: "anima",
+      // 默认模型族跟随设置（向导/设置页配置的 defaults.family），此前硬编码
+      // anima 会与设置的 illustrious 脱节，还会连带选错初始工作流。
+      family: store.get("settings")?.defaults?.family || "anima",
       workflow: "",
       loras: new Map(), // id -> { label, strength }
       refImage: null,   // { url, width, height }
@@ -51,11 +53,7 @@ export class GenerateView {
       try { store.set("catalog", await api.catalog()); } catch { /* 离线可用 */ }
     }
     const cat = store.get("catalog") || { families: [], checkpoints: [], loras: [], workflows: [] };
-    // 默认值
-    if (!this.state.workflow) {
-      const wf = cat.workflows.find((w) => w.mode === "txt2img");
-      if (wf) this.state.workflow = wf.id;
-    }
+    this.syncWorkflow(this.state.family, this.state.mode);
     this.render();
   }
 
@@ -126,6 +124,29 @@ export class GenerateView {
       const value = String(lora?.family || "any").toLowerCase();
       return value === "any" || !value || value === family;
     });
+  }
+
+  /* 工作流与「模型族 + 模式」保持一致。
+   * 旧版三处各自为政（挂载/切模式/切族），任一场景漏掉族匹配时，
+   * 状态里的 workflow id 就会指向另一族的工作流——而 <select> 在状态
+   * 不匹配任何选项时会默认显示第一项，界面看着选上了、实际提交的
+   * 是过期 id，生成直接失败，用户必须手动再点一次工作流才恢复。
+   * 统一收敛到这里：优先当前族 + 当前模式的组合，其次任意族同模式。 */
+  syncWorkflow(family = this.state.family, mode = this.state.mode) {
+    const s = this.state;
+    const workflows = (store.get("catalog")?.workflows || []).filter((w) =>
+      !w.mode || w.mode === mode || w.mode === "any");
+    const fits = (list) => list.some((w) => w.id === s.workflow);
+    if (!fits(workflows)) {
+      s.workflow = workflows[0]?.id || "";
+      return s.workflow;
+    }
+    const familyWorkflows = workflows.filter((w) =>
+      !w.family || w.family === "any" || w.family === family);
+    if (!fits(familyWorkflows)) {
+      s.workflow = familyWorkflows[0]?.id || s.workflow;
+    }
+    return s.workflow;
   }
 
   normalizeLoraSearch(value) {
@@ -426,9 +447,34 @@ export class GenerateView {
 
   queueInfoText() {
     const s = this.state;
+    // 任务进行中优先展示实时队列/进度，结束后回落到最近结果的 seed 与时间。
+    if (s.job) return this.queueStatusText();
     const autoMatches = s.result?.job?.meta?.auto_lora?.matches || [];
     const autoLabel = autoMatches.map((match) => match.character || match.key).filter(Boolean).join("、");
     return s.result ? `${autoLabel ? `LoRA ${autoLabel} · ` : ""}seed ${s.result.job.seed ?? "—"} · ${fmtRelative(s.result.job.created_at)}` : "";
+  }
+
+  /* 左栏「队列」与提交栏的实时状态。旧版只写了初始「—」，之后无人更新，
+   * 排队位置与进度对用户完全不可见。 */
+  queueStatusText() {
+    const j = this.state.job;
+    if (!j) return "队列空闲";
+    if (j.status === "running") {
+      const pct = Number(j.progress);
+      return Number.isFinite(pct) && pct > 0 ? `生成中 · ${Math.min(100, Math.round(pct * 100))}%` : "生成中…";
+    }
+    if (j.status === "queued" || j.status === "recovering") {
+      const pos = Number(j.queue_position);
+      return Number.isFinite(pos) && pos > 1 ? `排队中 · 前方 ${pos - 1} 个任务` : "排队中";
+    }
+    return (STATUS_META[j.status] || STATUS_META.queued).label;
+  }
+
+  renderQueueStatus() {
+    const queue = $("#g-queue", this.root);
+    if (queue) queue.textContent = this.queueStatusText();
+    const mini = $("#g-queue-mini", this.root);
+    if (mini) mini.textContent = this.queueInfoText();
   }
 
   /* ============ 生成前自动匹配预览 + 用户移除 ============ */
@@ -681,10 +727,13 @@ export class GenerateView {
       s.autoLoraBusy = false;
       s.autoLoraPreviewReady = false;
       this.cancelAutoLoraPreview();
-      const workflows = (store.get("catalog")?.workflows || []).filter((workflow) =>
-        !workflow.mode || workflow.mode === s.mode || workflow.mode === "any");
-      const familyWorkflows = workflows.filter((workflow) => !workflow.family || workflow.family === "any" || workflow.family === s.family);
-      if (!familyWorkflows.some((workflow) => workflow.id === s.workflow)) s.workflow = familyWorkflows[0]?.id || workflows[0]?.id || "";
+      // 换族后清掉不属于新族的已选 LoRA，避免提交跨族组合导致生成异常
+      const valid = new Set(this.familyLoras(store.get("catalog")?.loras || [])
+        .map((lora) => lora.id ?? lora.name));
+      for (const id of [...s.loras.keys()]) {
+        if (!valid.has(id)) s.loras.delete(id);
+      }
+      this.syncWorkflow();
       this.render();
     });
     g("g-workflow")?.addEventListener("change", (e) => { s.workflow = e.target.value; });
@@ -770,6 +819,7 @@ export class GenerateView {
     });
     if (s.loraExpanded) this.setupLoraPagination();
     this.bindCanvasZoom();
+    this.renderQueueStatus();
   }
 
   setMode(mode, { restoreFocus = false } = {}) {
@@ -783,12 +833,7 @@ export class GenerateView {
       s.autoLoraBusy = false;
       s.autoLoraPreviewReady = false;
       this.cancelAutoLoraPreview();
-
-      const workflows = (store.get("catalog")?.workflows || []).filter((workflow) =>
-        !workflow.mode || workflow.mode === mode || workflow.mode === "any");
-      if (!workflows.some((workflow) => workflow.id === s.workflow)) {
-        s.workflow = workflows[0]?.id || "";
-      }
+      this.syncWorkflow();
       this.render();
     }
     if (restoreFocus) {
@@ -931,9 +976,19 @@ export class GenerateView {
         }
         prog.querySelector(".gp-state").lastChild.textContent = (STATUS_META[job.status] || STATUS_META.queued).label;
       }
+      // 等待卡的主/副文案随轮询刷新，否则从「排队中」开始就永远显示排队。
+      const wait = area.querySelector(".gen-wait");
+      if (wait) {
+        const running = job.status === "running";
+        const heading = wait.querySelector("b");
+        const subline = heading?.nextElementSibling;
+        if (heading) heading.textContent = running ? "正在生成…" : "排队中…";
+        if (subline) subline.textContent = running ? "墨色正在画布上汇聚" : "前方还有任务，稍候片刻";
+      }
     }
-    // 队列计数
+    // 队列计数与左栏/提交栏实时状态
     store.setJobTally(job.queue_position != null ? job.queue_position : 0, job.status === "running" ? 1 : 0);
+    this.renderQueueStatus();
   }
 
   onJobDone(job) {
@@ -993,8 +1048,47 @@ export class GenerateView {
     if (!img) return;
     const z = { level: 1, tx: 0, ty: 0, moved: false };
     this.canvasZoom = z;
-    const apply = () => {
-      img.style.transformOrigin = "0 0";
+    // Keep the transform centered. A top-left origin amplifies tiny
+    // coordinate errors and can hide the whole image at max zoom.
+    img.style.transformOrigin = "center center";
+
+    // getBoundingClientRect() already includes the current transform. Keep
+    // the layout-space rectangle separate so repeated zooms do not apply the
+    // translation twice (which previously could fling the image completely
+    // outside the clipped canvas after one or two wheel events).
+    const layoutRect = () => {
+      const rect = img.getBoundingClientRect();
+      const level = Math.max(0.001, z.level);
+      const width = rect.width / level;
+      const height = rect.height / level;
+      const centerX = rect.left + rect.width / 2 - z.tx;
+      const centerY = rect.top + rect.height / 2 - z.ty;
+      return {
+        left: centerX - width / 2,
+        top: centerY - height / 2,
+        width,
+        height,
+        centerX,
+        centerY,
+      };
+    };
+    const clampPan = (base) => {
+      if (!base?.width || !base?.height) return;
+      const areaRect = area.getBoundingClientRect();
+      const width = base.width * z.level;
+      const height = base.height * z.level;
+      // Always leave a small visible edge so a zoomed image cannot vanish
+      // behind .canvas-area { overflow: hidden } and become unrecoverable.
+      const visible = Math.min(36, Math.max(12, Math.min(width, height)));
+      const minTx = areaRect.left + visible - base.centerX - width / 2;
+      const maxTx = areaRect.right - visible - base.centerX + width / 2;
+      const minTy = areaRect.top + visible - base.centerY - height / 2;
+      const maxTy = areaRect.bottom - visible - base.centerY + height / 2;
+      z.tx = Math.min(Math.max(z.tx, minTx), maxTx);
+      z.ty = Math.min(Math.max(z.ty, minTy), maxTy);
+    };
+    const apply = (base = layoutRect()) => {
+      clampPan(base);
       img.style.transform = `translate(${z.tx}px, ${z.ty}px) scale(${z.level})`;
       let badge = area.querySelector(".zoom-badge");
       if (z.level === 1 && z.tx === 0 && z.ty === 0) {
@@ -1010,48 +1104,54 @@ export class GenerateView {
     const onWheel = (e) => {
       e.preventDefault();
       const rect = img.getBoundingClientRect();
-      const mx = e.clientX - (rect.left - z.tx);
-      const my = e.clientY - (rect.top - z.ty);
+      const base = layoutRect();
+      // Pointer coordinates are measured from the transformed rectangle;
+      // subtracting tx/ty here a second time was the disappearing-image bug.
+      const px = (e.clientX - (rect.left + rect.width / 2)) / z.level;
+      const py = (e.clientY - (rect.top + rect.height / 2)) / z.level;
       const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
       const next = Math.min(6, Math.max(0.25, z.level * factor));
       if (next === z.level) return;
-      const px = mx / z.level;
-      const py = my / z.level;
-      z.tx = mx - px * next;
-      z.ty = my - py * next;
       z.level = next;
-      apply();
+      z.tx = e.clientX - base.centerX - px * next;
+      z.ty = e.clientY - base.centerY - py * next;
+      apply(base);
     };
     let drag = null;
     const onDown = (e) => {
       if (e.button !== 0) return;
       drag = { x: e.clientX, y: e.clientY, tx: z.tx, ty: z.ty };
+      z.moved = false;
+      img.setPointerCapture?.(e.pointerId);
       img.classList.add("dragging");
     };
     const onMove = (e) => {
       if (!drag) return;
+      const base = layoutRect();
       if (Math.abs(e.clientX - drag.x) + Math.abs(e.clientY - drag.y) > 3) z.moved = true;
       z.tx = drag.tx + (e.clientX - drag.x);
       z.ty = drag.ty + (e.clientY - drag.y);
-      apply();
+      apply(base);
     };
-    const onUp = () => {
+    const onUp = (e) => {
       drag = null;
+      if (e?.pointerId != null) img.releasePointerCapture?.(e.pointerId);
       img.classList.remove("dragging");
     };
     const onDbl = (e) => {
       e.preventDefault();
       const rect = img.getBoundingClientRect();
-      const mx = e.clientX - (rect.left - z.tx);
-      const my = e.clientY - (rect.top - z.ty);
+      const base = layoutRect();
+      const px = (e.clientX - (rect.left + rect.width / 2)) / z.level;
+      const py = (e.clientY - (rect.top + rect.height / 2)) / z.level;
       if (z.level !== 1) {
         z.level = 1; z.tx = 0; z.ty = 0;
       } else {
         z.level = 2;
-        z.tx = -mx;
-        z.ty = -my;
+        z.tx = e.clientX - base.centerX - px * z.level;
+        z.ty = e.clientY - base.centerY - py * z.level;
       }
-      apply();
+      apply(base);
     };
     area.addEventListener("wheel", onWheel, { passive: false });
     img.addEventListener("pointerdown", onDown);

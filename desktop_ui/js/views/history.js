@@ -1,7 +1,7 @@
 /* WineFox Desktop — 历史页
  * cursor 分页 + 搜索 + 预览 + 收藏 + 回收站（软删除）。
  */
-import { el, $, $$, ic, esc, fmtRelative, sanitizeName, debouncedSearchInput, toast, isDegenerate } from "../utils.js";
+import { el, $, $$, ic, esc, fmtRelative, sanitizeName, debouncedSearchInput, toast, isDegenerate, saveImageDialog } from "../utils.js";
 import { api } from "../api.js";
 import { store } from "../store.js";
 
@@ -244,7 +244,6 @@ export class HistoryView {
         el("span", {}, esc(fmtRelative(it.created_at))),
       ]),
       el("div", { class: "cell-actions" }, [
-        el("button", { class: "cell-btn", type: "button", "aria-label": "预览", title: "预览" }, [ic("eye")]),
         this.trash
           ? el("button", { class: "cell-btn", type: "button", "aria-label": "恢复", title: "恢复" }, [ic("restore")])
           : el("button", { class: "cell-btn" + (fav ? " on" : ""), type: "button", "aria-label": fav ? "取消收藏" : "收藏", title: fav ? "取消收藏" : "收藏" }, [ic("fav")]),
@@ -253,21 +252,21 @@ export class HistoryView {
           : el("button", { class: "cell-btn", type: "button", "aria-label": "移入回收站", title: "移入回收站" }, [ic("trash")]),
       ]),
     ]);
+    // 点击卡片本身就是预览，悬浮操作只保留收藏/回收，减少视觉噪音。
     const btns = $$(".cell-btn", cell);
-    btns[0].addEventListener("click", (e) => { e.stopPropagation(); this.preview(it); });
     if (this.trash) {
-      btns[1].addEventListener("click", async (e) => {
+      btns[0].addEventListener("click", async (e) => {
         e.stopPropagation();
         try { await api.restoreHistory(it.id); toast("已恢复", "ok"); this.load(); }
         catch (err) { toast("恢复失败：" + err.message, "err"); }
       });
-      btns[2].addEventListener("click", async (e) => {
+      btns[1].addEventListener("click", async (e) => {
         e.stopPropagation();
         try { await api.purgeHistory(it.id); toast("已彻底删除", "ok"); this.load(); }
         catch (err) { toast("删除失败：" + err.message, "err"); }
       });
     } else {
-      btns[1].addEventListener("click", async (e) => {
+      btns[0].addEventListener("click", async (e) => {
         e.stopPropagation();
         try {
           if (fav) { await api.unfavoriteHistory(it.id); toast("已取消收藏", "ok"); }
@@ -276,7 +275,7 @@ export class HistoryView {
           this.load();
         } catch (err) { toast("操作失败：" + err.message, "err"); }
       });
-      btns[2].addEventListener("click", async (e) => {
+      btns[1].addEventListener("click", async (e) => {
         e.stopPropagation();
         try { await api.trashHistory(it.id); toast("已移入回收站", "ok"); this.load(); }
         catch (err) { toast("操作失败：" + err.message, "err"); }

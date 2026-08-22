@@ -70,7 +70,7 @@ function buildRail() {
     el("div", { class: "rail-foot" }, [
       el("span", { class: "rail-signature" }, "狐"),
       el("span", { class: "hint" }, "WineFox Desktop"),
-      el("span", { class: "hint" }, "v8.6.9 · 本地创作空间"),
+      el("span", { class: "hint" }, "v8.6.11 · 本地创作空间"),
     ]),
   );
 }
@@ -139,7 +139,6 @@ function scheduleMount(entry) {
 }
 
 function playViewEntrance(entry, token) {
-  if (entry.hasEntered) return;
   entry.hasEntered = true;
   clearTimeout(enterTimer);
   entry.root.classList.remove("view-motion-enter");
@@ -148,7 +147,7 @@ function playViewEntrance(entry, token) {
     entry.root.classList.add("view-motion-enter");
     enterTimer = setTimeout(() => {
       if (currentEntry === entry) entry.root.classList.remove("view-motion-enter");
-    }, 620);
+    }, 460);
   });
 }
 

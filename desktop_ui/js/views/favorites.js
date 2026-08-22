@@ -5,6 +5,11 @@ import { el, $, $$, ic, esc, fmtRelative, debouncedSearchInput, loadingState, to
 import { api } from "../api.js";
 import { store } from "../store.js";
 
+/* 分类字段兼容：真实后端 /categories 返回 {name, count}，mock 返回 {id, label, count}。
+ * 统一在这里归一化，避免 chip 显示 "undefined" 且点击筛选失效。 */
+const catId = (c) => String(c?.id ?? c?.name ?? c?.label ?? "");
+const catLabel = (c) => String(c?.label ?? c?.name ?? c?.id ?? "");
+
 export class FavoritesView {
   constructor() {
     this.q = "";
@@ -66,11 +71,13 @@ export class FavoritesView {
     all.addEventListener("click", () => { this.category = "all"; this.renderCats(); this.load(); });
     wrap.append(all);
     for (const c of this.categories) {
-      const chip = el("button", { class: "cat-chip", type: "button", "aria-pressed": this.category === c.id ? "true" : "false" }, [
-        esc(c.label || c.id),
+      const id = catId(c);
+      if (!id) continue;
+      const chip = el("button", { class: "cat-chip", type: "button", "aria-pressed": this.category === id ? "true" : "false" }, [
+        esc(catLabel(c) || id),
         el("span", { class: "cnt" }, esc(String(c.count ?? ""))),
       ]);
-      chip.addEventListener("click", () => { this.category = c.id; this.renderCats(); this.load(); });
+      chip.addEventListener("click", () => { this.category = id; this.renderCats(); this.load(); });
       wrap.append(chip);
     }
   }
@@ -120,11 +127,14 @@ export class FavoritesView {
   }
 
   cell(it) {
+    // 手动新建的提示词收藏没有图片，用占位徽记替代，避免破图图标。
+    const hasImage = !!it.image?.url;
     const cell = el("div", { class: "fav-cell" }, [
       el("div", { class: "fav-thumb", tabindex: "0", role: "button", "aria-label": "预览收藏" }, [
-        el("img", { src: it.image?.url || "", alt: it.prompt || "收藏图片", loading: "lazy" }),
+        hasImage
+          ? el("img", { src: it.image.url, alt: it.prompt || "收藏图片", loading: "lazy" })
+          : el("div", { class: "fav-thumb-placeholder", "aria-hidden": "true" }, [ic("fav")]),
         el("div", { class: "cell-actions" }, [
-          el("button", { class: "cell-btn", type: "button", "aria-label": "预览", title: "预览" }, [ic("eye")]),
           el("button", { class: "cell-btn", type: "button", "aria-label": "编辑备注", title: "编辑备注" }, [ic("gear")]),
           el("button", { class: "cell-btn", type: "button", "aria-label": "删除收藏", title: "删除收藏" }, [ic("trash")]),
         ]),
@@ -136,11 +146,11 @@ export class FavoritesView {
     ]);
     const thumb = $(".fav-thumb", cell);
     const btns = $$(".cell-btn", cell);
+    // 点击缩略图即预览；悬浮操作只保留编辑/删除，与历史卡片保持同一设计语言。
     thumb.addEventListener("click", () => this.preview(it));
     thumb.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); this.preview(it); } });
-    btns[0].addEventListener("click", (e) => { e.stopPropagation(); this.preview(it); });
-    btns[1].addEventListener("click", (e) => { e.stopPropagation(); this.editDialog(it); });
-    btns[2].addEventListener("click", async (e) => {
+    btns[0].addEventListener("click", (e) => { e.stopPropagation(); this.editDialog(it); });
+    btns[1].addEventListener("click", async (e) => {
       e.stopPropagation();
       try { await api.deleteFavorite(it.id); toast("已删除收藏", "ok"); await this.loadCats(); this.load(); }
       catch (err) { toast("删除失败：" + err.message, "err"); }
@@ -156,7 +166,9 @@ export class FavoritesView {
         el("button", { class: "icon-btn", type: "button", "aria-label": "关闭" }, [ic("x")]),
       ]),
       el("div", { class: "preview-body" }, [
-        el("img", { src: it.image?.url || "", alt: it.prompt || "收藏图片" }),
+        it.image?.url
+          ? el("img", { src: it.image.url, alt: it.prompt || "收藏图片" })
+          : el("div", { class: "fav-thumb-placeholder is-large", "aria-hidden": "true" }, [ic("fav")]),
         el("div", { class: "preview-meta" }, [
           it.note ? el("div", { class: "pm-block" }, [el("span", { class: "pm-label" }, "备注"), el("span", { class: "pm-val" }, esc(it.note))]) : null,
           el("div", { class: "pm-block" }, [el("span", { class: "pm-label" }, "提示词"), el("span", { class: "pm-val" }, esc(it.prompt || "—"))]),
@@ -213,7 +225,7 @@ export class FavoritesView {
         el("div", { class: "field" }, [
           el("label", { for: "fl-cat" }, "分类"),
           el("input", { id: "fl-cat", class: "input", type: "text", list: "fl-cat-list", placeholder: "输入或选择已有分类", value: catVal || "" }),
-          el("datalist", { id: "fl-cat-list" }, this.categories.map((c) => el("option", { value: c.label || c.id }))),
+          el("datalist", { id: "fl-cat-list" }, this.categories.map((c) => el("option", { value: catLabel(c) || catId(c) }))),
         ]),
         it ? null : el("div", { class: "field" }, [
           el("label", { for: "fl-prompt" }, "提示词（可选，用于检索）"),

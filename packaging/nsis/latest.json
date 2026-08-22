@@ -1,12 +1,12 @@
 {
-  "version": "8.6.7",
-  "notes": "LoRA 侧边栏完整移植：搜索下载、本地整理、SQLite 档案、自动匹配引用与 Bridge 1.4.2 安全加固。",
-  "pub_date": "2026-08-14T16:45:48.537017+00:00",
+  "version": "8.6.11",
+  "notes": "全新应用图标；LoRA 详情动效重做；生成页队列/工作流/日期修复；历史收藏修复；自动更新支持系统代理",
+  "pub_date": "2026-08-22T03:00:35.444623+00:00",
   "platforms": {
     "windows-x86_64": {
-      "url": "https://github.com/XIAOKU2300/WineFoxDesktop/releases/download/v8.6.7/WineFox-Setup-8.6.7-x64.exe",
-      "signature": "8gQoGogQdUYuSraCiOosIKo/vJkb6vOTzcgk98TOP7GtN1mc/1WhKOnuHIr2rTf7LHn5+FUGj26zZQUvUHE7BA==",
-      "size": 20045071
+      "url": "https://github.com/XIAOKU2300/WineFoxDesktop/releases/download/v8.6.11/WineFox-Setup-8.6.11-x64.exe",
+      "signature": "H4UQBpEUvWIaixyzyF1FpzaZYdnt0YMSa+a7OKCnGUjnjE1TCOK+bWNWiZFDosiY63VgcylQMYx0HNos1L0aDg==",
+      "size": 22791658
     }
   }
 }

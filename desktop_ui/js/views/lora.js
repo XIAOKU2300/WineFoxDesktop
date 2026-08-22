@@ -5,6 +5,13 @@ import { el, $, $$, ic, esc, toast, loadingState, copyText } from "../utils.js";
 import { api, loraPreviewUrl } from "../api.js";
 import { store } from "../store.js";
 
+function formatLoraDownloadError(error) {
+  const message = String(error?.message || error || "LoRA 下载失败").trim();
+  if (/HTTP\s*401|Unauthorized|requires you to be logged in|要求登录/i.test(message)) {
+    return "Civitai 资源要求登录：请到设置 → 认证与密钥配置 Civitai 登录 Cookie，保存后重试；也可以换用公开资源。";
+  }
+  return message;
+}
 export class LoraLibraryView {
   constructor() {
     this.tab = "installed";
@@ -22,6 +29,11 @@ export class LoraLibraryView {
     this.onlineErrors = [];
     this.onlineSearchedTerms = [];
     this.onlineHasSearched = false;
+    this.onlinePage = 1;
+    this.onlinePageSize = 20;
+    this.onlineHasMore = false;
+    this.onlineTotal = 0;
+    this.onlineAdultConsent = false;
     this.onlineLoading = false;
     this.searchController = null;
     this.downloadPolls = new Map();
@@ -107,24 +119,78 @@ export class LoraLibraryView {
 
   previewThumb(className, token, placeholderIcon = "image") {
     const thumb = el("div", {
-      class: `${className}${token ? "" : " is-placeholder"}`,
+      class: `${className}${token ? " is-loading" : " is-placeholder"}`,
       "aria-hidden": "true",
     });
+    let retryCount = 0;
+    let image = null;
+    const baseUrl = token ? loraPreviewUrl(token) : "";
+    const applyNaturalRatio = () => {
+      if (!image?.naturalWidth || !image?.naturalHeight) return;
+      // Keep the source composition instead of forcing every preview into a
+      // portrait box. The small guard prevents pathological provider images
+      // from creating an unusably tall card.
+      const ratio = Math.max(0.55, Math.min(2.4, image.naturalWidth / image.naturalHeight));
+      thumb.style.setProperty("--lora-preview-ratio", ratio.toFixed(4));
+      thumb.dataset.previewRatio = `${image.naturalWidth}/${image.naturalHeight}`;
+    };
     const showPlaceholder = () => {
+      // Keep the historical handler name for the UI contract; once an image
+      // exists, the same path renders a retryable error instead of a silent
+      // blank placeholder.
+      if (image) {
+        showError();
+        return;
+      }
+      thumb.classList.remove("is-loading", "is-loaded");
       thumb.classList.add("is-placeholder");
       thumb.replaceChildren(ic(placeholderIcon));
+    };
+    const showError = () => {
+      thumb.classList.remove("is-loading", "is-loaded", "is-placeholder");
+      thumb.classList.add("is-error");
+      thumb.removeAttribute("aria-hidden");
+      thumb.replaceChildren(
+        image,
+        el("button", {
+          class: "lora-preview-retry",
+          type: "button",
+          title: "缩略图加载失败，点击重试",
+          "aria-label": "缩略图加载失败，点击重试",
+          onClick: (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            retryCount += 1;
+            beginLoad();
+          },
+        }, [ic("refresh"), el("span", { class: "lora-preview-error-label" }, "加载失败 · 重试")]),
+      );
+    };
+    const beginLoad = () => {
+      thumb.classList.remove("is-error", "is-placeholder", "is-loaded");
+      thumb.classList.add("is-loading");
+      thumb.setAttribute("aria-hidden", "true");
+      thumb.replaceChildren(image);
+      const suffix = retryCount ? `${baseUrl.includes("?") ? "&" : "?"}_retry=${retryCount}` : "";
+      image.src = `${baseUrl}${suffix}`;
     };
     if (!token) {
       showPlaceholder();
       return thumb;
     }
-    thumb.append(el("img", {
-      src: loraPreviewUrl(token),
+    image = el("img", {
       alt: "",
       loading: "lazy",
       referrerpolicy: "no-referrer",
+      onload: () => {
+        applyNaturalRatio();
+        thumb.classList.remove("is-loading");
+        thumb.classList.add("is-loaded");
+        thumb.setAttribute("aria-hidden", "true");
+      },
       onerror: showPlaceholder,
-    }));
+    });
+    beginLoad();
     return thumb;
   }
 
@@ -273,6 +339,11 @@ export class LoraLibraryView {
       if (detail) {
         const item = this.onlineResults.find((entry) => String(entry.id) === String(detail.dataset.loraDetail));
         if (item) this.openOnlineDetail(item);
+        return;
+      }
+      const pageButton = event.target.closest("[data-lora-page]");
+      if (pageButton && !pageButton.disabled) {
+        void this.changeOnlinePage(Number(pageButton.dataset.loraPage || 1));
         return;
       }
       const edit = event.target.closest("[data-edit]");
@@ -462,17 +533,50 @@ export class LoraLibraryView {
       nodes.push(el("div", { class: "lora-results-state" }, [ic("search"), el("b", {}, title), el("span", {}, detail)]));
       return nodes;
     }
-    nodes.push(...this.onlineResults.map((item) => this.onlineResultRow(item)));
+    nodes.push(...this.onlineResults.map((item, index) => this.onlineResultRow(item, index)));
+    const pagination = this.onlinePagination();
+    if (pagination) nodes.push(pagination);
     return nodes;
   }
 
-  onlineResultRow(item) {
+  onlinePagination() {
+    if (!this.onlineHasSearched || (!this.onlineResults.length && this.onlinePage <= 1)) return null;
+    const page = Math.max(1, Number(this.onlinePage) || 1);
+    const total = Math.max(0, Number(this.onlineTotal) || 0);
+    const first = (page - 1) * this.onlinePageSize + 1;
+    const last = (page - 1) * this.onlinePageSize + this.onlineResults.length;
+    const summary = total
+      ? `第 ${page} 页 · ${first}–${last} / 约 ${total} 条`
+      : `第 ${page} 页 · ${first}–${last} 条`;
+    return el("nav", { class: "lora-pagination", "aria-label": "LoRA 搜索分页" }, [
+      el("button", {
+        class: "btn btn-sm",
+        type: "button",
+        disabled: this.onlineLoading || page <= 1,
+        dataset: { loraPage: String(page - 1) },
+      }, "上一页"),
+      el("span", { class: "lora-pagination-summary" }, summary),
+      el("button", {
+        class: "btn btn-primary btn-sm",
+        type: "button",
+        disabled: this.onlineLoading || !this.onlineHasMore,
+        dataset: { loraPage: String(page + 1) },
+      }, "下一页"),
+    ]);
+  }
+
+  onlineResultRow(item, index = 0) {
     const words = Array.isArray(item.trained_words) ? item.trained_words.filter(Boolean).slice(0, 5) : [];
     const source = item.source === "huggingface" ? "Hugging Face" : item.source === "civitai_red" ? "Civitai Red" : "Civitai";
     const meta = [item.base_model || "未知底模", item.version_name, item.download_count ? `${Number(item.download_count).toLocaleString()} 下载` : ""].filter(Boolean).join(" · ");
     const label = item.name || "未命名 LoRA";
     const thumb = this.previewThumb("lora-market-thumb", item.preview_token);
-    return el("article", { class: "lora-search-result lora-market-card", dataset: { resultId: item.id } }, [
+    const order = Math.min(Math.max(0, Number(index) || 0), 8);
+    return el("article", {
+      class: "lora-search-result lora-market-card",
+      dataset: { resultId: item.id },
+      style: `--lora-order: ${order}; animation-delay: ${order * 60}ms;`,
+    }, [
       el("div", {
         class: "lora-card-open",
         role: "button",
@@ -505,13 +609,29 @@ export class LoraLibraryView {
     const source = item.source === "huggingface" ? "Hugging Face" : item.source === "civitai_red" ? "Civitai Red" : "Civitai";
     const words = Array.isArray(item.trained_words) ? item.trained_words.filter(Boolean) : [];
     const tags = Array.isArray(item.tags) ? item.tags.filter(Boolean) : [];
+    const sourceCard = [...(this.root?.querySelectorAll(".lora-search-result") || [])]
+      .find((card) => String(card.dataset.resultId) === String(item.id));
+    const sourceThumb = sourceCard?.querySelector(".lora-market-thumb");
+    const sourceImage = sourceThumb?.querySelector("img");
+    const canReuseImage = !!sourceImage && sourceThumb?.classList.contains("is-loaded");
+    const sourceRatio = sourceThumb?.style.getPropertyValue("--lora-preview-ratio").trim();
     const activeElement = document.activeElement;
     const overlay = el("div", {
       class: "overlay lora-detail-overlay",
       role: "dialog",
       "aria-modal": "true",
       "aria-labelledby": "lora-detail-title",
+      dataset: { loraDetailOverlay: item.id },
     });
+    // When the card image is already loaded, the detail preview gets its own
+    // clone of that image (src already cached, no second network fetch). The
+    // flight layer animates another clone on top; on arrival both clones sit
+    // pixel-identical, so the swap happens in a single frame — no cross-fade,
+    // no double motion, and the real image never leaves the card.
+    const detailPreview = canReuseImage
+      ? el("div", { class: "lora-detail-preview lora-shared-target lora-shared-pending" }, [sourceImage.cloneNode(false)])
+      : this.previewThumb("lora-detail-preview", item.preview_token);
+    if (sourceRatio) detailPreview.style.setProperty("--lora-preview-ratio", sourceRatio);
     const modal = el("div", { class: "modal lora-detail-modal" }, [
       el("div", { class: "modal-head" }, [
         el("div", { class: "lora-detail-heading" }, [
@@ -524,7 +644,7 @@ export class LoraLibraryView {
         el("button", { class: "icon-btn", type: "button", "aria-label": "关闭详情" }, [ic("x")]),
       ]),
       el("div", { class: "modal-body lora-detail-body" }, [
-        this.previewThumb("lora-detail-preview", item.preview_token),
+        detailPreview,
         el("div", { class: "lora-detail-content" }, [
           el("div", { class: "lora-detail-facts" }, [
             this.detailFact("版本", item.version_name || "未提供"),
@@ -552,12 +672,48 @@ export class LoraLibraryView {
     document.body.append(overlay);
 
     let closed = false;
+    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
+    // settled = 开场飞行已落地（或本就没有飞行），详情图已经就位。
+    let settled = !canReuseImage || reduceMotion;
+    let openFlight = null;
+    const completeSharedPreview = () => {
+      // is-shared-pending 故意保留：CSS 用它配合 is-shared-complete 做“同帧硬切”，
+      // 目标图不走自身的 opacity/transform 过渡，避免与飞行层双重运动。
+      detailPreview.classList.add("is-loaded", "is-shared-complete");
+      overlay.classList.remove("is-shared-transfer");
+    };
+    const finishClose = () => {
+      sourceCard?.classList.remove("is-opening");
+      overlay.remove();
+      if (activeElement?.isConnected && typeof activeElement.focus === "function") activeElement.focus();
+    };
     const close = () => {
       if (closed) return;
       closed = true;
       document.removeEventListener("keydown", onKey);
-      overlay.remove();
-      if (activeElement?.isConnected && typeof activeElement.focus === "function") activeElement.focus();
+      // 飞行中途关闭：先 cancel 触发 settle，就地把详情图交接到位，再从当前状态返航。
+      if (!settled && openFlight) {
+        openFlight.cancel();
+        settled = true;
+      }
+      overlay.classList.remove("is-visible");
+      overlay.classList.add("is-closing");
+      sourceCard?.classList.remove("is-opening");
+      const homeThumb = sourceThumb?.isConnected ? sourceThumb : null;
+      const canReturn = settled && !!homeThumb
+        && detailPreview.classList.contains("is-shared-complete")
+        && !reduceMotion;
+      if (canReturn) {
+        // 对称返航：图片沿缓入曲线飘回卡片缩略图，末段随飞行层淡出融入；
+        // 卡片压暗已同步解除，一来一回构成完整的“取用—归还”闭环。
+        this.returnSharedPreview(detailPreview, homeThumb, {
+          duration: 420,
+          sourceImage,
+          onfinish: finishClose,
+        });
+        return;
+      }
+      window.setTimeout(finishClose, reduceMotion ? 0 : 200);
     };
     const onKey = (event) => { if (event.key === "Escape") close(); };
     overlay.addEventListener("click", (event) => { if (event.target === overlay) close(); });
@@ -565,6 +721,156 @@ export class LoraLibraryView {
     modal.querySelector("[data-lora-detail-close]")?.addEventListener("click", close);
     document.addEventListener("keydown", onKey);
     modal.querySelector(".modal-head .icon-btn")?.focus();
+    sourceCard?.classList.add("is-opening");
+    if (canReuseImage && !reduceMotion) overlay.classList.add("is-shared-transfer");
+    requestAnimationFrame(() => {
+      if (closed) return;
+      overlay.classList.add("is-visible");
+      if (!canReuseImage) return;
+      if (reduceMotion) {
+        completeSharedPreview();
+        return;
+      }
+      openFlight = this.animateSharedPreview(sourceThumb, detailPreview, {
+        duration: 560,
+        sourceImage,
+        onfinish: () => {
+          settled = true;
+          completeSharedPreview();
+        },
+      });
+    });
+  }
+
+  /* ---------- 共享元素飞行层 ----------
+   * 飞行层只承载一张克隆图，只动画 transform（返航另加 opacity）。
+   * 阴影、滤镜、描边全部退出动画：深度感交给遮罩渐暗与详情面板自身的
+   * 静态阴影（随面板淡入），飞行层本身轻如纸页，全程交给合成器合成。
+   * 圆角是唯一随行的插值属性——缩放会让半径视觉放大，需要按比例反补偿，
+   * 保证落地瞬间与目标预览的圆角逐像素一致。 */
+  buildFlightLayer(image, rect) {
+    const flight = document.createElement("div");
+    flight.className = "lora-detail-flight";
+    Object.assign(flight.style, {
+      position: "fixed",
+      left: `${rect.left}px`,
+      top: `${rect.top}px`,
+      width: `${rect.width}px`,
+      height: `${rect.height}px`,
+      margin: "0",
+      zIndex: "120",
+      pointerEvents: "none",
+      overflow: "hidden",
+      transformOrigin: "top left",
+      willChange: "transform",
+    });
+    Object.assign(image.style, {
+      width: "100%",
+      height: "100%",
+      display: "block",
+      opacity: "1",
+      transform: "none",
+      animation: "none",
+      transition: "none",
+      objectFit: "cover",
+      objectPosition: "50% 50%",
+    });
+    flight.append(image);
+    document.body.append(flight);
+    return flight;
+  }
+
+  flightPlan(from, to, sourceImage) {
+    const fromRect = from?.getBoundingClientRect?.();
+    const toRect = to?.getBoundingClientRect?.();
+    const src = sourceImage || from?.querySelector?.("img");
+    const ok = !!fromRect && !!toRect && !!src
+      && fromRect.width >= 1 && fromRect.height >= 1
+      && toRect.width >= 1 && toRect.height >= 1;
+    if (!ok) return null;
+    const fromRadius = parseFloat(getComputedStyle(from).borderRadius) || 8;
+    const toRadius = parseFloat(getComputedStyle(to).borderRadius) || 8;
+    const sx = toRect.width / fromRect.width;
+    const sy = toRect.height / fromRect.height;
+    return {
+      fromRect,
+      toRect,
+      image: src,
+      fromRadius,
+      // 元素被 scale 放大后，自身圆角的视觉半径同步放大；除以缩放比反补偿，
+      // 落地时视觉半径恰好等于目标圆角。sx≠sy 时用 "rx / ry" 椭圆角语法。
+      endRadius: `${(toRadius / sx).toFixed(2)}px / ${(toRadius / sy).toFixed(2)}px`,
+      land: `translate3d(${toRect.left - fromRect.left}px, ${toRect.top - fromRect.top}px, 0) scale(${sx}, ${sy})`,
+    };
+  }
+
+  /* 开场：小卡片 → 详情预览。一段 transform、一条缓动曲线走完全程——
+   * 本站标准的指数减速 --ease-out：离手即动、长程滑翔、到点即静，
+   * 无过冲、无回弹、无关键帧抽搐，如纸页被从容推放到位。
+   * 交接采用“先显形、后移除、隔帧重叠”：落地时先让目标图在飞行层
+   * 正下方显形（此刻被完全覆盖），下一帧才移除飞行层——克隆图与目标图
+   * 同源同几何，重叠的一帧肉眼不可见，却保证任何亚像素误差都不会
+   * 露出“消失再浮现”的缝隙，全程一镜到底。 */
+  animateSharedPreview(from, to, { duration = 600, sourceImage = null, onfinish } = {}) {
+    const plan = this.flightPlan(from, to, sourceImage);
+    if (!plan || typeof Element.prototype.animate !== "function") {
+      onfinish?.();
+      return null;
+    }
+    const flight = this.buildFlightLayer(plan.image.cloneNode(false), plan.fromRect);
+    flight.style.setProperty("--lora-flight-dur", `${duration}ms`);
+    let settled = false;
+    const settle = (interrupted = false) => {
+      if (settled) return;
+      settled = true;
+      onfinish?.();
+      // 被 cancel 时动画效果立即失效，必须同步移除，避免飞行层闪回起点；
+      // 自然结束时 fill:forwards 仍把飞行层钉在终点，下一帧移除最稳。
+      if (interrupted) flight.remove();
+      else requestAnimationFrame(() => flight.remove());
+    };
+    const animation = flight.animate(
+      [
+        { transform: "translate3d(0, 0, 0) scale(1, 1)", borderRadius: `${plan.fromRadius}px` },
+        { transform: plan.land, borderRadius: plan.endRadius },
+      ],
+      { duration, easing: "cubic-bezier(0.16, 1, 0.3, 1)", fill: "forwards" }
+    );
+    animation.addEventListener("finish", () => settle(), { once: true });
+    animation.addEventListener("cancel", () => settle(true), { once: true });
+    return animation;
+  }
+
+  /* 返航：详情预览 → 小卡片。轻起步、长滑翔回家，末段随飞行层整体淡出，
+   * 融进缩略图，与开场构成对称的“取用—归还”闭环——同样无过冲无回弹。 */
+  returnSharedPreview(from, to, { duration = 420, sourceImage = null, onfinish } = {}) {
+    const plan = this.flightPlan(from, to, sourceImage);
+    if (!plan || typeof Element.prototype.animate !== "function") {
+      onfinish?.();
+      return null;
+    }
+    const flight = this.buildFlightLayer(plan.image.cloneNode(false), plan.fromRect);
+    flight.style.setProperty("--lora-flight-dur", `${duration}ms`);
+    flight.style.willChange = "transform, opacity";
+    let settled = false;
+    const settle = (interrupted = false) => {
+      if (settled) return;
+      settled = true;
+      onfinish?.();
+      if (interrupted) flight.remove();
+      else requestAnimationFrame(() => flight.remove());
+    };
+    const animation = flight.animate(
+      [
+        { transform: "translate3d(0, 0, 0) scale(1, 1)", borderRadius: `${plan.fromRadius}px`, opacity: 1 },
+        { transform: plan.land, borderRadius: plan.endRadius, opacity: 1, offset: 0.7 },
+        { transform: plan.land, borderRadius: plan.endRadius, opacity: 0 },
+      ],
+      { duration, easing: "cubic-bezier(0.4, 0.06, 0.18, 1)", fill: "forwards" }
+    );
+    animation.addEventListener("finish", () => settle(), { once: true });
+    animation.addEventListener("cancel", () => settle(true), { once: true });
+    return animation;
   }
 
   detailFact(label, value) {
@@ -574,20 +880,29 @@ export class LoraLibraryView {
     ]);
   }
 
-  async searchOnlineLoras() {
+  async changeOnlinePage(page) {
+    page = Math.max(1, Number(page) || 1);
+    if (this.onlineLoading || page === this.onlinePage || (page > this.onlinePage && !this.onlineHasMore)) return;
+    await this.searchOnlineLoras(page);
+  }
+
+  async searchOnlineLoras(page = 1) {
     const query = $("#lora-online-query", this.root)?.value?.trim() || "";
     const family = $("#lora-online-family", this.root)?.value || this.family;
     if (!query) { toast("先输入 LoRA 名称或角色别称", "warn"); return; }
+    const requestedPage = Math.max(1, Number(page) || 1);
     this.onlineQuery = query;
     this.family = family;
     this.onlineFamily = family;
     this.onlineSources = [...($("#lora-source-select", this.root)?.querySelectorAll("[data-lora-source]:checked") || [])].map((box) => box.value);
     if (!this.onlineSources.length) this.onlineSources = ["civitai"];
-    let adultConsent = false;
+    let adultConsent = this.onlineAdultConsent;
     if (this.onlineSources.includes("civitai_red")) {
       adultConsent = await ensureR18Consent();
       if (!adultConsent) return;
     }
+    this.onlineAdultConsent = adultConsent;
+    this.onlinePage = requestedPage;
     this.onlineLoading = true;
     this.onlineErrors = [];
     this.onlineSearchedTerms = [];
@@ -597,12 +912,21 @@ export class LoraLibraryView {
     const timeout = setTimeout(() => controller.abort(), 45000);
     if (this.tab === "discover") this.renderWorkspace();
     try {
-      const result = await api.searchLoras(query, family, { signal: controller.signal, sources: this.onlineSources, adult_consent: adultConsent });
+      const result = await api.searchLoras(query, family, {
+        signal: controller.signal,
+        sources: this.onlineSources,
+        adult_consent: adultConsent,
+        page: requestedPage,
+        limit: this.onlinePageSize,
+      });
       if (controller.signal.aborted) return;
       this.onlineResults = Array.isArray(result?.items) ? result.items : [];
       this.onlineErrors = Array.isArray(result?.errors) ? result.errors.filter(Boolean).slice(0, 5) : [];
       this.onlineSearchedTerms = Array.isArray(result?.searched_terms) ? result.searched_terms.filter(Boolean).slice(0, 8) : [];
       this.onlineHasSearched = true;
+      this.onlineTotal = Math.max(0, Number(result?.total) || 0);
+      const visibleEnd = (requestedPage - 1) * this.onlinePageSize + this.onlineResults.length;
+      this.onlineHasMore = result?.has_more === true || this.onlineTotal > visibleEnd;
       if (result?.nsfw_hidden) toast(`已隐藏 ${result.nsfw_hidden} 条敏感结果`, "warn");
       if (!this.onlineResults.length && !this.onlineErrors.length) toast("没有找到匹配当前模型族的 LoRA", "warn");
       if (this.onlineResults.length && this.onlineErrors.length) toast("部分来源失败，已展示可用结果", "warn");
@@ -657,7 +981,7 @@ export class LoraLibraryView {
       this.pollLoraDownload(job.id, item.id);
     } catch (error) {
       button.disabled = false;
-      state?.replaceChildren(el("div", { class: "notice err" }, esc(error.message)));
+      state?.replaceChildren(el("div", { class: "notice err" }, esc(formatLoraDownloadError(error))));
     }
   }
 
@@ -684,14 +1008,14 @@ export class LoraLibraryView {
           return;
         }
         if (["failed", "cancelled"].includes(job.status)) {
-          state?.replaceChildren(el("div", { class: "notice err" }, esc(job.error?.message || "LoRA 下载失败")));
+          state?.replaceChildren(el("div", { class: "notice err" }, esc(formatLoraDownloadError(job.error?.message || "LoRA 下载失败"))));
           if (button) button.disabled = false;
           this.downloadPolls.delete(jobId);
           return;
         }
         this.downloadPolls.set(jobId, setTimeout(tick, 1000));
       } catch (error) {
-        state?.replaceChildren(el("div", { class: "notice err" }, esc("读取下载进度失败：" + error.message)));
+        state?.replaceChildren(el("div", { class: "notice err" }, esc("读取下载进度失败：" + formatLoraDownloadError(error))));
         if (button) button.disabled = false;
         this.downloadPolls.delete(jobId);
       }

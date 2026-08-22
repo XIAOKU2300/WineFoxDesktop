@@ -57,6 +57,15 @@ const FAKE_LORA_SEARCH = [
   { id: "search_ink_1", source: "civitai", name: "Modern Chinese Ink Style", version_name: "v3.1", base_model: "Illustrious XL", trained_words: ["modern ink", "ink wash"], download_count: 12980, heart_count: 1490, nsfw: false, preview_token: svgImage(43, "Ink", 512, 640) },
   { id: "search_light_1", source: "civitai", name: "Cinematic Character Lighting", version_name: "XL v2", base_model: "Illustrious XL", trained_words: ["cinematic light", "rim light"], download_count: 9050, heart_count: 720, nsfw: false, preview_token: svgImage(44, "Light", 512, 640) },
 ];
+for (let index = 5; index <= 27; index += 1) {
+  const seed = FAKE_LORA_SEARCH[(index - 5) % 4];
+  FAKE_LORA_SEARCH.push({
+    ...seed,
+    id: `search_demo_${index}`,
+    name: `${seed.name} · Demo ${index}`,
+    preview_token: svgImage(40 + index, `Demo ${index}`, 512, 640),
+  });
+}
 
 const FAKE_CHECKPOINTS = [
   { id: "ckpt_1", name: "Illustrious-XL-v2.0.safetensors", family: "illustrious", size: 6925 * 1024 * 1024, compat: "ready" },
@@ -102,7 +111,9 @@ function makeJob(payload) {
     steps: payload.steps, cfg: payload.cfg,
     sampler: payload.sampler, scheduler: payload.scheduler,
     family: payload.family, workflow: payload.workflow,
-    created_at: new Date().toISOString(),
+    // 与真实后端一致：任务接口返回 Unix 秒（desktop_runtime/_iso_to_epoch），
+    // 用于验证前端 parseDate 对两种格式的兼容。
+    created_at: Date.now() / 1000,
     queue_position: jobs.size + 1,
     error: null,
     image: null,
@@ -130,7 +141,8 @@ function completeJob(job, scenario) {
     favorite: false,
     trashed: false,
     image: job.image,
-    created_at: job.created_at,
+    // 历史表独立记录写入时刻，真实后端为 ISO 字符串
+    created_at: new Date().toISOString(),
   });
 }
 
@@ -310,10 +322,24 @@ export function installMock({ scenario = "success" } = {}) {
     if (u.pathname === "/api/v1/lora/search" && method === "GET") {
       const query = String(u.searchParams.get("q") || "").toLowerCase();
       const family = u.searchParams.get("family") || "illustrious";
+      const page = Math.max(1, Number(u.searchParams.get("page") || 1));
+      const pageSize = Math.max(1, Math.min(Number(u.searchParams.get("limit") || 20), 20));
       const requestedSources = u.searchParams.getAll("source");
       let items = FAKE_LORA_SEARCH.filter((item) => !requestedSources.length || requestedSources.includes(item.source));
       if (query.includes("verina") || query.includes("维里奈")) items = items.filter((item) => item.id.includes("verina"));
-      return await wait(650), json({ query, family, items, searched_terms: [query, query.includes("维里奈") ? "Verina" : query], errors: [] });
+      const total = items.length;
+      const start = (page - 1) * pageSize;
+      return await wait(650), json({
+        query,
+        family,
+        items: items.slice(start, start + pageSize),
+        page,
+        page_size: pageSize,
+        total,
+        has_more: start + pageSize < total,
+        searched_terms: [query, query.includes("维里奈") ? "Verina" : query],
+        errors: [],
+      });
     }
     if (u.pathname === "/api/v1/lora/bridge/probe" && method === "POST") {
       return await wait(380), json({ ok: true, mode: "local", message: "本机 LoRA 目录可写，安装通道已就绪" });
@@ -412,9 +438,10 @@ export function installMock({ scenario = "success" } = {}) {
 
     if (u.pathname === "/api/v1/categories") {
       seedHistory();
+      // 与真实后端一致：{name, count}（前端做字段归一化兼容）
       const counts = {};
       favorites.forEach((f) => { counts[f.category] = (counts[f.category] || 0) + 1; });
-      return json({ items: Object.entries(counts).map(([id, count]) => ({ id, label: id, count })) });
+      return json({ items: Object.entries(counts).map(([name, count]) => ({ name, count })) });
     }
     if (u.pathname === "/api/v1/favorites" && method === "GET") {
       seedHistory();
@@ -426,7 +453,8 @@ export function installMock({ scenario = "success" } = {}) {
     }
     if (u.pathname === "/api/v1/favorites" && method === "POST") {
       const body = JSON.parse(opts.body || "{}");
-      const fav = { id: "fav_" + String(++seq), note: body.note || "", category: body.category || "未分类", prompt: body.prompt || "", image: { url: svgImage(seq, "fav") }, created_at: new Date().toISOString() };
+      // 与真实后端一致：新建的提示词收藏没有图片（前端用占位徽记渲染）
+      const fav = { id: "fav_" + String(++seq), note: body.note || "", category: body.category || "未分类", prompt: body.prompt || "", created_at: new Date().toISOString() };
       favorites.unshift(fav);
       return json(fav, 201);
     }

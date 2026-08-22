@@ -19,10 +19,13 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 // 取消。壳层必须比前端预算更长，否则会在 5 秒时先断开 sidecar，错误地把
 // 正常进行中的搜索包装成 HTTP 502 Bad Gateway。
 const LORA_SEARCH_TIMEOUT: Duration = Duration::from_secs(55);
+const LORA_PREVIEW_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn request_timeout(sidecar_path: &str) -> Duration {
     if sidecar_path.starts_with("/api/v1/lora/search") {
         LORA_SEARCH_TIMEOUT
+    } else if sidecar_path.starts_with("/api/v1/lora/preview") {
+        LORA_PREVIEW_TIMEOUT
     } else {
         REQUEST_TIMEOUT
     }
@@ -240,6 +243,10 @@ mod tests {
         assert_eq!(
             request_timeout("/api/v1/settings"),
             Duration::from_secs(5)
+        );
+        assert_eq!(
+            request_timeout("/api/v1/lora/preview?token=abc"),
+            Duration::from_secs(30)
         );
     }
 
