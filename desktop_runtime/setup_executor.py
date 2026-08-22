@@ -22,6 +22,7 @@ import secrets
 import shutil
 import time
 import zipfile
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit
@@ -39,6 +40,11 @@ from .resource_seed import BridgeSourceError, seed_bridge_source
 MAX_REDIRECTS = 5
 _CHUNK = 256 * 1024
 _PROGRESS_THROTTLE = 0.5
+#: 大文件多连接下载阈值与分片数：HuggingFace CDN 支持 Range，多连接可
+#: 显著提升高时延链路的吞吐；小文件走单连接避免额外握手开销。
+_MULTICONN_THRESHOLD = 32 * 1024 * 1024
+_MULTICONN_SLICES = 4
+_SPEED_WINDOW = 6.0
 
 #: Job lifecycle states.
 JOB_PENDING = "pending"
@@ -200,6 +206,68 @@ class PythonRunner:
             raise SetupError(SetupErrorCode.PIP_FAILED, f"pip 安装失败: {detail}")
 
 
+class _SpeedTracker:
+    """聚合字节数与滑动窗口速率，按节流周期向 job 发进度事件。"""
+
+    def __init__(self, job: SetupJob, item_id: str, *, total: int | None, offset: int = 0) -> None:
+        self.job = job
+        self.id = item_id
+        self.total = total
+        self.done = offset
+        self._window: deque[tuple[float, int]] = deque(maxlen=64)
+
+    def add(self, count: int) -> None:
+        self.done += count
+        now = time.monotonic()
+        self._window.append((now, self.done))
+        while len(self._window) > 2 and now - self._window[0][0] > _SPEED_WINDOW:
+            self._window.popleft()
+
+    @property
+    def speed_bps(self) -> float:
+        if len(self._window) < 2:
+            return 0.0
+        (t0, b0), (t1, b1) = self._window[0], self._window[-1]
+        elapsed = t1 - t0
+        if elapsed < 0.2:
+            return 0.0
+        return max(0.0, (b1 - b0) / elapsed)
+
+    def emit(self, **extra: Any) -> None:
+        speed = self.speed_bps
+        eta: float | None = None
+        if self.total and speed > 1024:
+            eta = max(0.0, (self.total - self.done) / speed)
+        percent = round(self.done * 100.0 / self.total, 1) if self.total else None
+        payload: dict[str, Any] = {
+            "kind": "model",
+            "id": self.id,
+            "size": self.done,
+            "done": self.done,
+            "total": self.total,
+            "speed_bps": round(speed, 1),
+            "eta_s": round(eta, 1) if eta is not None else None,
+            "percent": percent,
+        }
+        payload.update(extra)
+        self.job.emit_throttled("item_progress", **payload)
+
+    def emit_final(self, **extra: Any) -> None:
+        """终态进度：绕过节流，确保 UI 收到 100% 收口。"""
+        payload: dict[str, Any] = {
+            "kind": "model",
+            "id": self.id,
+            "size": self.done,
+            "done": self.done,
+            "total": self.total,
+            "speed_bps": 0,
+            "eta_s": 0,
+            "percent": 100.0 if (self.total and self.done >= self.total) else None,
+        }
+        payload.update(extra)
+        self.job.emit("item_progress", **payload)
+
+
 class SetupExecutor:
     """Executes a plan against one ComfyUI root with cancel/rollback support."""
 
@@ -221,6 +289,8 @@ class SetupExecutor:
         self._session = session
         self._url_rewriter = url_rewriter  # test-only hook, never wired in prod
         self._job_counter = 0
+        #: 镜像优选主机列表（manager 维护），_ordered_sources 按此排序。
+        self.preferred_hosts: list[str] = []
 
     def _session_for(self) -> aiohttp.ClientSession:
         # Defer session creation: aiohttp 3.14 refuses to build a ClientSession
@@ -418,24 +488,46 @@ class SetupExecutor:
         target = safe_comfyui_path(job.root, model.dest)
         target.parent.mkdir(parents=True, exist_ok=True)
         part = target.with_name(target.name + ".part")
+        prog = part.with_name(part.name + ".prog")
         last_error: SetupError | None = None
-        for source in model.sources:
+        for source in self._ordered_sources(model):
             if source.host not in self.manifest.bridge.allowed_hosts:
                 continue
             url = await self._resolve_url(source.url)
             try:
                 await self._download_to_part(job, url, part, model)
-                await asyncio.to_thread(self._verify_part, part, model)
-                self._snapshot(job, target)
-                await asyncio.to_thread(os.replace, part, target)
-                return
             except SetupError as exc:
+                # 网络错误/取消：保留 .part/.prog 断点，重试或换源时续传。
                 last_error = exc
-                try:
-                    part.unlink(missing_ok=True)
-                except OSError:
-                    pass
+                if exc.code == SetupErrorCode.CANCELLED:
+                    raise
+                continue
+            try:
+                await asyncio.to_thread(self._verify_part, part, model)
+            except SetupError as exc:
+                # 校验失败说明已有数据不可信：清除断点后换源重下。
+                last_error = exc
+                for stale in (part, prog):
+                    try:
+                        stale.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                continue
+            self._snapshot(job, target)
+            await asyncio.to_thread(os.replace, part, target)
+            return
         raise last_error or SetupError(SetupErrorCode.DOWNLOAD_FAILED, f"模型 {model.name} 无可用来源")
+
+    def _ordered_sources(self, model: ModelSpec) -> list:
+        """按优选镜像排序来源：preferred_hosts 中的主机优先，其余保持清单顺序。"""
+        preferred = [str(h).strip().lower() for h in (self.preferred_hosts or []) if str(h or "").strip()]
+        if not preferred:
+            return list(model.sources)
+
+        def rank(source) -> tuple:
+            host = str(source.host or "").strip().lower()
+            return (preferred.index(host) if host in preferred else len(preferred),)
+        return sorted(model.sources, key=rank)
 
     async def _resolve_url(self, url: str) -> str:
         if self._url_rewriter is None:
@@ -446,21 +538,90 @@ class SetupExecutor:
         return result
 
     async def _download_to_part(self, job: SetupJob, url: str, part: Path, model: ModelSpec) -> None:
+        prog = part.with_name(part.name + ".prog")
+        saved_prog = self._load_prog(prog)
+
+        if saved_prog is not None:
+            # 上次多连接下载中断：按原分片计划继续。
+            self._probe_cancel_check(job)
+            final_url = await self._resolve_final_url(job, url)
+            await self._download_multiconn(job, final_url, part, prog, model, saved_prog)
+            return
+
+        # 单连接前缀是可信的（追加写）；据此探测总量与 Range 支持。
         resume_from = part.stat().st_size if part.exists() else 0
+        final_url, status, total = await self._probe_download(job, url, resume_from)
+        if status == 416:
+            # 前缀已是完整文件（服务器确认无剩余字节）。
+            if part.exists() and part.stat().st_size > 0:
+                return
+            raise SetupError(SetupErrorCode.DOWNLOAD_FAILED, "服务器拒绝续传 (416)")
+        if status == 200:
+            resume_from = 0
+        remaining = (total - resume_from) if total else None
+        if total and remaining is not None and remaining >= _MULTICONN_THRESHOLD and status == 206:
+            await self._download_multiconn(
+                job, final_url, part, prog, model,
+                {"total": total, "prefix": resume_from, "slices": None, "done": None},
+            )
+            return
+
+        tracker = _SpeedTracker(job, model.id, total=total, offset=resume_from)
+        resp_headers = {"Range": f"bytes={resume_from}-"} if resume_from else {}
+        try:
+            async with self._session_for().get(final_url, headers=resp_headers, allow_redirects=False, ssl=True) as resp:
+                if resp.status not in (200, 206):
+                    body = (await resp.read()).decode("utf-8", "replace")[:200]
+                    raise SetupError(SetupErrorCode.DOWNLOAD_FAILED, f"下载失败 HTTP {resp.status} {body.strip()}")
+                mode = "ab" if (resp.status == 206 and resume_from) else "wb"
+                with open(part, mode) as fh:
+                    async for chunk in resp.content.iter_chunked(_CHUNK):
+                        if job.cancel_requested.is_set():
+                            raise SetupError(SetupErrorCode.CANCELLED, "已取消")
+                        fh.write(chunk)
+                        tracker.add(len(chunk))
+                        tracker.emit()
+            tracker.emit_final()  # 终态：确保 UI 收到 100% 收口
+        except aiohttp.ClientError as exc:
+            raise SetupError(SetupErrorCode.NETWORK_UNREACHABLE, f"网络错误: {exc}") from exc
+
+    @staticmethod
+    def _probe_cancel_check(job: SetupJob) -> None:
+        if job.cancel_requested.is_set():
+            raise SetupError(SetupErrorCode.CANCELLED, "已取消")
+
+    async def _resolve_final_url(self, job: SetupJob, url: str) -> str:
+        """跟随重定向拿到最终下载地址（分片请求不再各自处理重定向）。"""
         current = url
         hops = 0
-        headers = {"Range": f"bytes={resume_from}-"} if resume_from else {}
-        resp = None
         while True:
-            if job.cancel_requested.is_set():
-                raise SetupError(SetupErrorCode.CANCELLED, "已取消")
+            self._probe_cancel_check(job)
             try:
-                resp = await self._session_for().get(
-                    current,
-                    headers=headers,
-                    allow_redirects=False,
-                    ssl=True,
-                )
+                async with self._session_for().get(
+                    current, headers={"Range": "bytes=0-0"}, allow_redirects=False, ssl=True
+                ) as resp:
+                    if resp.status in (301, 302, 303, 307, 308):
+                        location = resp.headers.get("Location")
+                        if not location:
+                            raise SetupError(SetupErrorCode.DOWNLOAD_FAILED, "重定向缺少 Location")
+                        hops += 1
+                        if hops > MAX_REDIRECTS:
+                            raise SetupError(SetupErrorCode.DOWNLOAD_FAILED, "重定向次数过多")
+                        current = self._validate_redirect(current, location)
+                        continue
+                    return current
+            except aiohttp.ClientError as exc:
+                raise SetupError(SetupErrorCode.NETWORK_UNREACHABLE, f"网络错误: {exc}") from exc
+
+    async def _probe_download(self, job: SetupJob, url: str, resume_from: int) -> tuple[str, int, int | None]:
+        """以最小流量探测：最终地址、响应码（200/206/416）与总大小。"""
+        current = url
+        hops = 0
+        while True:
+            self._probe_cancel_check(job)
+            headers = {"Range": f"bytes={resume_from}-"} if resume_from else {"Range": "bytes=0-0"}
+            try:
+                resp = await self._session_for().get(current, headers=headers, allow_redirects=False, ssl=True)
             except aiohttp.ClientError as exc:
                 raise SetupError(SetupErrorCode.NETWORK_UNREACHABLE, f"网络错误: {exc}") from exc
             if resp.status in (301, 302, 303, 307, 308):
@@ -473,35 +634,141 @@ class SetupExecutor:
                     raise SetupError(SetupErrorCode.DOWNLOAD_FAILED, "重定向次数过多")
                 current = self._validate_redirect(current, location)
                 continue
-            break
-        if resp.status == 416:  # range not satisfiable: part already complete
+            total: int | None = None
+            if resp.status in (200, 206):
+                tail = resp.headers.get("Content-Range", "").rpartition("/")[2]
+                if tail.isdigit():
+                    total = int(tail)
+                elif resp.status == 200:
+                    length = resp.headers.get("Content-Length", "")
+                    if length.isdigit():
+                        total = int(length) or None
+                elif resp.status == 206:
+                    # 续传确认但没有总长：按无总量单连接处理。
+                    total = None
             resp.release()
-            if part.exists() and part.stat().st_size > 0:
-                return
-            raise SetupError(SetupErrorCode.DOWNLOAD_FAILED, "服务器拒绝续传 (416)")
-        if resp.status == 206 and resume_from:
-            mode = "ab"
-        elif resp.status == 200:
-            mode = "wb"
-            resume_from = 0
-        else:
-            body = (await resp.read()).decode("utf-8", "replace")[:200] if resp.status >= 400 else ""
-            resp.release()
-            raise SetupError(SetupErrorCode.DOWNLOAD_FAILED, f"下载失败 HTTP {resp.status} {body.strip()}")
+            return current, resp.status, total
+
+    @staticmethod
+    def _load_prog(prog: Path) -> dict | None:
         try:
-            with open(part, mode) as fh:
-                async for chunk in resp.content.iter_chunked(_CHUNK):
-                    if job.cancel_requested.is_set():
-                        raise SetupError(SetupErrorCode.CANCELLED, "已取消")
-                    fh.write(chunk)
-                    job.emit_throttled(
-                        "item_progress",
-                        kind="model",
-                        id=model.id,
-                        size=part.stat().st_size if part.exists() else 0,
-                    )
-        finally:
-            resp.release()
+            saved = json.loads(prog.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(saved, dict):
+            return None
+        if not (isinstance(saved.get("total"), int) and saved["total"] > 0):
+            return None
+        if not (isinstance(saved.get("prefix"), int) and 0 <= saved["prefix"] < saved["total"]):
+            return None
+        slices = saved.get("slices")
+        done = saved.get("done")
+        if slices is not None:
+            if not (isinstance(slices, list) and isinstance(done, list) and len(slices) == len(done)):
+                return None
+        return saved
+
+    async def _download_multiconn(
+        self,
+        job: SetupJob,
+        url: str,
+        part: Path,
+        prog: Path,
+        model: ModelSpec,
+        plan: dict,
+    ) -> None:
+        total: int = plan["total"]
+        completed_prefix: int = plan["prefix"]
+        if plan.get("slices") is None:
+            remaining = total - completed_prefix
+            slice_size = (remaining + _MULTICONN_SLICES - 1) // _MULTICONN_SLICES
+            slices = [
+                (completed_prefix + i * slice_size, min(total - 1, completed_prefix + (i + 1) * slice_size - 1))
+                for i in range(_MULTICONN_SLICES)
+                if completed_prefix + i * slice_size < total
+            ]
+            slice_done = [0] * len(slices)
+        else:
+            slices = [(int(s[0]), int(s[1])) for s in plan["slices"]]
+            slice_done = [
+                max(0, min(int(d), s[1] - s[0] + 1)) for d, s in zip(plan["done"], slices)
+            ]
+
+        def _persist() -> None:
+            try:
+                prog.write_text(
+                    json.dumps(
+                        {"total": total, "prefix": completed_prefix, "slices": [list(s) for s in slices], "done": slice_done}
+                    ),
+                    encoding="utf-8",
+                )
+            except OSError:
+                pass
+
+        await asyncio.to_thread(self._preallocate, part, total, completed_prefix)
+        _persist()
+
+        tracker = _SpeedTracker(job, model.id, total=total, offset=completed_prefix + sum(slice_done))
+        lock = asyncio.Lock()
+        last_persist = time.monotonic()
+
+        async def fetch_slice(index: int) -> None:
+            nonlocal last_persist
+            start, end = slices[index]
+            pos = start + slice_done[index]
+            if pos > end:
+                return
+            req_headers = {"Range": f"bytes={pos}-{end}"}
+            try:
+                async with self._session_for().get(url, headers=req_headers, allow_redirects=False, ssl=True) as resp:
+                    if resp.status != 206:
+                        body = (await resp.read()).decode("utf-8", "replace")[:160]
+                        raise SetupError(
+                            SetupErrorCode.DOWNLOAD_FAILED,
+                            f"分片 {index} 下载失败 HTTP {resp.status} {body.strip()}",
+                        )
+                    with open(part, "r+b") as fh:
+                        fh.seek(pos)
+                        async for chunk in resp.content.iter_chunked(_CHUNK):
+                            if job.cancel_requested.is_set():
+                                raise SetupError(SetupErrorCode.CANCELLED, "已取消")
+                            fh.write(chunk)
+                            slice_done[index] += len(chunk)
+                            async with lock:
+                                tracker.add(len(chunk))
+                                tracker.emit()
+                                now = time.monotonic()
+                                if now - last_persist >= 3.0:
+                                    last_persist = now
+                                    _persist()
+            except aiohttp.ClientError as exc:
+                raise SetupError(SetupErrorCode.NETWORK_UNREACHABLE, f"分片 {index} 网络错误: {exc}") from exc
+
+        try:
+            await asyncio.gather(*(fetch_slice(i) for i in range(len(slices))))
+        except Exception:
+            _persist()  # 保留进度：下次重试从分片断点继续
+            raise
+        _persist()
+        tracker.emit_final()  # 终态：确保 UI 收到 100% 收口
+        try:
+            prog.unlink(missing_ok=True)
+        except OSError:
+            pass
+        if part.stat().st_size != total:
+            raise SetupError(SetupErrorCode.DOWNLOAD_FAILED, f"下载大小异常: {part.stat().st_size}/{total}")
+
+    @staticmethod
+    def _preallocate(part: Path, total: int, prefix: int) -> None:
+        if part.exists() and part.stat().st_size == total:
+            return
+        if not part.exists() or part.stat().st_size < prefix:
+            # 无可信前缀：建一个 total 大小的稀疏文件。
+            with open(part, "wb") as fh:
+                fh.truncate(total)
+            return
+        with open(part, "r+b") as fh:
+            fh.truncate(total)
 
     def _validate_redirect(self, base: str, location: str) -> str:
         next_url = urljoin(base, location)
@@ -584,16 +851,29 @@ class SetupExecutor:
                 current = self._validate_redirect(current, location)
                 continue
             break
+        total: int | None = None
+        if resp.status == 206:
+            tail = resp.headers.get("Content-Range", "").rpartition("/")[2]
+            if tail.isdigit():
+                total = int(tail)
+        elif resp.status == 200:
+            resume_from = 0
+            length = resp.headers.get("Content-Length", "")
+            if length.isdigit():
+                total = int(length) or None
         mode = "ab" if (resp.status == 206 and resume_from) else "wb"
         if resp.status not in (200, 206):
             resp.release()
             raise SetupError(SetupErrorCode.DOWNLOAD_FAILED, f"下载失败 HTTP {resp.status}")
+        tracker = _SpeedTracker(job, dest.stem, total=total, offset=resume_from)
         try:
             with open(part, mode) as fh:
                 async for chunk in resp.content.iter_chunked(_CHUNK):
                     if job.cancel_requested.is_set():
                         raise SetupError(SetupErrorCode.CANCELLED, "已取消")
                     fh.write(chunk)
+                    tracker.add(len(chunk))
+                    tracker.emit(kind="node", id=dest.stem)
         finally:
             resp.release()
         await asyncio.to_thread(os.replace, part, dest)
