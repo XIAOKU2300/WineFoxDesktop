@@ -80,7 +80,9 @@ DEFAULTS: dict[str, Any] = {
         "command_prefix": "jh",
         # 缺了它会因 _coerce 白名单被丢弃，「减少动画」勾选状态永远存不下来
         "reduced_motion": True,
-        # 自定义提示词注入：LLM 转译后确定性追加，不进 LLM 请求（省 token）
+        # 自定义提示词注入：开启后注入到每次 LLM 请求的 system 消息最前面
+        #（AI 第一个读到的内容），会随请求消耗少量 token
+        "prompt_injection_enabled": False,
         "prompt_injection": "",
     },
     # 认证引用集合（可被多个服务复用），值只能是引用名。

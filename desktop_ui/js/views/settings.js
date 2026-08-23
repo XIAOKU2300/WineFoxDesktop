@@ -464,6 +464,22 @@ export class SettingsView {
               { key: "ai_api_key", label: "提示词 AI API Key", desc: "仅用于提示词优化和文本任务" },
             ])),
           ]),
+          el("div", { class: "divider" }),
+          el("div", { class: "field" }, [
+            el("label", { class: "check" }, [
+              el("input", { type: "checkbox", id: "s-prompt-injection-on", checked: !!(this.settings?.ui || {}).prompt_injection_enabled }),
+              el("span", { class: "box" }, [ic("check")]),
+              el("span", {}, esc("启用提示词注入（头部注入所有 AI 请求）")),
+            ]),
+            el("label", { for: "s-prompt-injection" }, "注入内容"),
+            el("textarea", {
+              id: "s-prompt-injection",
+              rows: 4,
+              placeholder: "任意指令文本。将作为最高优先级指令注入到每次 AI 请求的开头，AI 第一个读到的就是它",
+              spellcheck: "false",
+            }, esc((this.settings?.ui || {}).prompt_injection || "")),
+            el("span", { class: "hint" }, "开启后，这段文字会拼到每一次 AI 请求（提示词转译、参考图理解、LoRA 匹配/搜索）system 提示词的最前面，是 AI 第一个读到的内容；会随请求消耗少量 token。关闭或留空即停用。「模型测试」诊断请求不注入。"),
+          ]),
         ]),
       ]),
       el("div", { class: "section-card" }, [
@@ -584,16 +600,6 @@ export class SettingsView {
             el("input", { type: "checkbox", id: "s-reduced", checked: u.reduced_motion ?? true }),
             el("span", { class: "box" }, [ic("check")]),
             el("span", {}, esc("减少动画 · 性能优先（跟随系统设置；低配设备自动启用）")),
-          ]),
-          el("div", { class: "field" }, [
-            el("label", { for: "s-prompt-injection" }, "自定义提示词注入"),
-            el("textarea", {
-              id: "s-prompt-injection",
-              rows: 3,
-              placeholder: "例如：masterpiece, best quality, detailed background, soft lighting",
-              spellcheck: "false",
-            }, esc(u.prompt_injection || "")),
-            el("span", { class: "hint" }, "逗号分隔的英文 tags，在 AI 转译完成后自动追加到最终提示词（自动去重，不额外消耗 AI token）。留空关闭。"),
           ]),
         ]),
       ]),
@@ -912,6 +918,11 @@ export class SettingsView {
         model: val("s-vision-model")?.trim() || "",
         timeout_seconds: Math.max(5, Math.min(parseInt(val("s-vision-timeout"), 10) || 90, 180)),
       };
+      // 提示词注入属于提示词 AI 卡片，随本分区一起保存（ui 段为部分合并，互不覆盖）
+      patch.ui = {
+        prompt_injection: val("s-prompt-injection")?.trim() || "",
+        prompt_injection_enabled: checked("s-prompt-injection-on"),
+      };
     } else if (section === "defaults") {
       patch.defaults = {
         family: val("sd-family"),
@@ -930,7 +941,6 @@ export class SettingsView {
     } else if (section === "ui") {
       patch.ui = {
         reduced_motion: checked("s-reduced"),
-        prompt_injection: val("s-prompt-injection")?.trim() || "",
       };
       // 立即生效，不必等后端持久化完成
       try {
@@ -1101,6 +1111,9 @@ function withDeadline(run, ms, message) {
 
 function disabledButton(button, disabled, label) {
   if (!button.dataset.wfxIcon && button.querySelector("svg")) button.dataset.wfxIcon = "refresh";
+  // 首次禁用时记住原始文案；恢复时未传 label 则还原，避免把 undefined 渲染到按钮上。
+  if (disabled && button.dataset.wfxLabel == null) button.dataset.wfxLabel = button.textContent.trim();
+  const finalLabel = label ?? (disabled ? "" : button.dataset.wfxLabel) ?? "";
   button.disabled = disabled;
-  button.replaceChildren(...(!disabled && button.dataset.wfxIcon ? [ic(button.dataset.wfxIcon), label] : [label]));
+  button.replaceChildren(...(!disabled && button.dataset.wfxIcon ? [ic(button.dataset.wfxIcon), finalLabel] : [finalLabel]));
 }

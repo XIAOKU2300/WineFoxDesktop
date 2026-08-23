@@ -70,7 +70,7 @@ function buildRail() {
     el("div", { class: "rail-foot" }, [
       el("span", { class: "rail-signature" }, [el("img", { src: "assets/app-logo.png", alt: "" })]),
       el("span", { class: "hint" }, "WineFox Desktop"),
-      el("span", { class: "hint" }, "v8.6.13 · 本地创作空间"),
+      el("span", { class: "hint" }, "v8.6.14 · 本地创作空间"),
     ]),
   );
 }

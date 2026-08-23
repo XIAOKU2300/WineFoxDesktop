@@ -1270,16 +1270,8 @@ class DesktopEngine:
             llm_port=llm_client,
         )
         result = await service.process(str(payload.get("prompt") or ""))
-        # 自定义提示词注入：LLM 转译完成后确定性追加（去重），
-        # 不进 LLM 请求 —— 每次生成零额外 token。
-        injection = str((settings.get("ui") or {}).get("prompt_injection") or "").strip()
-        if injection:
-            tags = [tag.strip() for tag in re.split(r"[,，\n]+", injection) if tag.strip()]
-            if tags:
-                merged = merge_prompt_tags(result.final_prompt, tags)
-                if merged != result.final_prompt:
-                    result.final_prompt = merged
-                    result.meta["prompt_injection"] = ", ".join(tags)
+        # 提示词注入已上收到 llm_client.complete() 咽喉点（LLM 请求头部注入），
+        # 出图提示词完全按程序默认流程生成，这里不做任何注入后处理。
         return result
 
     async def _reverse_prompt_with_vision(

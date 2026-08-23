@@ -366,8 +366,6 @@ export class GenerateView {
         ]),
         this.progressCard(),
       ];
-      const dbg = this.promptDebugCard();
-      if (dbg) content.push(dbg);
     } else if (result) {
       const img = el("img", { class: "canvas-img", src: result.url, alt: "生成结果预览" });
       img.addEventListener("click", () => {
@@ -401,7 +399,11 @@ export class GenerateView {
     }
     return el("section", { class: "gen-panel gen-center", "aria-label": "画布" }, [
       el("div", { class: "canvas-wrap" }, [
-        el("div", { class: "canvas-area" + (s.mode === "img2img" ? "" : ""), id: "canvas-area", tabindex: "0", role: "img" }, content),
+        // 画布尺寸只看 canvas-scroll（容器查询），调试卡片/LoRA 面板/提交条
+        // 都在容器外占行 —— 下方内容再多也只是压缩画布，按钮不会被挤出画面。
+        el("div", { class: "canvas-scroll" }, [
+          el("div", { class: "canvas-area", id: "canvas-area", tabindex: "0", role: "img" }, content),
+        ]),
         this.promptDebugCard(),
         this.autoLoraPanel(),
         el("div", { class: "gen-actions gen-submit-bar" }, [
@@ -1030,9 +1032,10 @@ export class GenerateView {
         if (subline) subline.textContent = running ? "墨色正在画布上汇聚" : "前方还有任务，稍候片刻";
       }
       // 调试模式：prompt 处理完成后（meta.prompt_debug 出现）即时插入详情卡。
+      // 插到 canvas-scroll 之后（与渲染时的结构一致），不能进画布尺寸容器。
       if (job.meta?.prompt_debug && !area.querySelector("#g-prompt-debug")) {
         const dbg = this.promptDebugCard();
-        if (dbg) (area.querySelector(".canvas-area") || area).after(dbg);
+        if (dbg) (area.querySelector(".canvas-scroll") || area).after(dbg);
       }
     }
     // 队列计数与左栏/提交栏实时状态

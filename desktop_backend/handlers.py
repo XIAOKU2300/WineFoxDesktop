@@ -124,7 +124,9 @@ async def _resolve_ai_test_client(request: web.Request):
     body 里可带 base_url / api_key / timeout_seconds / model 用于保存前验证，
     临时 key 只在本次请求内使用，绝不持久化或写日志。
     """
-    from ..desktop_runtime.llm_client import OpenAICompatibleLLMClient
+    # 绝对导入：后端以 python -m desktop_backend 启动时 desktop_backend 是顶层包，
+    # 相对导入（..desktop_runtime）会越出顶层包直接 ImportError -> 500。
+    from desktop_runtime.llm_client import OpenAICompatibleLLMClient
 
     config = _ctx(request).get("config")
     if config is None:
