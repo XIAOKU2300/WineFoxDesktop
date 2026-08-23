@@ -14,6 +14,7 @@ from winefox_core.storage import Database
 
 from .config_adapter import DesktopConfigAdapter
 from .engine import DesktopEngine
+from .llm_client import resolve_system_injection, set_system_injection_provider
 from .setup_manager import SetupManager
 from .upload_store import FileUploadStore
 
@@ -38,6 +39,9 @@ class DesktopRuntime:
         self.paths = PathManager(root=data_root, install_dir=resource_root())
         self.paths.ensure_dirs()
         self.config = DesktopConfigAdapter(self.paths.config_dir, SecretStore())
+        # 头部注入：所有 LLM 请求在 complete() 咽喉点实时读取设置，
+        # 用户改开关/内容后下一次请求立即生效（客户端缓存不影响）。
+        set_system_injection_provider(lambda: resolve_system_injection(self.config.snapshot()))
         self.uploads = FileUploadStore(self.paths.upload_dir)
         self.database = Database(self.paths.data_dir / "winefox.db")
         self.database.initialize()

@@ -1,12 +1,12 @@
 {
-  "version": "8.6.13",
-  "notes": "提示词转译重做与LoRA全链路修复：画面跟随用户描述；质量基底合并；AI接入模型列表/测试；装机与设置多项修复",
-  "pub_date": "2026-08-22T15:33:46.556584+00:00",
+  "version": "8.6.14",
+  "notes": "提示词注入重做为 LLM 头部注入；修复 AI 配置按钮 500/undefined；生成页排版与设置页动效统一",
+  "pub_date": "2026-08-22T17:02:50.904122+00:00",
   "platforms": {
     "windows-x86_64": {
-      "url": "https://github.com/XIAOKU2300/WineFoxDesktop/releases/download/v8.6.13/WineFox-Setup-8.6.13-x64.exe",
-      "signature": "7QmxiKNacUBG292tc+wEagqwNp2pS9YWkAOwMqMbPcjizl4BgTLojZ3FZR3mS3IecP4EVceO49zCrFvkrIXcAg==",
-      "size": 22905924
+      "url": "https://github.com/XIAOKU2300/WineFoxDesktop/releases/download/v8.6.14/WineFox-Setup-8.6.14-x64.exe",
+      "signature": "2y85o4BPWVNuARtpt8GQnh3gNJkuFTQrpnoKc6YdxJeBZPMJpxuEzSXGCf5Y/y78qpVMtJeT3XwBeG6lhpNkCg==",
+      "size": 22903924
     }
   }
 }

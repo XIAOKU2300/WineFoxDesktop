@@ -236,17 +236,22 @@
 @keyframes loraDrawerOpen { from { opacity: 0; transform: translateY(-4px); } }
 
 /* ================= 画布（生成页中部） =================
- * 画布保持 832:1216 比例并随窗口同步放大（高度优先填满中栏）；
- * 窗口变大时画布与图片一起变大，图片占满画布。
+ * 画布保持 832:1216 比例并随窗口同步放大；尺寸计算容器（canvas-scroll）
+ * 只包含画布本身 —— 调试卡片 / LoRA 面板 / 提交条都在容器外各自占行，
+ * 无论下面出现多少行内容，「开始生成」按钮永远完整可见、画布自动收缩。
  */
 .canvas-wrap {
   position: relative; flex: 1; min-height: 0;
   display: flex; flex-direction: column;
+}
+.canvas-scroll {
+  flex: 1; min-height: 0;
+  display: flex;
   container-type: size;
 }
 .canvas-area {
   position: relative; flex: none;
-  width: min(100%, calc((100cqh - 40px) * 2 / 3));
+  width: min(100%, calc(100cqh * 2 / 3));
   aspect-ratio: 832 / 1216;
   margin: auto;
   display: flex; align-items: center; justify-content: center;
@@ -309,11 +314,11 @@
 /* 进度覆盖层 */
 /* 提示词处理详情（调试模式） */
 .gen-debug {
-  margin-top: var(--sp-3); padding: var(--sp-3) var(--sp-4);
+  flex: none; margin: var(--sp-2) var(--sp-3) 0; padding: var(--sp-3) var(--sp-4);
   background: var(--surface-2); border: 1px dashed var(--border-strong);
   border-radius: var(--r-md); font-size: var(--fs-sm);
   display: flex; flex-direction: column; gap: var(--sp-2);
-  max-height: 240px; overflow-y: auto;
+  max-height: min(240px, 32%); overflow-y: auto;
 }
 .gen-debug-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); }
 .gen-debug-row { display: grid; grid-template-columns: 150px 1fr; gap: var(--sp-2); align-items: baseline; }

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 from urllib.parse import urlparse
 
 import aiohttp
@@ -20,6 +20,49 @@ class ResolvedAIProvider:
     timeout_seconds: float
     secret_name: str
     source: str
+
+
+def resolve_system_injection(settings: Mapping[str, Any]) -> str:
+    """从设置解析头部注入文本：开关关闭或内容为空时返回空串（= 不注入）。"""
+    ui = settings.get("ui")
+    ui = ui if isinstance(ui, Mapping) else {}
+    if not ui.get("prompt_injection_enabled"):
+        return ""
+    return str(ui.get("prompt_injection") or "").strip()
+
+
+# 全局头部注入来源：每次 LLM 请求时实时读取（而非构造客户端时快照），
+# 这样 LoRA 匹配/搜索等缓存客户端的场景下，用户改设置也能立即生效。
+_system_injection_provider: Callable[[], str] | None = None
+
+
+def set_system_injection_provider(provider: Callable[[], str] | None) -> None:
+    """注册/清除全局注入来源。组合根（DesktopRuntime）启动时设置一次。"""
+    global _system_injection_provider
+    _system_injection_provider = provider
+
+
+def _apply_system_injection(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """把注入文本放到消息列表头部，保证它是 AI 第一个读到的内容。
+
+    已有 system 消息 -> 拼在其内容最前面；没有 -> 在头部插入一条 system 消息。
+    读取来源失败或文本为空时原样返回，绝不影响正常请求。
+    """
+    provider = _system_injection_provider
+    if provider is None:
+        return messages
+    try:
+        injection = str(provider() or "").strip()
+    except Exception:  # noqa: BLE001 - 注入是增强，不能拖垮请求
+        return messages
+    if not injection:
+        return messages
+    result = [dict(message) for message in messages]
+    if result and isinstance(result[0].get("content"), str) and result[0].get("role") == "system":
+        result[0]["content"] = f"{injection}\n\n{result[0]['content']}"
+    else:
+        result.insert(0, {"role": "system", "content": injection})
+    return result
 
 
 def resolve_provider(settings: Mapping[str, Any], purpose: str = "text") -> ResolvedAIProvider:
@@ -89,10 +132,15 @@ class OpenAICompatibleLLMClient:
         model: str,
         max_tokens: int = 450,
         temperature: float = 0.1,
+        inject_system: bool = True,
     ) -> dict[str, Any]:
         model_name = str(model or "").strip()
         if not model_name:
             raise ValueError("未配置 AI 模型")
+        # 头部注入：所有内容生成类请求统一在 complete() 咽喉点注入，
+        # 用户自定义文本成为 AI 第一个读到的指令；诊断类调用传 inject_system=False 绕过。
+        if inject_system:
+            messages = _apply_system_injection(messages)
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -151,12 +199,16 @@ class OpenAICompatibleLLMClient:
         return sorted(models)
 
     async def test_completion(self, model: str) -> str:
-        """最小 chat 请求验证连通性与模型可用性，返回模型回复文本。"""
+        """最小 chat 请求验证连通性与模型可用性，返回模型回复文本。
+
+        诊断用途：绕过头部注入，保持 "Reply with exactly: OK" 语义纯净。
+        """
         data = await self.complete(
             [{"role": "user", "content": "Reply with exactly: OK"}],
             model=model,
             max_tokens=128,
             temperature=0.0,
+            inject_system=False,
         )
         choices = data.get("choices") if isinstance(data, dict) else None
         message = choices[0].get("message") if isinstance(choices, list) and choices else None
