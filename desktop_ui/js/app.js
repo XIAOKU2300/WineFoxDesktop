@@ -70,7 +70,7 @@ function buildRail() {
     el("div", { class: "rail-foot" }, [
       el("span", { class: "rail-signature" }, [el("img", { src: "assets/app-logo.png", alt: "" })]),
       el("span", { class: "hint" }, "WineFox Desktop"),
-      el("span", { class: "hint" }, "v8.6.14 · 本地创作空间"),
+      el("span", { class: "hint" }, "v8.6.18 · 本地创作空间"),
     ]),
   );
 }
@@ -313,7 +313,7 @@ function bindTheme() {
   $("#theme-toggle")?.addEventListener("click", toggle);
   document.addEventListener("keydown", (event) => {
     const tag = document.activeElement?.tagName;
-    if (event.key.toLowerCase() === "t" && !event.ctrlKey && !event.metaKey && !event.altKey && tag !== "INPUT" && tag !== "TEXTAREA" && tag !== "SELECT") toggle();
+    if (event.key.toLowerCase() === "t" && !event.repeat && !event.ctrlKey && !event.metaKey && !event.altKey && !document.activeElement?.isContentEditable && tag !== "INPUT" && tag !== "TEXTAREA" && tag !== "SELECT") toggle();
   });
 }
 

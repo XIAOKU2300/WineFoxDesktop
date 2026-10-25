@@ -113,7 +113,7 @@ export const api = {
   loraLibraryQuarantine: (id, reason, options = {}) => request(`/lora/library/${encodeURIComponent(id)}/quarantine`, { ...options, method: "POST", body: JSON.stringify({ reason }) }),
   loraLibraryRestore: (id, options = {}) => request(`/lora/library/${encodeURIComponent(id)}/restore`, { ...options, method: "POST" }),
   loraLibraryMatchPreview: (prompt, family, limit, options = {}) => request("/lora/library/match-preview", { ...options, method: "POST", body: JSON.stringify({ prompt, family, limit }) }),
-  loraMatchPreview: ({ prompt, family, limit = 10 } = {}) => request("/lora/library/match-preview", { method: "POST", body: JSON.stringify({ prompt, family, limit }) }),
+  loraMatchPreview: ({ prompt, family, limit = 10 } = {}, options = {}) => request("/lora/library/match-preview", { ...options, method: "POST", body: JSON.stringify({ prompt, family, limit }) }),
   loraScanLocal: (options = {}) => request("/lora/library/scan-local", { ...options, method: "POST", body: JSON.stringify({}) }),
   loraProfilesImportJson: (options = {}) => request("/lora/profiles/import-json", { ...options, method: "POST", body: JSON.stringify({}) }),
   loraProfilesExportJson: (options = {}) => request("/lora/profiles/export-json", options),
@@ -171,20 +171,17 @@ export class JobPoller {
     this.onUpdate = onUpdate;
     this.onDone = onDone;
     this.onError = onError;
-    this.timer = null;
-    this.backoff = 1;
+    this.timers = new Map();
+    this.chains = new Map();
     this.active = new Set();
   }
 
-  _schedule(fn, ms) {
-    this.timer = setTimeout(() => { this.timer = null; fn(); }, ms);
-  }
-
   watch(jobId) {
+    if (this.active.has(jobId)) return;
     this.active.add(jobId);
-    // 不能依赖 this.timer 判断：取消任务后残留的退避定时器会让新任务
-    // 永远等不到轮询链。每个任务独立起链，_poll 内部有终态自清理。
-    this._poll(jobId, 200);
+    const chain = { backoff: 1 };
+    this.chains.set(jobId, chain);
+    this._poll(jobId, chain);
   }
 
   _intervalFor(status) {
@@ -193,35 +190,46 @@ export class JobPoller {
     return 1000;
   }
 
-  async _poll(jobId) {
-    if (!this.active.has(jobId)) return;
+  async _poll(jobId, chain) {
+    const current = () => this.active.has(jobId) && this.chains.get(jobId) === chain;
+    if (!current()) return;
     let delay = this._intervalFor("queued");
     try {
       const job = await api.job(jobId);
-      this.backoff = 1;
+      if (!current()) return;
+      chain.backoff = 1;
       delay = this._intervalFor(job.status);
       this.onUpdate?.(job);
       if (["completed", "failed", "cancelled", "detached"].includes(job.status)) {
         // delete 返回 false 说明另一条链已处理过终态，避免重复 onDone
-        if (this.active.delete(jobId)) this.onDone?.(job);
-        if (!this.active.size) return;
+        this.stop(jobId);
+        this.onDone?.(job);
+        return;
       }
     } catch (e) {
-      delay = Math.min(this.backoff * 1000, 10000);
-      this.backoff = Math.min(this.backoff * 2, 10);
+      if (!current()) return;
+      delay = Math.min(chain.backoff * 1000, 10000);
+      chain.backoff = Math.min(chain.backoff * 2, 10);
       this.onError?.(e, jobId);
       if (this.active.size === 0) return;
     }
-    if (this.active.has(jobId)) this._schedule(() => this._poll(jobId), delay);
+    if (current()) this.timers.set(jobId, setTimeout(() => {
+      this.timers.delete(jobId);
+      this._poll(jobId, chain);
+    }, delay));
   }
 
   stop(jobId) {
     this.active.delete(jobId);
+    this.chains.delete(jobId);
+    clearTimeout(this.timers.get(jobId));
+    this.timers.delete(jobId);
   }
 
   dispose() {
     this.active.clear();
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = null;
+    this.chains.clear();
+    for (const timer of this.timers.values()) clearTimeout(timer);
+    this.timers.clear();
   }
 }

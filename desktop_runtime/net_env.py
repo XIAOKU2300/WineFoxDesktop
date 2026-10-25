@@ -111,6 +111,10 @@ def effective_proxy(explicit: str = "") -> tuple[str, str]:
     """
     value = normalize_proxy_url(explicit)
     if value:
+        if urlparse(value).scheme not in {"http", "https"}:
+            # Keep invalid explicit settings visible to the client validator;
+            # silently switching a SOCKS setting to direct hides the cause.
+            return value, "explicit"
         probed_at, reachable = _proxy_probe_cache.get(value, (0.0, True))
         never_probed = probed_at <= 0
         stale_beyond_trust = probed_at > 0 and time.monotonic() - probed_at > _PROXY_PROBE_HARD_STALE
@@ -118,14 +122,28 @@ def effective_proxy(explicit: str = "") -> tuple[str, str]:
             return value, "explicit"
         # 显式代理近期被探测为不可达：不要让一次失效配置拖垮全部搜索/下载，
         # 自动回退系统代理；没有系统代理则直连（TUN 环境仍可用）。
-        detected = system_proxy()
-        if detected and detected != value:
-            return detected, "system-fallback"
-        return "", ""
-    detected = system_proxy()
-    if detected:
-        return detected, "system"
+    for detected in dict.fromkeys((system_proxy(), _proxy_from_windows_registry())):
+        if not detected or detected == value:
+            continue
+        at, reachable = _proxy_probe_cache.get(detected, (0.0, True))
+        if not reachable and at > 0 and time.monotonic() - at <= _PROXY_PROBE_HARD_STALE:
+            continue
+        return detected, "system-fallback" if value else "system"
     return "", ""
+
+
+def proxy_display(proxy: str) -> str:
+    """Public diagnostics never contain proxy login credentials or query data."""
+    if not proxy:
+        return ""
+    try:
+        parsed = urlparse(normalize_proxy_url(proxy))
+        host = parsed.hostname or ""
+        host = f"[{host}]" if ":" in host else host
+        port = f":{parsed.port}" if parsed.port else ""
+        return f"{parsed.scheme}://{host}{port}"
+    except ValueError:
+        return "[invalid proxy]"
 
 
 async def probe_proxy_reachable(proxy: str, *, timeout: float = 1.5) -> bool:
@@ -136,8 +154,8 @@ async def probe_proxy_reachable(proxy: str, *, timeout: float = 1.5) -> bool:
     parsed = urlparse(value)
     if parsed.scheme not in {"http", "https"}:
         return False
-    port = parsed.port or (443 if parsed.scheme == "https" else 80)
     try:
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection(parsed.hostname, port), timeout=timeout
         )
@@ -160,14 +178,16 @@ async def ensure_probed(explicit: str = "") -> None:
     搜索/下载发起前调用一次；TTL 内重复调用是空操作。探测失败会记录，
     使后续 ``effective_proxy`` 自动回退系统代理而不是继续撞死端口。
     """
-    value = normalize_proxy_url(explicit)
-    if not value:
-        return
-    probed_at, _reachable = _proxy_probe_cache.get(value, (0.0, True))
-    if time.monotonic() - probed_at <= _PROXY_PROBE_TTL:
-        return
-    reachable = await probe_proxy_reachable(value)
-    _proxy_probe_cache[value] = (time.monotonic(), reachable)
+    candidates = dict.fromkeys((normalize_proxy_url(explicit), system_proxy(), _proxy_from_windows_registry()))
+    for value in candidates:
+        if not value:
+            continue
+        probed_at, reachable = _proxy_probe_cache.get(value, (0.0, True))
+        if probed_at <= 0 or time.monotonic() - probed_at > _PROXY_PROBE_TTL:
+            reachable = await probe_proxy_reachable(value)
+            _proxy_probe_cache[value] = (time.monotonic(), reachable)
+        if reachable:
+            return
 
 
 def reset_cache() -> None:

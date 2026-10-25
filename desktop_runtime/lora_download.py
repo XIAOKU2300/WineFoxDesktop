@@ -34,12 +34,13 @@ from civitai_api import (
     CivitaiClient,
     CivitaiRedClient,
     HuggingFaceClient,
-    LoraProfileStore,
     safe_filename,
 )
 from desktop_backend.errors import AppError
 from winefox_core.comfyui_transport import ComfyUITransport
 from winefox_core.lora_service import normalize_lora_key
+from winefox_core.lora_service import LoraProfile
+from winefox_core.lora_binding import lora_path_key
 from winefox_core.storage import Database, LoraAssetStore, LoraDownloadJobStore
 from winefox_core.storage import LoraProfileStore as SqlLoraProfileStore
 from winefox_core.storage_models import DOWNLOAD_TERMINAL_STATES, LoraDownloadState
@@ -181,6 +182,7 @@ def _safe_error(value: Any) -> str:
     text = _translate_network_error(text)
     text = re.sub(r"(?i)(token=)[^&\s]+", r"\1[REDACTED]", text)
     text = re.sub(r"(?i)(authorization|cookie)(\s*[:=]\s*)[^\s,;]+", r"\1\2[REDACTED]", text)
+    text = re.sub(r"(?i)https?://[^\s,;，。]+", lambda match: net_env.proxy_display(match.group()), text)
     text = re.sub(r"(?i)(?<![a-z0-9])[a-z]:[\\/][^\r\n,;]+|\\\\[^\r\n,;]+", "[LOCAL_PATH]", text)
     return _bounded_text(text, 600)
 
@@ -344,6 +346,7 @@ class LoraDownloadService:
             downloader="multithread",
             split=max(1, min(int(settings.get("split") or 4), 8)),
             network_max_retries=2,
+            proxy_circuit_breaker=False,
             # 重定向校验需要知道是否配置了代理：代理模式下 DNS 由代理解析，
             # 本地 getaddrinfo 在 DNS 污染环境下会误杀合法的 CDN 重定向。
             download_redirect_validator=lambda url, _proxy=proxy: _require_public_redirect_url(
@@ -800,7 +803,11 @@ class LoraDownloadService:
             self._set_progress(result_id, done, total)
 
         try:
-            await client.download_file(download_url, tmp, progress_cb=progress)
+            try:
+                async with asyncio.timeout(max(60, min(int(settings.get("download_timeout") or 7200), 86400))):
+                    await client.download_file(download_url, tmp, progress_cb=progress)
+            except TimeoutError:
+                raise RuntimeError("下载超过设置的总时限，已保留可恢复分片，请重试或调整下载时限") from None
         except BaseException:
             try:
                 tmp.unlink(missing_ok=True)
@@ -872,22 +879,26 @@ class LoraDownloadService:
         """
         settings = self._settings()
         explicit = str(settings.get("proxy") or "").strip()
+        # A user-requested diagnosis must test the current listener, not a
+        # cached failure from before their proxy application was restarted.
+        net_env.reset_cache()
         try:
             await net_env.ensure_probed(explicit)
         except Exception:
             pass
         proxy, proxy_source = net_env.effective_proxy(explicit)
         proxy_report: dict[str, Any] = {
-            "value": proxy,
+            "value": net_env.proxy_display(proxy),
             "source": proxy_source,
             "explicit": bool(explicit),
-            "explicit_value": net_env.normalize_proxy_url(explicit),
+            "explicit_value": net_env.proxy_display(explicit),
             "scheme": urlparse(proxy).scheme if proxy else "",
             "reachable": None,
             "error": "",
         }
         guidance: list[str] = []
         explicit_normalized = net_env.normalize_proxy_url(explicit)
+        invalid_protocol = bool(proxy and urlparse(proxy).scheme not in {"http", "https"})
         if explicit_normalized and urlparse(explicit_normalized).scheme not in {"http", "https"}:
             guidance.append(
                 f"当前代理协议 {urlparse(explicit_normalized).scheme}:// 不受支持，仅支持 HTTP(S) 代理；"
@@ -895,8 +906,8 @@ class LoraDownloadService:
             )
         if explicit and proxy_source != "explicit":
             proxy_report["error"] = (
-                f"配置的代理 {net_env.normalize_proxy_url(explicit)} 当前不可达"
-                + (f"，已自动改用 {proxy}。" if proxy else "，已自动改为直连。")
+                f"配置的代理 {net_env.proxy_display(explicit)} 当前不可达"
+                + (f"，已自动改用 {net_env.proxy_display(proxy)}。" if proxy else "，已自动改为直连。")
             )
             guidance.append(
                 "设置中的代理不可达：请检查该代理是否开机/在线、局域网代理需开启 Allow LAN；"
@@ -925,12 +936,16 @@ class LoraDownloadService:
 
         api_report: dict[str, Any] = {"ok": False, "error": ""}
         try:
+            if invalid_protocol:
+                proxy_report.update(value="", reachable=False, error="代理协议不受支持，请改用 HTTP/Mixed 端口")
+                raise RuntimeError(proxy_report["error"])
             probe_client = self.client_factory(
                 api_token="",
                 cookie="",
                 proxy=proxy,
                 timeout=min(20, max(10, int(settings.get("request_timeout") or 20))),
                 downloader="multithread",
+                proxy_circuit_breaker=False,
             )
             await probe_client._get_json(f"{probe_client.api_base}/models?limit=1")
             api_report["ok"] = True
@@ -951,12 +966,15 @@ class LoraDownloadService:
         if token:
             token_report["configured"] = True
             try:
+                if invalid_protocol:
+                    raise RuntimeError("代理协议不受支持，无法验证带凭据请求")
                 token_client = self.client_factory(
                     api_token=token,
                     cookie="",
                     proxy=proxy,
                     timeout=min(20, max(10, int(settings.get("request_timeout") or 20))),
                     downloader="multithread",
+                    proxy_circuit_breaker=False,
                 )
                 await token_client._get_json(f"{token_client.api_base}/models?limit=1")
                 token_report["ok"] = True
@@ -1143,34 +1161,14 @@ class LoraDownloadService:
     # -- 档案 / 资产 --------------------------------------------------------
 
     async def _write_profile(self, summary: dict[str, Any], filename: str, family: str, alias: str) -> dict[str, Any]:
-        summary = dict(summary)
-        summary["file_name"] = safe_filename(filename)
-        summary["search_query"] = _bounded_text(summary.get("search_query"), 120)
-        # 用户没手填中文别称时，把搜索用的中文关键词自动存为别名——
-        # 否则装完后同一个中文词在已安装列表搜不到，发现页种子词也推导不出
-        alias_text = str(alias or "").strip()
-        if not alias_text:
-            query_text = str(summary.get("search_query") or "")
-            cjk = re.search(r"[㐀-鿿぀-ヿ][㐀-鿿぀-ヿ·\s\-']{0,30}", query_text)
-            if cjk:
-                alias_text = cjk.group(0).strip(" -'·")
-        # 仅用临时文件承载档案计算（load 为 {}），正常写入路径只有 SQLite。
-        scratch_dir = self.data_root / ".tmp"
-        scratch = scratch_dir / f"lora_profile_{uuid.uuid4().hex}.json"
-        try:
-            scratch_dir.mkdir(parents=True, exist_ok=True)
-            store = LoraProfileStore(scratch)
-            profile = await asyncio.to_thread(store.upsert_from_civitai, summary, alias_text, 0.8, 0.8)
-        finally:
-            try:
-                scratch.unlink(missing_ok=True)
-            except OSError:
-                pass
+        from .lora_import import provider_lora_profile
+        profile = provider_lora_profile(dict(summary), safe_filename(filename), family, alias)
         profile = self._save_sqlite_profile(family, profile)
+        normalized = LoraProfile.from_dict("", profile, family)
         return {
             "character": _bounded_text(profile.get("character"), 100),
             "aliases": [_bounded_text(item, 100) for item in (profile.get("aliases") or [])[:12]],
-            "trigger_words": [_bounded_text(item, 100) for item in (profile.get("activation_tags") or [])[:12]],
+            "trigger_words": [_bounded_text(item, 100) for item in normalized.trigger_words[:12]],
         }
 
     def _save_sqlite_profile(self, family: str, profile: dict[str, Any]) -> dict[str, Any]:
@@ -1181,12 +1179,12 @@ class LoraDownloadService:
         """
         sql_store = SqlLoraProfileStore(self._db)
         incoming = dict(profile)
-        incoming_lora = normalize_lora_key(
+        incoming_lora = lora_path_key(
             incoming.get("lora") or incoming.get("lora_name") or ""
         )
         for record in sql_store.get_family(family):
             existing_profile = dict(record.profile or {})
-            existing_lora = normalize_lora_key(
+            existing_lora = lora_path_key(
                 existing_profile.get("lora") or existing_profile.get("lora_name") or ""
             )
             if incoming_lora and incoming_lora == existing_lora:

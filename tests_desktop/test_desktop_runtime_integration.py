@@ -79,8 +79,8 @@ class DesktopRuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         _, secrets = await self._json("GET", "/api/v1/secrets")
         self.assertIn("ai_api_key", {item["key"] for item in secrets["items"]})
         _, catalog = await self._json("GET", "/api/v1/catalog")
-        self.assertEqual(len(catalog["workflows"]), 14)
-        self.assertEqual(sum(item["mode"] == "txt2img" for item in catalog["workflows"]), 9)
+        self.assertEqual(len(catalog["workflows"]), 15)
+        self.assertEqual(sum(item["mode"] == "txt2img" for item in catalog["workflows"]), 10)
         self.assertEqual(sum(item["mode"] == "img2img" for item in catalog["workflows"]), 5)
 
         form = aiohttp.FormData()

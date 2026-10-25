@@ -15,6 +15,7 @@ export class ModelsView {
     this.resourceFallback = null;
     this.resourcePageFrame = null;
     this.paginationState = null;
+    this.loadToken = 0;
   }
 
   async mount(container) {
@@ -50,7 +51,7 @@ export class ModelsView {
       })),
       el("div", { id: "m-body", class: "stack-3" }, [loadingState("正在读取模型目录")]),
     );
-    $("#m-refresh")?.addEventListener("click", () => this.load());
+    $("#m-refresh")?.addEventListener("click", () => this.load({ force: true }));
   }
 
   renderTabs() {
@@ -59,16 +60,22 @@ export class ModelsView {
     });
   }
 
-  async load() {
+  async load({ force = false } = {}) {
+    const token = ++this.loadToken;
     const body = $("#m-body");
     if (!body) return;
     this.teardownPagination();
     body.replaceChildren(loadingState("正在扫描模型与环境"));
     try {
-      this.data = await api.models();
+      if (force) await api.probe({ force: true });
+      const data = await api.models();
+      if (token !== this.loadToken) return;
+      this.data = data;
+      store.set("catalog", data);
       this.renderBody();
       this.loaded = true;
     } catch (e) {
+      if (token !== this.loadToken) return;
       body.replaceChildren(el("div", { class: "empty" }, [ic("warn"), el("div", { class: "empty-title" }, "无法获取模型信息"), el("div", { class: "empty-desc" }, esc(e.message))]));
     }
   }
@@ -82,6 +89,7 @@ export class ModelsView {
       this.mountEnv(body);
       return;
     }
+    this.envView?.dispose();
     const d = this.data || {};
     const summary = el("div", { class: "row wrap gap-2" }, [
       el("span", { class: "badge ok" }, esc(`${(d.checkpoints || []).length} 个 checkpoint`)),
@@ -239,6 +247,7 @@ export class ModelsView {
 
   // app.js 在离开视图时调用 deactivate，返回时调用 activate（可选链，无需改 app.js）
   deactivate() {
+    this.teardownPagination();
     this.envView?.dispose();
   }
 
@@ -246,10 +255,14 @@ export class ModelsView {
     if (this.tab === "env" && this.root) {
       const body = $("#m-body", this.root);
       if (body) this.mountEnv(body);
+    } else {
+      this.setupPagination();
     }
   }
 
   dispose() {
+    this.loadToken++;
+    this.envView?.dispose();
     this.teardownPagination();
     if (this.resourcePageFrame != null) cancelAnimationFrame(this.resourcePageFrame);
     this.resourcePageFrame = null;

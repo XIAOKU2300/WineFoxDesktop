@@ -56,7 +56,7 @@ const GROUP_LABELS = {
 };
 const localizeStepLabel = (label) => {
   let out = String(label || "");
-  for (const [key, value] of Object.entries(GROUP_LABELS)) {
+  for (const [key, value] of Object.entries(GROUP_LABELS).sort(([a], [b]) => b.length - a.length)) {
     out = out.replaceAll(key, value);
   }
   return out;
@@ -131,6 +131,7 @@ export class EnvSetupView {
     this.pollTimer = null;
     this.pollDelay = 1000;
     this.pendingFrame = null;
+    this.pendingRenderTimer = null;
     this.lastJobRender = 0;
     this.lastStatusUpdate = 0;
     this.lastStatusText = "";
@@ -173,6 +174,7 @@ export class EnvSetupView {
 
   dispose() {
     this._disposed = true;
+    this.loading = false;
     if (this.root && this._attachedListener) {
       this.root.removeEventListener("click", this._attachedListener);
       this._attachedListener = null;
@@ -182,6 +184,8 @@ export class EnvSetupView {
     this.pollTimer = null;
     if (this.pendingFrame) cancelAnimationFrame(this.pendingFrame);
     this.pendingFrame = null;
+    clearTimeout(this.pendingRenderTimer);
+    this.pendingRenderTimer = null;
     this.loadToken++;
   }
 
@@ -693,7 +697,7 @@ export class EnvSetupView {
 
   renderJobActions(job) {
     const actions = [];
-    if (job.status === "running" || job.status === "pending" || job.status === "rolling_back") {
+    if (job.status === "running" || job.status === "pending") {
       actions.push(el("button", { class: "btn btn-danger btn-sm", id: "setup-cancel", type: "button" }, [ic("x"), esc("取消安装")]));
     }
     if (job.status === "failed") {
@@ -709,7 +713,7 @@ export class EnvSetupView {
     }
     if (!actions.length) return null;
     const wrap = el("div", { class: "row wrap gap-2 setup-job-actions" }, actions);
-    if (job.status === "running" || job.status === "pending") {
+    if (ACTIVE_STATUSES.has(job.status)) {
       const cancel = $("#setup-cancel", wrap);
       if (cancel) cancel.addEventListener("click", () => void this.cancelJob());
     }
@@ -727,12 +731,19 @@ export class EnvSetupView {
   // ------------------------------------------------------------- 事件/SSE
 
   _scheduleJobRender() {
-    if (this.pendingFrame) return;
+    if (this._disposed || this.pendingFrame || this.pendingRenderTimer) return;
+    const delay = Math.max(0, 250 - (performance.now() - this.lastJobRender));
+    if (delay > 0) {
+      this.pendingRenderTimer = setTimeout(() => {
+        this.pendingRenderTimer = null;
+        this._scheduleJobRender();
+      }, delay);
+      return;
+    }
     this.pendingFrame = requestAnimationFrame(() => {
       this.pendingFrame = null;
       if (this._disposed) return;
       const now = performance.now();
-      if (now - this.lastJobRender < 250) return; // job 更新 ≤4/s
       this.lastJobRender = now;
       const panel = $("#setup-job-panel", this.root);
       if (panel) this.renderJobPanelInto(panel);
@@ -742,6 +753,8 @@ export class EnvSetupView {
 
   openJob(jobId, seed) {
     this.closeStream();
+    clearTimeout(this.pollTimer);
+    this.pollTimer = null;
     this.activeJobId = jobId;
     this.jobData = seed ? { ...seed } : null;
     this.currentItem = null;
@@ -755,9 +768,10 @@ export class EnvSetupView {
 
   async syncJob() {
     if (!this.activeJobId || this._disposed) return;
+    const jobId = this.activeJobId;
     try {
-      const job = await api.setupJob(this.activeJobId);
-      if (!this.activeJobId || this._disposed) return;
+      const job = await api.setupJob(jobId);
+      if (this.activeJobId !== jobId || this._disposed) return;
       this.jobData = job;
       this._scheduleJobRender();
     } catch { /* 忽略，SSE 会补全状态 */ }
@@ -775,6 +789,7 @@ export class EnvSetupView {
     }
     this.eventSource = source;
     source.onmessage = (event) => {
+      if (this._disposed || this.activeJobId !== jobId || this.eventSource !== source) return;
       this.sseHealthy = true;
       if (this.pollTimer) { clearTimeout(this.pollTimer); this.pollTimer = null; }
       let data;
@@ -782,6 +797,7 @@ export class EnvSetupView {
       this._onEvent(data);
     };
     source.onerror = () => {
+      if (this._disposed || this.activeJobId !== jobId || this.eventSource !== source) return;
       // 服务器在终止事件后主动结束流；此时无需轮询，直接关闭。
       if (!this.jobIsActive()) { this.closeStream(); return; }
       // SSE 失败/中断 → 退化为轮询（指数退避）；EventSource 会自动重连。
@@ -800,15 +816,17 @@ export class EnvSetupView {
     this.pollTimer = setTimeout(() => {
       this.pollTimer = null;
       if (!this.activeJobId || this._disposed) return;
+      const jobId = this.activeJobId;
       void (async () => {
         try {
-          const job = await api.setupJob(this.activeJobId);
-          if (!this.activeJobId || this._disposed) return;
+          const job = await api.setupJob(jobId);
+          if (this.activeJobId !== jobId || this._disposed) return;
           this.jobData = job;
           this._scheduleJobRender();
           if (this.jobIsActive()) this.schedulePoll(this.pollDelay);
           else this.closeStream();
         } catch {
+          if (this.activeJobId !== jobId || this._disposed) return;
           this.pollDelay = Math.min(this.pollDelay * 2, 10000);
           if (this.jobIsActive()) this.schedulePoll(this.pollDelay);
         }

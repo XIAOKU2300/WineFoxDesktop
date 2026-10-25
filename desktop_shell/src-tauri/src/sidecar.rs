@@ -158,6 +158,9 @@ impl SidecarManager {
     }
 
     fn spawn_session(self: &Arc<Self>) {
+        // The latch belongs to a process session, not to a quit attempt.
+        // Never hold it together with inner (exit waiters lock them in reverse).
+        *self.state.exit_done.lock().unwrap() = false;
         {
             let mut inner = self.state.inner.lock().unwrap();
             inner.state = SidecarState::Starting;
@@ -307,27 +310,49 @@ impl SidecarManager {
     /// Send shutdown to the sidecar and wait for it to exit.
     /// Returns true if the sidecar exited by itself (or wasn't running).
     pub fn request_shutdown_and_wait(&self, mode: &str, timeout: Duration) -> bool {
+        self.request_shutdown_and_wait_generation(mode, timeout, None)
+    }
+
+    pub fn request_shutdown_and_wait_generation(
+        &self, mode: &str, timeout: Duration, generation: Option<u64>,
+    ) -> bool {
         if !self.is_running() {
             return true;
         }
         self.log("info", &format!("exit flow: sending shutdown mode={mode}"));
-        let _ = self.send_command(json!({"cmd": "shutdown", "mode": mode}));
-        let done = self.state.exit_done.lock().unwrap();
-        let (guard, _) = self
-            .state
-            .exit_cond
-            .wait_timeout(done, timeout)
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        *guard
+        {
+            let inner = self.state.inner.lock().unwrap();
+            if generation.map_or(false, |value| !inner.quitting || inner.exit_generation != value) {
+                return false;
+            }
+            let _ = self.send_command(json!({"cmd": "shutdown", "mode": mode}));
+        }
+        let deadline = std::time::Instant::now() + timeout;
+        let mut done = self.state.exit_done.lock().unwrap();
+        loop {
+            if *done { return true; }
+            if let Some(value) = generation {
+                let inner = self.state.inner.lock().unwrap();
+                if !inner.quitting || inner.exit_generation != value { return false; }
+            }
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() { return false; }
+            let (guard, _) = self.state.exit_cond
+                .wait_timeout(done, remaining.min(Duration::from_millis(100)))
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            done = guard;
+        }
     }
 
     pub fn request_shutdown_cancel(&self) {
-        let _ = self.send_command(json!({"cmd": "shutdown-cancel"}));
         {
             let mut inner = self.state.inner.lock().unwrap();
+            if inner.quitting { return; }
+            let _ = self.send_command(json!({"cmd": "shutdown-cancel"}));
             inner.shutdown_pending = false;
             inner.shutdown_mode = None;
         }
+        self.state.exit_cond.notify_all();
         self.log("info", "exit flow: shutdown cancelled (return to app)");
         self.emit_status();
     }
@@ -488,14 +513,13 @@ fn session_main(me: &Arc<SidecarManager>) {
                 }
                 Some(Line::Ack { cmd, ok }) => {
                     me.log("info", &format!("sidecar ack: {cmd} ok={ok}"));
-                    if cmd == "shutdown" {
+                    if cmd == "shutdown" && ok {
                         let mut inner = me.state.inner.lock().unwrap();
-                        inner.shutdown_pending = true;
-                        inner.shutdown_mode = Some(if inner.quitting {
-                            "now".into()
-                        } else {
-                            "wait".into()
-                        });
+                        if inner.quitting {
+                            inner.shutdown_pending = true;
+                            // The initiating command owns the mode. An ack has
+                            // no mode field and must not turn wait into now.
+                        }
                         drop(inner);
                         me.emit_status();
                     }

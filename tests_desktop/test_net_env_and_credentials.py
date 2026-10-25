@@ -253,11 +253,13 @@ class TestConnectionReportTests(unittest.IsolatedAsyncioTestCase):
                 report = await service.test_connection()
             finally:
                 net_env.reset_cache()
-        # socks 协议不受支持 → 明确提示改用 HTTP 端口，并自动回退直连继续工作
+        # An unsupported explicit protocol cannot produce a false green result
+        # by testing a different route from the one real downloads would use.
         self.assertEqual(report["proxy"]["explicit_value"], "socks5://127.0.0.1:7891")
         self.assertTrue(any("HTTP" in item for item in report["guidance"]), report["guidance"])
         self.assertEqual(report["proxy"]["value"], "")
-        self.assertTrue(report["api"]["ok"])
+        self.assertFalse(report["api"]["ok"])
+        self.assertFalse(report["ok"])
 
 
 if __name__ == "__main__":

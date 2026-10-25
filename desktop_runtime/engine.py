@@ -22,7 +22,7 @@ from desktop_backend import VERSION
 from desktop_backend.errors import AppError
 from desktop_backend.models import HistoryEntry, ImageData, JobRecord
 from winefox_core.comfyui_executor import ComfyUIExecutor
-from winefox_core.comfyui_types import AuthMode, ComfyUIAuth, ComfyUIError, ComfyUIServerConfig, ExecutionSnapshot
+from winefox_core.comfyui_types import AuthMode, ComfyUIAuth, ComfyUIError, ComfyUIResult, ComfyUIServerConfig, ExecutionSnapshot
 from winefox_core.storage import (
     AppEventStore,
     Database,
@@ -35,6 +35,8 @@ from winefox_core.storage import (
 from winefox_core.storage_models import json_dumps, json_loads, utcnow_iso, validate_public_json
 from winefox_core.prompt_service import PromptService
 from winefox_core.lora_service import LoraService, normalize_lora_key
+from winefox_core.lora_binding import LoraNameIndex, lora_is_excluded, lora_path_key
+from winefox_core.lora_prompt import filter_reference_tags
 from winefox_core.workflow_service import WorkflowEntry, WorkflowService
 
 from .config_adapter import DesktopConfigAdapter
@@ -53,10 +55,10 @@ from .lora_profiles import (
     merge_prompt_tags,
     profile_from_comfy_metadata,
     resolve_prompt_loras,
-    resolve_selected_lora_triggers,
+    resolve_selected_lora_prompt,
 )
 from .upload_store import FileUploadStore
-from .workflow_builder import prepare_workflow, workflow_prompt_texts
+from .workflow_builder import prepare_workflow, workflow_prompt_texts, workflow_sampling_summary
 
 logger = logging.getLogger("winefox.runtime.engine")
 
@@ -168,6 +170,7 @@ class DesktopEngine:
         self._reload_lora_profiles()
         self._queue: asyncio.Queue[int] = asyncio.Queue(maxsize=20)
         self._worker: asyncio.Task | None = None
+        self._active_job_task: asyncio.Task | None = None
         self._accepting = False
         self._current_job_id: int | None = None
         self._cancel_requested: set[int] = set()
@@ -309,7 +312,7 @@ class DesktopEngine:
         index: dict[str, list[Any]] = {}
         for family in ("anima", "illustrious"):
             for profile in service.profiles_for(family).values():
-                index.setdefault(normalize_lora_key(profile.lora_name), []).append(profile)
+                index.setdefault(lora_path_key(profile.lora_name), []).append(profile)
         self.loaded_lora_profiles = LoadedLoraProfiles(
             profiles=profiles, sources=("sqlite",)
         )
@@ -336,8 +339,8 @@ class DesktopEngine:
                 )
                 if not unavailable:
                     continue
-                for value in (row["comfy_key"], row["filename"]):
-                    norm = normalize_lora_key(value)
+                for value in (row["comfy_key"] or row["filename"],):
+                    norm = lora_path_key(value)
                     if norm:
                         keys.add(norm)
         except Exception:  # pragma: no cover - 表不可用时按空集合处理
@@ -384,14 +387,10 @@ class DesktopEngine:
         """
         store = self.lora_asset_store
         names = [str(n or "").strip() for n in inventory_names if str(n or "").strip()]
-        present = {
-            normalize_lora_key(Path(n).name)
-            for n in names
-            if normalize_lora_key(Path(n).name)
-        }
+        inventory_index = LoraNameIndex(names)
         try:
             rows = self.db.connection.execute(
-                "SELECT id, model_family, filename, source, info FROM lora_assets"
+                "SELECT id, model_family, filename, comfy_key, source, info FROM lora_assets"
             ).fetchall()
         except Exception:  # pragma: no cover - 表不可用时按全 0 处理
             logger.warning("LoRA 资产表对账读取失败", exc_info=True)
@@ -404,7 +403,7 @@ class DesktopEngine:
             if source not in {"inventory", "comfyui_bridge"}:
                 continue
             in_inventory = (
-                normalize_lora_key(Path(str(row["filename"] or "")).name) in present
+                inventory_index.resolve(row["comfy_key"] or row["filename"]) is not None
             )
             info = dict(json_loads(row["info"]) or {})
             was_missing = bool(info.get("file_missing"))
@@ -417,14 +416,14 @@ class DesktopEngine:
                 self._set_asset_info(row["id"], info)
                 cleared_missing += 1
         existing = {
-            normalize_lora_key(str(r["filename"] or ""))
+            lora_path_key(inventory_index.resolve(r["comfy_key"] or r["filename"]) or r["comfy_key"] or r["filename"])
             for r in rows
             if normalize_lora_key(str(r["filename"] or ""))
         }
         default_family = self._default_lora_family() if family is None else str(family or "").strip().lower()
         for name in names:
             plain = Path(name).name
-            normalized_plain = normalize_lora_key(plain)
+            normalized_plain = lora_path_key(name)
             if (
                 not plain.lower().endswith(".safetensors")
                 or not normalized_plain
@@ -433,7 +432,7 @@ class DesktopEngine:
                 continue
             store.register(
                 default_family,
-                plain,
+                name.replace("\\", "/"),
                 comfy_key=name,
                 display_name=Path(plain).stem,
                 source="inventory",
@@ -486,18 +485,14 @@ class DesktopEngine:
         无效项跳过，全部无效返回 None（空数组 = 用户移除全部，不应用）。
         """
         excluded = self._disabled_lora_keys
-        inventory_map: dict[str, str] = {}
-        for name in inventory_names:
-            value = str(name or "").strip()
-            norm = normalize_lora_key(Path(value).name)
-            if norm and norm not in excluded:
-                inventory_map[norm] = value
+        inventory_map = LoraNameIndex(name for name in inventory_names if not lora_is_excluded(name, excluded))
         profiles = {
-            normalize_lora_key(profile.lora_name): profile
+            lora_path_key(profile.lora_name): profile
             for profile in self.lora_service.profiles_for(family).values()
             if normalize_lora_key(profile.lora_name)
-            and normalize_lora_key(profile.lora_name) not in excluded
+            and not lora_is_excluded(profile.lora_name, excluded)
         }
+        profile_names = LoraNameIndex(profiles)
         selected: list[dict[str, Any]] = []
         triggers: list[str] = []
         evidence: list[dict[str, Any]] = []
@@ -505,10 +500,12 @@ class DesktopEngine:
             if not isinstance(item, dict):
                 continue
             name = item.get("name") or item.get("id") or item.get("lora_name")
-            actual = inventory_map.get(normalize_lora_key(name))
+            actual = inventory_map.resolve(name)
             if not actual:
                 continue
-            profile = profiles.get(normalize_lora_key(name))
+            profile = profiles.get(profile_names.resolve(actual))
+            if any(entry["name"] == actual for entry in selected):
+                continue
             entry: dict[str, Any] = {"id": actual, "name": actual}
             if profile is not None:
                 # profile 未配置强度时给族默认值，None 直传会让 workflow 构建崩溃
@@ -569,13 +566,13 @@ class DesktopEngine:
         rows = self.db.connection.execute(
             "SELECT id, state, comfy_prompt_id FROM jobs WHERE state NOT IN ('completed','failed','cancelled','detached') ORDER BY id"
         ).fetchall()
+        self._worker = asyncio.create_task(self._worker_loop(), name="winefox-job-worker")
         for row in rows:
             if row["state"] in {"running", "submitting", "downloading"} and not row["comfy_prompt_id"]:
                 self._update_job(int(row["id"]), "failed", error="BACKEND_RESTARTED: 提交状态不明，请重新生成")
                 continue
             self._update_job(int(row["id"]), "recovering")
             await self._queue.put(int(row["id"]))
-        self._worker = asyncio.create_task(self._worker_loop(), name="winefox-job-worker")
         # 启动后台扫一次本机 LoRA 目录：把已有权重登记进本地库（幂等、尽力而为）
         # task 持引用防 GC，完成自清理
         if not hasattr(self, "_bg_tasks"):
@@ -758,7 +755,10 @@ class DesktopEngine:
             {
                 "id": entry.workflow_id,
                 "name": entry.name,
-                "label": Path(entry.name).stem.replace("_", " "),
+                "label": {"finish_illustrious_fast_api.json": "Illustrious 快速 · 20 步 · 单段",
+                          "finish_illustrious_api.json": "Illustrious 原高分辨率 · 60＋24 步 · 放大 1.5×",
+                          "finish_optimized_api.json": "Anima 优化 · 30 步 · 单段"}.get(entry.name, Path(entry.name).stem.replace("_", " ")),
+                "preferred": entry.name in {"finish_illustrious_fast_api.json", "finish_optimized_api.json"},
                 "mode": entry.mode,
                 "family": entry.family,
                 "valid": entry.valid,
@@ -924,12 +924,13 @@ class DesktopEngine:
             self._lora_metadata_cache_key = current_cache_key
             self._lora_metadata_attempted.clear()
             self._reload_lora_profiles()
-        existing = set(self._lora_profile_index)
+        inventory_index = LoraNameIndex(filenames)
+        existing = {lora_path_key(inventory_index.resolve(name)) for name in self._lora_profile_index}
         candidates: list[str] = []
         pending_markers: set[str] = set()
         for value in filenames:
             name = str(value or "").strip()
-            marker = normalize_lora_key(name)
+            marker = lora_path_key(name)
             if (
                 not name.lower().endswith(".safetensors")
                 or not marker
@@ -966,7 +967,7 @@ class DesktopEngine:
                         break
                     batch = filenames[offset : offset + 40]
                     self._lora_metadata_attempted.update(
-                        normalize_lora_key(name) for name in batch
+                        lora_path_key(name) for name in batch
                     )
                     metadata_by_name = await executor.fetch_lora_metadata_batch(
                             batch,
@@ -989,7 +990,7 @@ class DesktopEngine:
                         if parsed is None:
                             continue
                         family, profile = parsed
-                        generated[family][normalize_lora_key(filename)] = profile
+                        generated[family][lora_path_key(filename)] = profile
                     if not any(generated.values()):
                         continue
                     # 生成档案只插缺失（不覆盖用户编辑），正常写入路径仅 SQLite
@@ -1018,7 +1019,7 @@ class DesktopEngine:
             logger.warning("LoRA metadata enrichment skipped: %s", _redact_diagnostic_text(exc))
 
     def _catalog_lora(self, name: str) -> dict[str, Any]:
-        wanted = normalize_lora_key(name)
+        wanted = LoraNameIndex(self._lora_profile_index).resolve(name)
         matches = self._lora_profile_index.get(wanted, [])
         profile = matches[0] if matches else None
         return {
@@ -1038,14 +1039,14 @@ class DesktopEngine:
     async def submit_job(self, payload: dict[str, Any]) -> JobRecord:
         if not self._accepting:
             raise AppError(503, "BACKEND_RESTARTED", "后端尚未就绪或正在退出")
-        if self._queue.full():
-            raise AppError(429, "QUEUE_FULL", "本地任务队列已满")
         client_id = str(payload.get("client_request_id") or uuid.uuid4().hex)
         existing = self.db.connection.execute(
             "SELECT * FROM jobs WHERE client_request_id = ?", (client_id,)
         ).fetchone()
         if existing is not None:
             return self._job_record(existing)
+        if self._queue.full():
+            raise AppError(429, "QUEUE_FULL", "本地任务队列已满")
         now = utcnow_iso()
         with self.db.transaction():
             cur = self.db.connection.execute(
@@ -1074,6 +1075,8 @@ class DesktopEngine:
             return False
         self._cancel_requested.add(numeric)
         self._update_job(numeric, "cancelled", error="用户已取消本地等待；未中断 ComfyUI 全局队列")
+        if self._current_job_id == numeric and self._active_job_task is not None:
+            self._active_job_task.cancel()
         return True
 
     async def _worker_loop(self) -> None:
@@ -1083,9 +1086,14 @@ class DesktopEngine:
                 if job_id in self._cancel_requested:
                     continue
                 self._current_job_id = job_id
-                await self._run_job(job_id)
+                self._active_job_task = asyncio.create_task(self._run_job(job_id), name=f"winefox-job-{job_id}")
+                await self._active_job_task
             except asyncio.CancelledError:
-                raise
+                # A job cancellation releases this worker for the next item;
+                # cancellation of the worker itself still shuts it down.
+                worker = asyncio.current_task()
+                if job_id not in self._cancel_requested or (worker is not None and worker.cancelling()):
+                    raise
             except ComfyUIError as exc:
                 logger.warning("job %s ComfyUI failure: %s", job_id, exc.user_message)
                 self._update_job(job_id, "failed", error=exc.user_message)
@@ -1093,6 +1101,7 @@ class DesktopEngine:
                 logger.exception("job %s failed", job_id)
                 self._update_job(job_id, "failed", error=str(exc)[:2000])
             finally:
+                self._active_job_task = None
                 self._current_job_id = None
                 self._cancel_requested.discard(job_id)
                 self._queue.task_done()
@@ -1109,19 +1118,26 @@ class DesktopEngine:
         if row is None or row["state"] == "cancelled":
             return
         payload = json.loads(row["request_json"] or "{}")
+        resume_prompt_id = str(row["comfy_prompt_id"] or "").strip() or None
+        if resume_prompt_id:
+            await self._resume_job(job_id, payload, resume_prompt_id)
+            return
         self._update_job(job_id, "preparing")
         raw_prompt = str(payload.get("prompt") or "")
         prompt_result = await self._prepare_prompt(payload)
         if self._consume_cancel(job_id):
             return
+        if prompt_result.source != "llm" and re.search(r"[\u4e00-\u9fff]", prompt_result.cleaned_prompt):
+            self._attach_prompt_debug(job_id, raw_prompt, prompt_result, payload)
+            raise AppError(422, "PROMPT_TRANSLATION_FAILED", "中文提示词转译未成功，已停止生成，避免浪费采样时间。" + "；".join(prompt_result.warnings[:1]))
         execution_payload = dict(payload)
+        user_prompt = prompt_result.final_prompt
         execution_payload["prompt"] = prompt_result.final_prompt
         vision_meta: dict[str, Any] = {"status": "not_requested"}
         if prompt_result.seed is not None and payload.get("seed") in (None, -1, "-1"):
             execution_payload["seed"] = prompt_result.seed
         entry = self._select_workflow(payload)
         source = json.loads(Path(entry.path).read_text(encoding="utf-8-sig"))
-        resume_prompt_id = str(row["comfy_prompt_id"] or "").strip() or None
 
         async with ComfyUIExecutor(self._connection_config()) as executor:
             # Fail fast when the configured server is offline. The richer catalog
@@ -1131,22 +1147,26 @@ class DesktopEngine:
             inventory = await executor.fetch_models()
             auto_lora = None
             selected_loras = (
-                [item for item in execution_payload.get("loras", []) if isinstance(item, dict)]
+                [dict(item) for item in execution_payload.get("loras", []) if isinstance(item, dict) and item.get("enabled") is not False]
                 if isinstance(execution_payload.get("loras"), list)
                 else []
             )
             if selected_loras:
-                selected_triggers = resolve_selected_lora_triggers(
-                    self.lora_service,
-                    str(payload.get("family") or "illustrious"),
-                    selected_loras,
-                    excluded_keys=self._disabled_lora_keys,
-                )
-                if selected_triggers:
-                    prompt_result.final_prompt = merge_prompt_tags(
-                        prompt_result.final_prompt, selected_triggers
-                    )
-                    execution_payload["prompt"] = prompt_result.final_prompt
+                inventory_index = LoraNameIndex(inventory.loras)
+                for item in selected_loras:
+                    requested_lora = item.get("name") or item.get("lora_name") or item.get("id")
+                    actual_name = inventory_index.resolve(requested_lora)
+                    if not actual_name:
+                        raise AppError(422, "LORA_UNAVAILABLE", "所选 LoRA 不在 ComfyUI 列表中或存在同名歧义，请刷新列表并选择完整相对路径")
+                    if lora_is_excluded(actual_name, self._disabled_lora_keys):
+                        raise AppError(422, "LORA_DISABLED", "所选 LoRA 已禁用、隔离或缺失，请检查本地库")
+                    known_family = self._catalog_lora(actual_name)["family"]
+                    requested_family = str(payload.get("family") or "illustrious")
+                    if known_family in {"anima", "illustrious"} and known_family != requested_family:
+                        raise AppError(422, "LORA_FAMILY_MISMATCH", "所选 LoRA 与当前模型族不兼容，请切换模型族或重新选择 LoRA")
+                    item["name"] = actual_name
+                    item["id"] = actual_name
+                execution_payload["loras"] = selected_loras
             elif isinstance(payload.get("auto_lora_confirmations"), list):
                 # 前端已预览并确认/移除：以确认列表为准（空数组 = 全部移除不应用）。
                 auto_lora = self._apply_auto_lora_confirmations(
@@ -1156,8 +1176,6 @@ class DesktopEngine:
                 )
                 if auto_lora is not None and auto_lora.loras:
                     execution_payload["loras"] = list(auto_lora.loras)
-                    prompt_result.final_prompt = merge_prompt_tags(prompt_result.final_prompt, auto_lora.triggers)
-                    execution_payload["prompt"] = prompt_result.final_prompt
             else:
                 auto_lora = resolve_prompt_loras(
                     self.lora_service,
@@ -1168,12 +1186,21 @@ class DesktopEngine:
                 )
                 if auto_lora.loras:
                     execution_payload["loras"] = list(auto_lora.loras)
-                    prompt_result.final_prompt = merge_prompt_tags(prompt_result.final_prompt, auto_lora.triggers)
-                    execution_payload["prompt"] = prompt_result.final_prompt
+            if execution_payload.get('loras'):
+                injection = resolve_selected_lora_prompt(
+                    self.lora_service, str(payload.get('family') or 'illustrious'),
+                    execution_payload['loras'], self._disabled_lora_keys,
+                    prompt=raw_prompt, translated_prompt=prompt_result.final_prompt,
+                )
+                prompt_result.meta['lora_injection'] = injection.to_dict()
+                prompt_result.final_prompt = merge_prompt_tags(prompt_result.final_prompt, injection.tags)
+                execution_payload['prompt'] = prompt_result.final_prompt
+                if not injection.known_triggers:
+                    prompt_result.warnings.append('所选 LoRA 尚无已确认触发词；模型会加载，角色外观可能不稳定，请在 LoRA 档案中补充作者触发词。')
             checkpoint = self._select_checkpoint(source, payload, list(inventory.checkpoints))
             uploaded_name = None
             source_bytes = await self._source_bytes(payload)
-            if source_bytes is not None and resume_prompt_id is None and str(payload.get("mode") or "txt2img") == "img2img":
+            if source_bytes is not None and str(payload.get("mode") or "txt2img") == "img2img":
                 vision_tags, vision_meta = await self._reverse_prompt_with_vision(
                     source_bytes,
                     raw_prompt=raw_prompt,
@@ -1181,9 +1208,11 @@ class DesktopEngine:
                     family=str(payload.get("family") or "illustrious"),
                 )
                 if vision_tags:
-                    prompt_result.final_prompt = merge_prompt_tags(prompt_result.final_prompt, vision_tags)
+                    reference = filter_reference_tags(vision_tags, raw_prompt, user_prompt)
+                    vision_meta['prompt_injection'] = reference.to_dict()
+                    prompt_result.final_prompt = merge_prompt_tags(prompt_result.final_prompt, reference.tags)
                     execution_payload["prompt"] = prompt_result.final_prompt
-            if source_bytes is not None and resume_prompt_id is None:
+            if source_bytes is not None:
                 uploaded = await executor.upload_image(source_bytes, filename=f"winefox_{job_id}.png")
                 uploaded_name = uploaded.name if not uploaded.subfolder else f"{uploaded.subfolder}/{uploaded.name}"
             workflow, seed = prepare_workflow(
@@ -1192,10 +1221,11 @@ class DesktopEngine:
                 checkpoint=checkpoint,
                 uploaded_name=uploaded_name,
             )
+            execution_payload["seed"] = seed
             self._attach_prompt_debug(job_id, raw_prompt, prompt_result, execution_payload, workflow)
             if self._consume_cancel(job_id):
                 return
-            self._update_job(job_id, "running", comfy_prompt_id=resume_prompt_id)
+            self._update_job(job_id, "running")
             result = await executor.run(
                 ExecutionSnapshot(
                     workflow=workflow,
@@ -1203,9 +1233,51 @@ class DesktopEngine:
                     negative_prompt=str(payload.get("negative_prompt") or ""),
                     output_node_id=self._output_node_id(workflow),
                     client_id=f"winefox_desktop_{job_id}",
-                    resume_prompt_id=resume_prompt_id,
-                )
+                ),
+                on_submitted=lambda prompt_id: self._set_prompt_id(job_id, prompt_id),
             )
+        self._save_job_result(
+            job_id, payload, result, raw_prompt=raw_prompt,
+            final_prompt=prompt_result.final_prompt, seed=seed,
+            metadata={
+                "prompt_source": prompt_result.source,
+                "prompt_warnings": list(prompt_result.warnings),
+                "vision_reverse": vision_meta,
+                "auto_lora": auto_lora.metadata if auto_lora is not None else None,
+            },
+        )
+
+    async def _resume_job(self, job_id: int, payload: dict[str, Any], prompt_id: str) -> None:
+        # The remote workflow is already fixed. Recovery must not depend on
+        # local templates/uploads or call optional AI preparation a second time.
+        debug = payload.get("prompt_debug") if isinstance(payload.get("prompt_debug"), dict) else {}
+        raw_prompt = str(payload.get("prompt") or "")
+        final_prompt = str(debug.get("final_prompt") or raw_prompt)
+        seed = debug.get("seed", payload.get("seed"))
+        self._update_job(job_id, "running")
+        async with ComfyUIExecutor(self._connection_config()) as executor:
+            result = await executor.resume(
+                prompt_id,
+                ExecutionSnapshot(
+                    workflow={}, prompt=final_prompt,
+                    negative_prompt=str(debug.get("negative_prompt") or payload.get("negative_prompt") or ""),
+                    client_id=f"winefox_desktop_{job_id}", resume_prompt_id=prompt_id,
+                ),
+            )
+        self._save_job_result(
+            job_id, payload, result, raw_prompt=raw_prompt,
+            final_prompt=final_prompt, seed=seed,
+            metadata={
+                "prompt_source": debug.get("source", "recovered"),
+                "prompt_warnings": debug.get("warnings", []),
+                "recovered": True,
+            },
+        )
+
+    def _save_job_result(
+        self, job_id: int, payload: Mapping[str, Any], result: ComfyUIResult, *,
+        raw_prompt: str, final_prompt: str, seed: int | None, metadata: dict[str, Any],
+    ) -> None:
         if result.prompt_id:
             self._set_prompt_id(job_id, result.prompt_id)
         if job_id in self._cancel_requested:
@@ -1227,18 +1299,16 @@ class DesktopEngine:
             relative,
             sha256=digest,
             raw_prompt=raw_prompt,
-            final_prompt=prompt_result.final_prompt,
+            final_prompt=final_prompt,
             seed=seed,
             width=int(payload.get("width") or 832),
             height=int(payload.get("height") or 1216),
             metadata={
                 **payload,
+                "seed": seed,
                 "prompt_id": result.prompt_id,
                 "elapsed_seconds": result.meta.get("elapsed_seconds"),
-                "prompt_source": prompt_result.source,
-                "prompt_warnings": list(prompt_result.warnings),
-                "vision_reverse": vision_meta,
-                "auto_lora": auto_lora.metadata if auto_lora is not None else None,
+                **metadata,
                 "image_content_type": content_type,
             },
         )
@@ -1254,6 +1324,7 @@ class DesktopEngine:
                 llm_client = OpenAICompatibleLLMClient(
                     str(provider.get("base_url") or ""),
                     self.config.get_secret("ai_api_key") or "",
+                    timeout_seconds=resolve_provider(settings).timeout_seconds,
                 )
             except ValueError as exc:
                 logger.warning("AI provider configuration ignored: %s", exc)
@@ -1387,12 +1458,22 @@ class DesktopEngine:
 
     def _select_workflow(self, payload: Mapping[str, Any]) -> WorkflowEntry:
         requested = str(payload.get("workflow") or "").strip()
+        mode = str(payload.get("mode") or "txt2img")
+        family = str(payload.get("family") or "illustrious")
         entry = self.workflows.get(workflow_id=requested) or self.workflows.get(name=requested)
         if entry is not None and entry.path:
+            if entry.mode != mode:
+                raise AppError(422, "WORKFLOW_MODE_MISMATCH", "所选工作流与文生图／图生图模式不一致")
+            if entry.family in {"anima", "illustrious"} and entry.family != family:
+                raise AppError(422, "WORKFLOW_FAMILY_MISMATCH", "所选工作流与当前模型族不兼容")
             return entry
-        mode = str(payload.get("mode") or "txt2img")
-        preferred = "img2img_illustrious_api.json" if mode == "img2img" else "workflow_api.json"
+        if requested:
+            raise AppError(422, "WORKFLOW_NOT_FOUND", "所选工作流不存在，请刷新工作流列表")
+        preferred = "img2img_illustrious_api.json" if mode == "img2img" else "finish_illustrious_fast_api.json"
         entry = self.workflows.get(name=preferred)
+        if family == "anima":
+            entry = self.workflows.get(name="finish_optimized_api.json") if mode == "txt2img" else None
+            entry = entry or next((item for item in self.workflows.all_entries() if item.family == family and item.mode == mode and item.path), None)
         if entry is None:
             entry = next((item for item in self.workflows.all_entries() if item.mode == mode and item.path), None)
         if entry is None:
@@ -1446,14 +1527,14 @@ class DesktopEngine:
         count = self.db.connection.execute(
             "SELECT COUNT(*) FROM jobs WHERE id < ? AND state IN ('queued','recovering')", (row["id"],)
         ).fetchone()[0]
-        history = self.db.connection.execute("SELECT id, metadata FROM history WHERE job_id = ?", (row["id"],)).fetchone()
+        history = self.db.connection.execute("SELECT id, metadata, seed FROM history WHERE job_id = ?", (row["id"],)).fetchone()
         image = None
         seed = payload.get("seed")
         result = None
         history_metadata: dict[str, Any] = {}
         if history is not None:
             history_metadata = json.loads(history["metadata"] or "{}")
-            seed = history_metadata.get("seed", seed)
+            seed = history["seed"] if history["seed"] is not None else history_metadata.get("seed", seed)
             image = {"id": str(history["id"]), "url": f"/api/v1/history/{history['id']}/image"}
             result = {"history_id": str(history["id"]), "image": image}
         job_meta = {"comfy_prompt_id": row["comfy_prompt_id"]}
@@ -1473,7 +1554,7 @@ class DesktopEngine:
             progress=1.0 if state == "completed" else None,
             queue_position=int(count) + 1 if state in {"queued", "recovering"} else None,
             image=image,
-            seed=seed,
+            seed=str(seed) if isinstance(seed, int) and abs(seed) > 2**53 - 1 else seed,
         )
 
     def _attach_prompt_debug(
@@ -1514,6 +1595,8 @@ class DesktopEngine:
             "family": prompt_result.meta.get("family"),
             "llm_enabled": prompt_result.meta.get("llm_enabled"),
             "seed": execution_payload.get("seed"),
+            "sampling": workflow_sampling_summary(workflow) if workflow is not None else "",
+            "lora_injection": prompt_result.meta.get('lora_injection'),
         }
         try:
             row = self.db.connection.execute(
@@ -1531,6 +1614,10 @@ class DesktopEngine:
             logger.debug("写入 prompt_debug 失败（忽略）", exc_info=True)
 
     def _update_job(self, job_id: int, state: str, *, error: str | None = None, comfy_prompt_id: str | None = None) -> None:
+        # Cancellation wins over late executor progress and failures.
+        current = self.db.connection.execute("SELECT state FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if current is not None and current["state"] in TERMINAL_STATES and current["state"] != state:
+            return
         now = utcnow_iso()
         fields = ["state = ?", "updated_at = ?"]
         values: list[Any] = [state, now]
@@ -1566,31 +1653,40 @@ class DesktopEngine:
         offset = max(0, int(query.get("offset") or 0))
         cursor = query.get("cursor")
         trash = str(query.get("trash") or "").lower() in {"1", "true", "yes"}
-        favorite = bool(query.get("favorite_only"))
+        status = str(query.get("status") or "all")
+        favorite = bool(query.get("favorite_only")) or status == "favorite"
         search = str(query.get("q") or "").strip()
         where = ["h.deleted_at IS NOT NULL" if trash else "h.deleted_at IS NULL"]
+        where.append("h.id IS NOT NULL" if trash else "(h.id IS NOT NULL OR j.state = 'failed')")
         params: list[Any] = []
-        if cursor:
-            where.append("h.id < ?")
-            params.append(int(cursor))
         if search:
-            where.append("(h.raw_prompt LIKE ? OR h.final_prompt LIKE ?)")
-            params.extend([f"%{search}%", f"%{search}%"])
+            where.append("(h.raw_prompt LIKE ? OR h.final_prompt LIKE ? OR CAST(COALESCE(h.seed, json_extract(j.request_json, '$.prompt_debug.seed'), json_extract(j.request_json, '$.seed')) AS TEXT) LIKE ? OR json_extract(j.request_json, '$.prompt') LIKE ?)")
+            params.extend([f"%{search}%"] * 4)
         if favorite:
             where.append("f.id IS NOT NULL")
-        sql = (
-            "SELECT h.*, j.request_json, f.id AS favorite_id, f.payload AS favorite_payload "
-            "FROM history h JOIN jobs j ON j.id=h.job_id "
+        if status in {"completed", "failed", "cancelled"}:
+            where.append("j.state = ?")
+            params.append(status)
+        joins = (
+            "FROM jobs j LEFT JOIN history h ON j.id=h.job_id "
             "LEFT JOIN favorites f ON f.scope='history' AND f.ref_key=CAST(h.id AS TEXT) "
-            f"WHERE {' AND '.join(where)} ORDER BY h.id DESC LIMIT ? OFFSET ?"
+        )
+        total = self.db.connection.execute(
+            f"SELECT COUNT(*) {joins} WHERE {' AND '.join(where)}", params
+        ).fetchone()[0]
+        if cursor:
+            where.append("j.id < ?")
+            params.append(int(cursor))
+        sql = (
+            "SELECT h.*, j.request_json, j.id AS source_job_id, j.state AS job_state, "
+            "j.error AS job_error, j.created_at AS job_created_at, "
+            "f.id AS favorite_id, f.payload AS favorite_payload "
+            f"{joins} WHERE {' AND '.join(where)} ORDER BY j.id DESC LIMIT ? OFFSET ?"
         )
         rows = self.db.connection.execute(sql, (*params, limit + 1, offset)).fetchall()
         page_rows = rows[:limit]
         items = [self._history_dict(row) for row in page_rows]
-        next_cursor = str(page_rows[-1]["id"]) if len(rows) > limit and page_rows else None
-        total = self.db.connection.execute(
-            "SELECT COUNT(*) FROM history WHERE deleted_at IS " + ("NOT NULL" if trash else "NULL")
-        ).fetchone()[0]
+        next_cursor = str(page_rows[-1]["source_job_id"]) if len(rows) > limit and page_rows else None
         return {"items": items, "total": int(total), "next_cursor": next_cursor, "_rows": page_rows}
 
     def _history_entry(self, row) -> HistoryEntry:
@@ -1607,13 +1703,26 @@ class DesktopEngine:
 
     def _history_dict(self, row) -> dict[str, Any]:
         request = json.loads(row["request_json"] or "{}") if "request_json" in row.keys() else {}
+        if row["id"] is None:
+            debug = request.get("prompt_debug") if isinstance(request.get("prompt_debug"), dict) else {}
+            seed = debug.get("seed", request.get("seed"))
+            return {
+                "id": f"job-{row['source_job_id']}", "job_id": str(row["source_job_id"]),
+                "prompt": str(request.get("prompt") or ""), "status": row["job_state"],
+                "error": _redact_diagnostic_text(row["job_error"] or "生成失败"),
+                "created_at": row["job_created_at"],
+                "seed": str(seed) if isinstance(seed, int) and abs(seed) > 2**53 - 1 else seed,
+                **{key: request.get(key) for key in ("negative_prompt", "width", "height", "steps", "cfg", "family", "workflow")},
+                "favorite": False, "image": None, "metadata": {},
+            }
         metadata = json.loads(row["metadata"] or "{}")
         return {
             "id": str(row["id"]),
+            "status": "completed",
             "job_id": str(row["job_id"]),
             "prompt": row["raw_prompt"],
             "negative_prompt": request.get("negative_prompt"),
-            "seed": row["seed"],
+            "seed": str(row["seed"]) if isinstance(row["seed"], int) and abs(row["seed"]) > 2**53 - 1 else row["seed"],
             "width": row["width"],
             "height": row["height"],
             "steps": request.get("steps"),
@@ -1670,7 +1779,7 @@ class DesktopEngine:
 
     async def purge_history(self, history_id: str) -> bool:
         row = self._history_row(history_id)
-        if row is None:
+        if row is None or row["deleted_at"] is None:
             return False
         image_path = (self.data_root / str(row["image_relpath"])).resolve()
         try:
@@ -1682,23 +1791,33 @@ class DesktopEngine:
         return self.history_store.hard_delete(int(row["job_id"]))
 
     async def list_favorites(self, query: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        query = query or {}
+        search = str(query.get("q") or "").strip().casefold()
+        category = str(query.get("category") or "")
         rows = self.db.connection.execute("SELECT * FROM favorites ORDER BY id DESC").fetchall()
         items = []
         for row in rows:
             payload = json.loads(row["payload"] or "{}")
-            item = {"id": str(row["id"]), "category": payload.get("category", "默认"), "note": payload.get("note", ""), **payload}
+            item = {**payload, "id": str(row["id"]), "created_at": row["created_at"], "category": payload.get("category") or "默认", "note": payload.get("note", "")}
             if row["scope"] == "history":
                 history = self._history_row(row["ref_key"])
-                if history is not None:
-                    item.update(self._history_dict(history))
-                    item["favorite_id"] = str(row["id"])
+                if history is None or history["deleted_at"] is not None:
+                    continue
+                history_data = self._history_dict(history)
+                item.update({key: value for key, value in history_data.items() if key not in {"id", "created_at"}})
+                item["history_id"] = str(history["id"])
+                item["favorite_id"] = str(row["id"])
+            if category and category != item["category"]:
+                continue
+            if search and not any(search in str(item.get(key) or "").casefold() for key in ("prompt", "note", "category")):
+                continue
             items.append(item)
         return {"items": items, "total": len(items)}
 
     async def create_favorite(self, payload: dict[str, Any]) -> dict[str, Any]:
         ref = uuid.uuid4().hex
         record = self.favorite_store.add("note", ref, "prompt", payload)
-        return {"id": str(record.id), **payload}
+        return {**payload, "id": str(record.id)}
 
     async def update_favorite(self, favorite_id: str, payload: dict[str, Any]) -> bool:
         try:

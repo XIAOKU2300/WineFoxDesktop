@@ -435,7 +435,8 @@ class PromptService:
         except LLMPortError as exc:
             warnings.append(f"LLM 端口不可用，使用确定性 fallback: {exc}")
         except Exception as exc:  # noqa: BLE001 - 任何失败都回退
-            warnings.append(f"LLM 调用失败，使用确定性 fallback: {type(exc).__name__}")
+            detail = getattr(exc, "safe_message", None) or type(exc).__name__
+            warnings.append(f"LLM 调用失败，使用确定性 fallback: {detail}")
         if re.search(r"[\u4e00-\u9fff]", cleaned):
             warnings.append(
                 "转译失败：中文提示词未翻译，直接出图会导致画面严重偏离描述，请检查 AI 配置"

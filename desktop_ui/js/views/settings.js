@@ -100,6 +100,7 @@ export class SettingsView {
       this.sectionNodes.set(this.section, nodes);
       body.replaceChildren(...nodes);
       this.attachSaveButtons();
+      if (this.section === "about") this.bindAboutEvents();
       return;
     }
     body.replaceChildren(...nodes.filter(Boolean));
@@ -805,20 +806,20 @@ export class SettingsView {
       {
         name: "Civitai API Token",
         state: !token.configured ? "muted" : (token.ok ? "ok" : "err"),
-        text: !token.configured ? "未配置（多数资源可匿名下载）" : (token.ok ? "有效" : token.error || "无效"),
+        text: !token.configured ? "未配置（多数资源可匿名下载）" : (token.ok ? "带凭据请求可访问；具体模型权限需下载时验证" : token.error || "请求失败"),
       },
       {
         name: "Civitai 登录 Cookie",
         state: !cookie.configured ? "muted" : (cookie.looks_valid ? "ok" : "warn"),
         text: !cookie.configured
           ? "未配置（仅受限资源需要）"
-          : `${cookie.fields || 0} 个字段${cookie.looks_valid ? "，包含登录态" : cookie.error ? "，" + cookie.error : ""}`,
+          : `${cookie.fields || 0} 个字段${cookie.looks_valid ? "，包含登录字段" : cookie.error ? "，" + cookie.error : ""}`,
       },
     ];
     const overlay = el("div", { class: "overlay", role: "dialog", "aria-modal": "true", "aria-labelledby": "lt-title" });
     overlay.append(el("div", { class: "modal" }, [
       el("div", { class: "modal-head" }, [
-        el("h3", { id: "lt-title" }, report?.ok ? "下载链路正常" : "下载链路存在问题"),
+        el("h3", { id: "lt-title" }, report?.ok ? "来源 API 可访问" : "来源连接存在问题"),
         el("button", { class: "icon-btn", type: "button", "aria-label": "关闭" }, [ic("x")]),
       ]),
       el("div", { class: "modal-body" }, [
@@ -987,7 +988,6 @@ export class SettingsView {
         ]),
       ]),
     ];
-    this.bindAboutEvents();
     // “关于”分区每次重建都会走到这里，先退订旧监听再注册，
     // 否则每轮 保存→重开 会净增一个永不移除的全局监听器。
     if (this._aboutUnsub) this._aboutUnsub();

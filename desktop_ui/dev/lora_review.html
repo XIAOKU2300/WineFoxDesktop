@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>LoRA 编辑回归</title>
+  <link rel="stylesheet" href="../css/tokens.css"><link rel="stylesheet" href="../css/base.css">
+  <link rel="stylesheet" href="../css/components.css"><link rel="stylesheet" href="../css/pages.css">
+</head>
+<body>
+  <main class="view" style="height:100%">
+    <h1>LoRA 编辑回归</h1>
+    <p>仅使用测试数据，不连接真实后端。</p>
+    <button id="edit" class="btn" type="button">编辑测试 LoRA</button>
+    <pre id="result" aria-live="polite">尚未保存</pre>
+  </main>
+  <div id="toast-region" class="toast-region" aria-live="polite"></div>
+  <script type="module">
+    import { LoraLibraryView } from "../js/views/lora.js";
+    import { api } from "../js/api.js";
+    const item = { id: 1, name: "测试 LoRA", aliases: ["小狐狸"], role: ["Fox", "Character"], triggers: [], trigger_candidates: ["fox_token"] };
+    const view = new LoraLibraryView();
+    view.root = document.querySelector("main"); view.load = async () => {};
+    api.loraLibraryUpdate = async (id, patch) => {
+      document.querySelector("#result").textContent = JSON.stringify({ id, ...patch }, null, 2);
+      Object.assign(item, patch);
+      return item;
+    };
+    document.querySelector("#edit").addEventListener("click", () => view.editDialog(item));
+  </script>
+</body>
+</html>

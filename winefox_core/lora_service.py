@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import difflib
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
+from .lora_binding import lora_path_key, text_list
 
 # ---------------------------------------------------------------------------
 # 模型族
@@ -47,7 +49,7 @@ _LORA_SUFFIX_RE = re.compile(r"\.(safetensors|ckpt|pt|bin|sft)$", re.I)
 
 def normalize_match_key(text: str) -> str:
     """档案匹配键：小写、去后缀、仅保留字母数字/日文假名/汉字。"""
-    text = str(text or "").strip().lower()
+    text = unicodedata.normalize("NFKC", str(text or "")).strip().casefold()
     text = _LORA_SUFFIX_RE.sub("", text)
     return re.sub(r"[^0-9a-z\u3040-\u30ff\u3400-\u9fff]+", "", text)
 
@@ -138,14 +140,15 @@ class LoraProfile:
         """从档案字典构建。兼容插件 lora_profile JSON 的字段名。"""
         data = dict(data or {})
         aliases: list[str] = []
-        for field_name in (
+        alias_fields = (
             "match_terms",
             "official_aliases",
             "nickname_aliases",
             "aliases",
             "search_terms",
             "source_aliases",
-        ):
+        ) if not data.get("aliases_authoritative") else ("aliases",)
+        for field_name in alias_fields:
             raw = data.get(field_name) or []
             if isinstance(raw, str):
                 raw = re.split(r"[,，;；\n\r]+", raw)
@@ -157,7 +160,7 @@ class LoraProfile:
                     for piece in re.split(r"[,，;；\n\r]+", str(item))
                 ]
             aliases.extend(str(item).strip() for item in raw if str(item).strip())
-        for field_name in ("search_query",):
+        for field_name in (() if data.get("aliases_authoritative") else ("search_query",)):
             value = str(data.get(field_name) or "").strip()
             if value:
                 aliases.append(value)
@@ -175,9 +178,8 @@ class LoraProfile:
         role_terms.extend(str(item).strip() for item in raw_roles if str(item).strip())
 
         trigger_words: list[str] = []
-        raw_trigger = (
-            data.get("trigger_words")
-            or data.get("profile_activation_tags")
+        raw_trigger = data["trigger_words"] if "trigger_words" in data else (
+            data.get("profile_activation_tags")
             or data.get("trigger_prompt")
             or data.get("activation_tags")
             or data.get("trained_words")
@@ -185,15 +187,7 @@ class LoraProfile:
             or data.get("char_prompt")
             or []
         )
-        if isinstance(raw_trigger, str):
-            raw_trigger = re.split(r"[,，;；\n\r]+", raw_trigger)
-        elif isinstance(raw_trigger, list):
-            raw_trigger = [
-                piece
-                for item in raw_trigger
-                for piece in re.split(r"[,，;；\n\r]+", str(item))
-            ]
-        trigger_words.extend(str(item).strip() for item in raw_trigger if str(item).strip())
+        trigger_words.extend(text_list(raw_trigger))
 
         def _float_opt(name: str) -> Optional[float]:
             try:
@@ -896,16 +890,27 @@ class LoraService:
 
     # -- 术语提取 ---------------------------------------------------------------
 
+    @staticmethod
+    def _explicit_single_cjk_alias(profile: LoraProfile, term: str) -> bool:
+        """An authoritative named alias may be one CJK character, never a guessed tag."""
+        text = unicodedata.normalize('NFKC', str(term or '')).strip()
+        return bool(profile.extra.get('aliases_authoritative')) and bool(re.fullmatch(r'[\u3400-\u9fff]', text)) and any(
+            text == unicodedata.normalize('NFKC', str(value or '')).strip()
+            for value in (profile.character, *profile.aliases)
+        )
+
     def profile_terms(self, profile: LoraProfile, include_triggers: bool = True) -> list[str]:
         """档案的全部匹配术语（key/角色/别名/角色词/触发词），过滤泛化词。"""
-        raw = [profile.key, profile.character, *profile.aliases, *profile.role_terms]
+        raw = [profile.character, *profile.aliases, *profile.role_terms]
+        if not profile.extra.get("aliases_authoritative"):
+            raw.insert(0, profile.key)
         if include_triggers:
             raw.extend(profile.trigger_words)
         terms: list[str] = []
         seen: set[str] = set()
         for item in raw:
             item = str(item or "").strip()
-            if not item or is_generic_term(item):
+            if not item or (is_generic_term(item) and not self._explicit_single_cjk_alias(profile,item)):
                 continue
             norm = normalize_match_key(item)
             if not norm or norm in seen:
@@ -949,7 +954,7 @@ class LoraService:
                 continue
             if not include_fuzzy and kind == "fuzzy":
                 continue
-            if score < min_score or is_generic_term(term) or self._is_bad_match_term(term):
+            if score < min_score or (is_generic_term(term) and not self._explicit_single_cjk_alias(profile,term)) or self._is_bad_match_term(term):
                 continue
             scored.append(match)
 
@@ -959,7 +964,7 @@ class LoraService:
         selected: list[dict[str, Any]] = []
         for match in scored:
             profile = match.get("profile")
-            lora_key = normalize_lora_key(profile.lora_name)
+            lora_key = lora_path_key(profile.lora_name)
             term_marker = normalize_match_key(match.get("term") or "")
             if not lora_key or lora_key in used_lora or (term_marker and term_marker in used_markers):
                 continue
@@ -1193,7 +1198,7 @@ class LoraService:
                 if marker and marker not in seen:
                     seen.add(marker)
                     counts[marker] = counts.get(marker, 0) + 1
-        return frozenset(marker for marker, count in counts.items() if count > 1 and marker not in protected)
+        return frozenset(marker for marker, count in counts.items() if count > 1 and (marker not in protected or len(marker)==1))
 
     def _profile_match_candidate_entries(
         self,
@@ -1209,7 +1214,7 @@ class LoraService:
             marker = normalize_match_key(term)
             if not marker or marker in blocked_markers:
                 continue
-            if not self._profile_match_term_is_strong(term):
+            if not self._profile_match_term_is_strong(term) and not self._explicit_single_cjk_alias(profile,term):
                 continue
             source = "identity" if marker in identity_markers else "profile"
             source_rank = 4 if source == "identity" else 3
@@ -1223,14 +1228,19 @@ class LoraService:
         if not marker or marker not in text_norm:
             return False
         if re.search(r"[㐀-鿿぀-ヿ]", str(term or "")):
+            if len(marker)==1:
+                # Require both token boundaries: 祀，... is explicit, 祭祀 is
+                # an ordinary word and must never silently select this LoRA.
+                raw = unicodedata.normalize('NFKC',str(raw_text or ''))
+                return bool(re.search(rf'(?<!\w){re.escape(marker)}(?!\w)',raw))
             if len(marker) <= 2:
                 return _short_cjk_marker_has_safe_boundary(marker, raw_text)
             return True
-        term_ascii = re.sub(r"[^0-9a-z]+", " ", str(term or "").lower()).strip()
-        raw_ascii = re.sub(r"[^0-9a-z]+", " ", str(raw_text or "").lower())
+        term_ascii = re.sub(r"[^0-9a-z]+", " ", unicodedata.normalize("NFKC", str(term or "")).casefold()).strip()
+        raw_ascii = re.sub(r"[^0-9a-z]+", " ", unicodedata.normalize("NFKC", str(raw_text or "")).casefold())
         if term_ascii and re.search(rf"(?<![0-9a-z]){re.escape(term_ascii)}(?![0-9a-z])", raw_ascii):
             return True
-        return len(marker) >= 6
+        return False  # An embedded substring is not an exact character mention.
 
     @staticmethod
     def _profile_ascii_prompt_fragments(text: str) -> set:

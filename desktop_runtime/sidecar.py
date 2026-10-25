@@ -115,6 +115,16 @@ async def _room_tunnel(runtime: DesktopRuntime, command: dict[str, Any]) -> None
     emit({"type": "ack", "cmd": "room_tunnel", "ok": True, "room": status})
 
 
+async def _report_status(runtime: DesktopRuntime) -> None:
+    last = None
+    while True:
+        status = (runtime.engine.busy(), runtime.engine.task_count())
+        if status != last:
+            emit({"type": "status", "busy": status[0], "tasks": status[1]})
+            last = status
+        await asyncio.sleep(0.2)
+
+
 async def run(args: argparse.Namespace) -> int:
     logging.basicConfig(
         stream=sys.stderr,
@@ -156,11 +166,16 @@ async def run(args: argparse.Namespace) -> int:
             pass
 
     exit_reason = "signal"
+    shutdown_pending = False
+    status_task = asyncio.create_task(_report_status(runtime), name="winefox-status")
     try:
         while not stop_event.is_set():
             try:
                 command = await asyncio.wait_for(commands.get(), timeout=0.5)
             except asyncio.TimeoutError:
+                if shutdown_pending and not runtime.engine.busy():
+                    exit_reason = "shutdown-wait"
+                    break
                 continue
             cmd = str(command.get("cmd") or "")
             if cmd == "ping":
@@ -180,18 +195,24 @@ async def run(args: argparse.Namespace) -> int:
                     runtime.room_manager.clear_tunnel()
                 emit({"type": "ack", "cmd": "room_clear_tunnel", "ok": True})
             elif cmd == "shutdown-cancel":
+                shutdown_pending = False
                 emit({"type": "ack", "cmd": cmd, "ok": True, "pending": False})
             elif cmd == "shutdown":
                 mode = str(command.get("mode") or "wait")
+                if mode not in {"wait", "now"}:
+                    emit({"type": "ack", "cmd": cmd, "ok": False, "error": "invalid shutdown mode"})
+                    continue
                 emit({"type": "ack", "cmd": cmd, "ok": True, "mode": mode, "busy": runtime.engine.busy()})
-                if mode == "wait":
-                    while runtime.engine.busy() and not stop_event.is_set():
-                        await asyncio.sleep(0.5)
+                if mode == "wait" and runtime.engine.busy():
+                    shutdown_pending = True
+                    continue
                 exit_reason = f"shutdown-{mode}"
                 break
             else:
                 emit({"type": "ack", "cmd": cmd, "ok": False, "error": "unknown command"})
     finally:
+        status_task.cancel()
+        await asyncio.gather(status_task, return_exceptions=True)
         if runtime.room_manager is not None:
             await runtime.room_manager.shutdown()
         await runtime.stop()
