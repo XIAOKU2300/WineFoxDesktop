@@ -16,6 +16,8 @@ export class FavoritesView {
     this.category = "all";
     this.categories = [];
     this.loaded = false;
+    this.loadToken = 0;
+    this.categoryToken = 0;
   }
 
   async mount(container) {
@@ -83,14 +85,17 @@ export class FavoritesView {
   }
 
   async loadCats(prefetched = null) {
+    const token = ++this.categoryToken;
     try {
       const res = prefetched || await api.categories();
+      if (token !== this.categoryToken) return;
       this.categories = res.items || res || [];
       this.renderCats();
     } catch { /* 离线静默 */ }
   }
 
   async load(prefetched = null) {
+    const token = ++this.loadToken;
     const body = $("#f-body");
     if (!body) return;
     body.replaceChildren(loadingState("正在整理收藏"));
@@ -99,6 +104,7 @@ export class FavoritesView {
       if (this.q) q.q = this.q;
       if (this.category !== "all") q.category = this.category;
       const res = prefetched || await api.favorites(q);
+      if (token !== this.loadToken) return;
       this.total = res.total;
       const items = res.items || [];
       const grid = el("div", { class: "img-grid", id: "f-grid" });
@@ -118,6 +124,7 @@ export class FavoritesView {
       this.renderCats();
       this.loaded = true;
     } catch (e) {
+      if (token !== this.loadToken) return;
       body.replaceChildren(el("div", { class: "empty" }, [
         ic("warn"),
         el("div", { class: "empty-title" }, "收藏加载失败"),
@@ -148,7 +155,7 @@ export class FavoritesView {
     const btns = $$(".cell-btn", cell);
     // 点击缩略图即预览；悬浮操作只保留编辑/删除，与历史卡片保持同一设计语言。
     thumb.addEventListener("click", () => this.preview(it));
-    thumb.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); this.preview(it); } });
+    thumb.addEventListener("keydown", (e) => { if (e.target === thumb && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); this.preview(it); } });
     btns[0].addEventListener("click", (e) => { e.stopPropagation(); this.editDialog(it); });
     btns[1].addEventListener("click", async (e) => {
       e.stopPropagation();
@@ -174,7 +181,7 @@ export class FavoritesView {
           el("div", { class: "pm-block" }, [el("span", { class: "pm-label" }, "提示词"), el("span", { class: "pm-val" }, esc(it.prompt || "—"))]),
           el("div", { class: "pm-block" }, [el("span", { class: "pm-label" }, "分类"), el("span", { class: "pm-val" }, esc(it.category || "未分类"))]),
           el("div", { class: "row gap-2" }, [
-            el("button", { class: "btn btn-primary btn-sm", type: "button", id: "pv-save" }, [ic("download"), esc("保存")]),
+            it.image?.url ? el("button", { class: "btn btn-primary btn-sm", type: "button", id: "pv-save" }, [ic("download"), esc("保存")]) : null,
           ]),
         ]),
       ]),
@@ -238,14 +245,22 @@ export class FavoritesView {
       ]),
     ]));
     document.body.append(overlay);
-    const close = () => overlay.remove();
+    const previousFocus = document.activeElement;
+    const close = () => {
+      document.removeEventListener("keydown", onKey);
+      overlay.remove();
+      previousFocus?.focus?.();
+    };
     overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
     overlay.querySelector(".modal-head .icon-btn").addEventListener("click", close);
-    const onKey = (e) => { if (e.key === "Escape") { close(); document.removeEventListener("keydown", onKey); } };
+    const onKey = (e) => { if (e.key === "Escape") close(); };
     document.addEventListener("keydown", onKey);
     overlay.querySelector(".modal-head .icon-btn").focus();
     $("#fl-cancel", overlay)?.addEventListener("click", close);
     $("#fl-save", overlay)?.addEventListener("click", async () => {
+      const button = $("#fl-save", overlay);
+      if (button.disabled) return;
+      button.disabled = true;
       const note = $("#fl-note", overlay).value.trim();
       const category = $("#fl-cat", overlay).value.trim();
       const promptEl = $("#fl-prompt", overlay);
@@ -257,6 +272,7 @@ export class FavoritesView {
         await this.loadCats();
         this.load();
       } catch (e) { toast("保存失败：" + e.message, "err"); }
+      finally { button.disabled = false; }
     });
   }
 }

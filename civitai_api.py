@@ -76,15 +76,16 @@ _SHARED_API_SESSIONS: dict = {}
 def shared_api_session() -> aiohttp.ClientSession:
     """返回当前事件循环共用的 API 会话（连接池 + DNS 缓存）。"""
     loop = asyncio.get_running_loop()
-    session = _SHARED_API_SESSIONS.get(id(loop))
+    session = _SHARED_API_SESSIONS.get(loop)
     if session is None or session.closed:
         connector = aiohttp.TCPConnector(
             limit=24,
+            limit_per_host=8,
             ttl_dns_cache=300,
             enable_cleanup_closed=True,
         )
-        session = aiohttp.ClientSession(connector=connector)
-        _SHARED_API_SESSIONS[id(loop)] = session
+        session = aiohttp.ClientSession(connector=connector, cookie_jar=aiohttp.DummyCookieJar())
+        _SHARED_API_SESSIONS[loop] = session
     return session
 
 
@@ -304,6 +305,14 @@ class CivitaiClient:
     ):
         self.api_token = str(api_token or "").strip()
         self.proxy = _normalize_proxy_url(proxy)
+        if self.proxy:
+            try:
+                parsed_proxy = urlparse(self.proxy)
+                port = parsed_proxy.port if parsed_proxy.port is not None else (443 if parsed_proxy.scheme == "https" else 80)
+                if parsed_proxy.scheme not in {"http", "https"} or not parsed_proxy.hostname or port not in range(1, 65536):
+                    raise ValueError
+            except ValueError:
+                raise ValueError("代理地址无效或协议不受支持，请填写 HTTP/Mixed 端口，例如 http://127.0.0.1:7890") from None
         self.timeout = max(10, int(timeout or 60))
         self.cookie = str(cookie or "").strip()
         self.downloader = str(downloader or "aiohttp").strip().lower()
@@ -374,14 +383,13 @@ class CivitaiClient:
         blocked = self._proxy_circuit_block_message()
         if blocked:
             return RuntimeError(blocked)
-        if self.proxy and isinstance(exc, (ClientProxyConnectionError, ClientConnectorError, TimeoutError, OSError)):
+        if self._is_proxy_network_error(exc):
             return RuntimeError(
-                f"无法连接 Civitai 代理：{self.proxy}。请检查 Clash 是否开启 Allow LAN、Mixed Port 是否正确、"
-                f"防火墙是否放行。原始错误：{exc}"
+                "无法连接 Civitai 代理，请检查代理软件、HTTP/Mixed 端口和防火墙。"
             )
         if isinstance(exc, TimeoutError):
-            return RuntimeError(f"连接 Civitai 超时：请在 设置 → LoRA 下载 填写代理（如 http://127.0.0.1:7890），留空自动使用系统代理。原始错误：{exc}")
-        return RuntimeError(str(exc))
+            return RuntimeError("连接 Civitai 来源超时，请检查来源状态或代理节点。")
+        return RuntimeError(f"Civitai 网络连接失败（{type(exc).__name__}），请检查网络、代理或来源状态")
 
     def _proxy_circuit_key(self) -> str:
         proxy = str(self.proxy or "").strip()
@@ -406,6 +414,8 @@ class CivitaiClient:
         return state
 
     def _proxy_circuit_block_message(self) -> str:
+        if not self.proxy_circuit_breaker:
+            return ""
         state = self._proxy_circuit_state()
         if not state:
             return ""
@@ -417,9 +427,9 @@ class CivitaiClient:
             "huggingface": "Hugging Face",
         }.get(self.source_key, self.source_key or "网络来源")
         return (
-            f"{source_label} 代理 {self.proxy} 暂不可用，已暂时熔断，剩余约 {remain}s。"
+            f"{source_label} 代理暂不可用，已暂时熔断，剩余约 {remain}s。"
             "请检查 Clash Allow LAN/Mixed Port、防火墙、Docker/服务器到该代理的网络；"
-            f"原始错误：{reason}"
+            "可在网络恢复后重新尝试。"
         )
 
     def _check_proxy_circuit(self):
@@ -428,7 +438,9 @@ class CivitaiClient:
             raise RuntimeError(blocked)
 
     def _is_proxy_network_error(self, exc: Exception) -> bool:
-        return bool(self.proxy and isinstance(exc, (ClientProxyConnectionError, ClientConnectorError, TimeoutError, OSError)))
+        # A destination timeout (or one slow CDN) says nothing about the proxy
+        # listener. Concurrent searches must not turn it into a global lockout.
+        return bool(self.proxy and isinstance(exc, ClientProxyConnectionError))
 
     def _mark_proxy_failure(self, exc: Exception):
         key = self._proxy_circuit_key()
@@ -448,7 +460,7 @@ class CivitaiClient:
             "blocked_until": blocked_until,
             "failures": failures,
             "last_failure_at": now,
-            "reason": str(exc),
+            "reason": type(exc).__name__,
             "updated_at": now,
         }
 
@@ -663,9 +675,9 @@ class CivitaiClient:
         if status == 429:
             return f"{target} 请求过于频繁（HTTP 429），请稍后重试。"
         if status in {401, 403}:
+            if self.source_key == "huggingface":
+                return f"{target} 拒绝访问（HTTP {status}），请检查 Hugging Face Token 和仓库访问权限。"
             return f"{target} 拒绝访问（HTTP {status}），如需登录权限请在 设置 → 认证与密钥 配置 Civitai API Token 或登录 Cookie。"
-        if plain:
-            return f"{target} 返回 HTTP {status}: {plain[:160]}"
         return f"{target} 返回 HTTP {status}"
 
     async def _get_json(self, url: str):
@@ -738,7 +750,7 @@ class CivitaiClient:
             for attempt in range(1, max_retries + 1):
                 try:
                     self._check_proxy_circuit()
-                    async with session.get(url, proxy=self.proxy or None) as resp:
+                    async with session.get(url, headers=self._headers(), timeout=timeout, proxy=self.proxy or None) as resp:
                         self._mark_proxy_success()
                         text = await resp.text()
                         if resp.status == 200:
@@ -795,7 +807,7 @@ class CivitaiClient:
             for attempt in range(1, max_retries + 1):
                 try:
                     self._check_proxy_circuit()
-                    async with session.post(url, json=payload or {}, proxy=self.proxy or None) as resp:
+                    async with session.post(url, json=payload or {}, headers=request_headers, timeout=timeout, proxy=self.proxy or None) as resp:
                         self._mark_proxy_success()
                         text = await resp.text()
                         if resp.status == 200:
@@ -958,7 +970,7 @@ class CivitaiClient:
         }
         # Meilisearch 健康时 1-2s 返回；代理节点劣化时可能数秒。给它一个
         # 受整体网页预算约束的独立窗口，超时立刻走 REST 回退，避免单个
-        # 慢通道把整场多词并发搜索拖满时限（桌面端整场预算 9s）。
+        # 慢通道把整场多词并发搜索拖满时限（桌面端另有整场预算）。
         meili_budget = max(4.0, min(6.0, self._combined_search_timeout() - 2.0))
         data = await asyncio.wait_for(
             self._post_json(
@@ -1027,7 +1039,10 @@ class CivitaiClient:
         永远超时、只剩失败的 REST，最终误报"搜索失败"。因此预算需覆盖一次
         完整的 Meili 往返（下限 8s），同时给出整体上限避免卡死。
         """
-        return min(32.0, max(14.0, self.timeout * 0.5))
+        return min(22.0, max(10.0, self.timeout * 0.3))
+
+    def _search_hedge_delay(self) -> float:
+        return 2.0
 
     @staticmethod
     def _merge_lora_search_results(*groups, limit: int) -> list:
@@ -1055,26 +1070,50 @@ class CivitaiClient:
         return results
 
     async def search_loras(self, query: str = "lora", limit: int = 10, base_models=None) -> list:
-        """Search Civitai LoRAs through the public website index first.
+        """Prefer the website index; hedge with REST when it stalls.
 
-        The website index is the authoritative search experience (especially for
-        CJK and aliases). REST/token search is deliberately sequential fallback;
-        running both for every query caused rate limits, duplicate work and poor
-        ranking compared with Civitai's own results page.
+        Fast web responses make exactly one search. A slow index cannot consume
+        the entire caller deadline before REST gets its first opportunity.
         """
         query = str(query or "lora").strip() or "lora"
         limit = max(1, min(int(limit or 10), 240))
         base_models = [str(x).strip() for x in (base_models or ["Anima"]) if str(x).strip()] or ["Anima"]
+        budget = self._combined_search_timeout()
+        deadline = asyncio.get_running_loop().time() + budget
+        web = asyncio.create_task(self.search_loras_via_web(query=query, limit=limit, base_models=base_models))
+        tasks = [web]
+        last_error = None
         try:
-            web_results = await asyncio.wait_for(
-                self.search_loras_via_web(query=query, limit=limit, base_models=base_models),
-                timeout=self._combined_search_timeout(),
-            )
-            if web_results:
-                return list(web_results)[:limit]
-        except Exception as exc:
-            logger.warning("[ComfyUI] Civitai 网页全文搜索失败，才回退 REST Token：%s", exc)
-        return await self._search_loras_rest_api(query=query, limit=limit, base_models=base_models)
+            done, _ = await asyncio.wait([web], timeout=min(self._search_hedge_delay(), max(.001, budget / 2)))
+            if done:
+                try:
+                    items = web.result()
+                    if items:
+                        return list(items)[:limit]
+                except Exception as exc:
+                    last_error = exc
+            rest = asyncio.create_task(self._search_loras_rest_api(query=query, limit=limit, base_models=base_models))
+            tasks.append(rest)
+            pending = {rest} if done else {web, rest}
+            while pending:
+                finished, pending = await asyncio.wait(pending, timeout=max(.001, deadline - asyncio.get_running_loop().time()), return_when=asyncio.FIRST_COMPLETED)
+                if not finished:
+                    raise RuntimeError("Civitai 搜索通道均超时，请检查来源状态或代理节点")
+                for task in sorted(finished, key=lambda item: item is not web):
+                    try:
+                        items = task.result()
+                        if items:
+                            return list(items)[:limit]
+                    except Exception as exc:
+                        last_error = exc
+            if last_error:
+                raise last_error
+            return []
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def search_loras_via_web(self, query: str = "lora", limit: int = 10, base_models=None) -> list:
         """Use Civitai's public web search backend for CJK-friendly full-text results."""
@@ -1415,11 +1454,10 @@ class CivitaiClient:
                 return url, level, hidden
             return "", fallback_level, hidden + (1 if fallback else 0)
 
-        async def fetch_items(base_model: str, fetch_limit: int, sort: str):
+        async def fetch_items(base_model: str, fetch_limit: int):
             params = {
                 "query": query,
                 "types": "LORA",
-                "sort": sort,
                 "limit": max(1, min(int(fetch_limit or limit), 20)),
             }
             if base_model:
@@ -1480,29 +1518,20 @@ class CivitaiClient:
         seen = set()
         discovery_seen = set()
         fetch_limit = max(limit, 12)
-        sorts = ["Most Downloaded", "Highest Rated"]
-        strict_results = await asyncio.gather(
-            *[fetch_items(base, fetch_limit, sort) for base in base_models for sort in sorts],
-            return_exceptions=True,
-        )
-        strict_items = []
-        errors = []
-        for item in strict_results:
-            if isinstance(item, Exception):
-                errors.append(item)
-            else:
-                strict_items.extend(item)
-        loose_items = []
-        if len(strict_items) < limit:
-            loose_results = await asyncio.gather(
-                *[fetch_items("", max(limit * 2, 12), sort) for sort in sorts],
-                return_exceptions=True,
-            )
-            for item in loose_results:
-                if isinstance(item, Exception):
-                    errors.append(item)
-                else:
-                    loose_items.extend(item)
+        # The canonical relevance query is enough for the common case. Waiting
+        # for two expensive global sorts used to hide already usable results.
+        strict_items, loose_items, errors = [], [], []
+        try:
+            loose_items = await fetch_items("", fetch_limit)
+            append_results(loose_items, results, seen)
+        except Exception as exc:
+            errors.append(exc)
+        if not results:
+            for base in base_models:
+                try:
+                    strict_items.extend(await fetch_items(base, fetch_limit))
+                except Exception as exc:
+                    errors.append(exc)
         if errors and not strict_items and not loose_items:
             raise errors[0]
         def append_discovery_items(items):
@@ -1809,278 +1838,18 @@ class CivitaiClient:
         }
 
     async def download_file(self, download_url: str, dest_path: Path, progress_cb=None) -> Path:
-        if self.downloader in {"multithread", "multi", "idm", "builtin"}:
-            try:
-                return await self.download_file_multithread(download_url, dest_path, progress_cb=progress_cb)
-            except RuntimeError as exc:
-                if "401" in str(exc):
-                    raise
-                logger.warning(f"[ComfyUI] 内置多线程下载失败，回退单线程下载：{exc}")
-            except Exception as exc:
-                logger.warning(f"[ComfyUI] 内置多线程下载异常，回退单线程下载：{self._format_network_error(exc)}")
-            return await self.download_file_single(download_url, dest_path, progress_cb=progress_cb)
-
         if self.downloader in {"aria2", "aria2c"}:
             return await self.download_file_aria2(download_url, dest_path, progress_cb=progress_cb)
-
-        return await self.download_file_single(download_url, dest_path, progress_cb=progress_cb)
+        from winefox_core.lora_transfer import download
+        return await download(self, download_url, dest_path, parallel=self.downloader in {"multithread", "multi", "idm", "builtin"}, progress_cb=progress_cb)
 
     async def download_file_single(self, download_url: str, dest_path: Path, progress_cb=None) -> Path:
-        dest_path = Path(dest_path)
-        dest_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = dest_path.with_suffix(dest_path.suffix + ".part")
-        part_dir = dest_path.parent / f".{dest_path.name}.parts"
-        timeout = aiohttp.ClientTimeout(total=None, connect=min(30, self.timeout), sock_read=120)
-        headers = self._headers()
-        last_report = 0
-        downloaded = 0
-        logger.info(f"[ComfyUI] 使用单线程下载：{dest_path.name}")
-        try:
-            async with aiohttp.ClientSession(
-                headers=headers,
-                timeout=timeout,
-                trace_configs=self._download_trace_configs(),
-            ) as session:
-                self._check_proxy_circuit()
-                async with session.get(download_url, proxy=self.proxy or None) as resp:
-                    self._mark_proxy_success()
-                    if resp.status != 200:
-                        text = await resp.text()
-                        if resp.status == 401:
-                            raise RuntimeError(
-                                "下载失败 401：该模型作者要求登录后下载。"
-                                "Civitai API Token 不一定等同网页登录态；请在 设置 → 认证与密钥 配置 Civitai 登录 Cookie "
-                                "（已登录浏览器 F12 → Network → 任意 civitai.com 请求 → 复制 Cookie 请求头，支持整段粘贴），"
-                                "或确认 API Token 对该资源有下载权限。"
-                            )
-                        raise RuntimeError(f"下载失败 {resp.status}: {text[:160]}")
-                    total = int(resp.headers.get("Content-Length") or 0)
-                    with open(tmp_path, "wb") as fp:
-                        async for chunk in resp.content.iter_chunked(1024 * 1024):
-                            if not chunk:
-                                continue
-                            fp.write(chunk)
-                            downloaded += len(chunk)
-                            now = time.time()
-                            if progress_cb and now - last_report >= 8:
-                                last_report = now
-                                await progress_cb(downloaded, total)
-        except RuntimeError:
-            raise
-        except Exception as exc:
-            if self._is_proxy_network_error(exc):
-                self._mark_proxy_failure(exc)
-            raise RuntimeError(self._format_network_error(exc)) from exc
-        tmp_path.replace(dest_path)
-        try:
-            shutil.rmtree(part_dir, ignore_errors=True)
-        except Exception:
-            pass
-        return dest_path
-
-    async def _probe_download(self, session: aiohttp.ClientSession, download_url: str):
-        async def range_probe(original_error: Exception = None):
-            req_headers = {"Range": "bytes=0-0"}
-            self._check_proxy_circuit()
-            async with session.get(download_url, headers=req_headers, proxy=self.proxy or None, allow_redirects=True) as resp:
-                self._mark_proxy_success()
-                if resp.status == 401:
-                    raise RuntimeError(
-                        "下载失败 401：该模型作者要求登录后下载。请在 设置 → 认证与密钥 配置 Civitai 登录 Cookie，"
-                        "或确认 API Token 对该资源有下载权限。"
-                    )
-                if resp.status == 206:
-                    content_range = str(resp.headers.get("Content-Range") or "")
-                    match = re.search(r"/(\d+)\s*$", content_range)
-                    total = int(match.group(1)) if match else 0
-                    if total:
-                        return total, True
-                if resp.status >= 400:
-                    text = await resp.text()
-                    if original_error:
-                        raise original_error
-                    raise RuntimeError(f"下载 Range 探测失败 {resp.status}: {text[:160]}")
-                length = int(resp.headers.get("Content-Length") or 0)
-                return length, False
-
-        self._check_proxy_circuit()
-        async with session.head(download_url, proxy=self.proxy or None, allow_redirects=True) as resp:
-            self._mark_proxy_success()
-            if resp.status == 401:
-                raise RuntimeError(
-                    "下载失败 401：该模型作者要求登录后下载。请在 设置 → 认证与密钥 配置 Civitai 登录 Cookie，"
-                    "或确认 API Token 对该资源有下载权限。"
-                )
-            if resp.status >= 400:
-                text = await resp.text()
-                return await range_probe(RuntimeError(f"下载探测失败 {resp.status}: {text[:160]}"))
-            length = int(resp.headers.get("Content-Length") or 0)
-            accept_ranges = "bytes" in str(resp.headers.get("Accept-Ranges") or "").lower()
-            if not accept_ranges:
-                probed_length, probed_ranges = await range_probe()
-                if probed_ranges:
-                    return probed_length, True
-            return length, accept_ranges
+        from winefox_core.lora_transfer import download
+        return await download(self, download_url, dest_path, parallel=False, progress_cb=progress_cb)
 
     async def download_file_multithread(self, download_url: str, dest_path: Path, progress_cb=None) -> Path:
-        """内置 Range 分片并发下载，类似 IDM 的多线程下载。"""
-        dest_path = Path(dest_path)
-        dest_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = dest_path.with_suffix(dest_path.suffix + ".part")
-        timeout = aiohttp.ClientTimeout(total=None, connect=min(30, self.timeout), sock_read=120)
-        headers = self._headers()
-
-        async with aiohttp.ClientSession(
-            headers=headers,
-            timeout=timeout,
-            trace_configs=self._download_trace_configs(),
-        ) as session:
-            total, accept_ranges = await self._probe_download(session, download_url)
-            if not total or not accept_ranges or self.split <= 1:
-                raise RuntimeError("服务器不支持 Range 分片或无法获取文件大小")
-
-            if tmp_path.exists() and tmp_path.stat().st_size != total:
-                tmp_path.unlink()
-            if not tmp_path.exists():
-                with open(tmp_path, "wb") as fp:
-                    fp.truncate(total)
-
-            part_dir = dest_path.parent / f".{dest_path.name}.parts"
-            part_dir.mkdir(parents=True, exist_ok=True)
-            chunk_size = (total + self.split - 1) // self.split
-            ranges = []
-            for idx in range(self.split):
-                start = idx * chunk_size
-                if start >= total:
-                    break
-                end = min(total - 1, start + chunk_size - 1)
-                ranges.append((idx, start, end))
-
-            downloaded_parts = {}
-            resume_offsets = {}
-            for idx, start, end in ranges:
-                marker = part_dir / f"{idx}.done"
-                if marker.exists():
-                    try:
-                        done = int(marker.read_text(encoding="utf-8") or "0")
-                    except Exception:
-                        done = 0
-                    if done == end - start + 1:
-                        downloaded_parts[idx] = done
-                        continue
-                progress_marker = part_dir / f"{idx}.progress"
-                if progress_marker.exists():
-                    try:
-                        done = int(progress_marker.read_text(encoding="utf-8") or "0")
-                    except Exception:
-                        done = 0
-                    expected = end - start + 1
-                    if 0 < done < expected:
-                        resume_offsets[idx] = done
-
-            lock = asyncio.Lock()
-            downloaded = sum(downloaded_parts.values()) + sum(resume_offsets.values())
-            last_report = 0
-
-            async def fetch_range(idx: int, start: int, end: int):
-                nonlocal downloaded, last_report
-                marker = part_dir / f"{idx}.done"
-                if idx in downloaded_parts:
-                    return
-                progress_marker = part_dir / f"{idx}.progress"
-                expected = end - start + 1
-                completed = min(max(int(resume_offsets.get(idx) or 0), 0), expected)
-                last_exc = None
-                max_attempts = 3
-                for attempt in range(max_attempts):
-                    written = 0
-                    attempt_base = completed
-                    try:
-                        if completed >= expected:
-                            marker.write_text(str(expected), encoding="utf-8")
-                            try:
-                                progress_marker.unlink()
-                            except Exception:
-                                pass
-                            return
-                        req_headers = dict(headers)
-                        req_headers["Range"] = f"bytes={start + completed}-{end}"
-                        last_marker_write = 0
-                        self._check_proxy_circuit()
-                        async with session.get(download_url, headers=req_headers, proxy=self.proxy or None) as resp:
-                            self._mark_proxy_success()
-                            if resp.status == 401:
-                                raise RuntimeError("下载失败 401：请在 设置 → 认证与密钥 配置 Civitai 登录 Cookie。")
-                            if resp.status != 206:
-                                text = await resp.text()
-                                raise RuntimeError(f"分片 {idx} 下载失败 {resp.status}: {text[:160]}")
-                            with open(tmp_path, "r+b") as fp:
-                                async for chunk in resp.content.iter_chunked(1024 * 512):
-                                    if not chunk:
-                                        continue
-                                    fp.seek(start + completed + written)
-                                    fp.write(chunk)
-                                    written += len(chunk)
-                                    async with lock:
-                                        downloaded += len(chunk)
-                                        now = time.time()
-                                        if progress_cb and now - last_report >= 8:
-                                            last_report = now
-                                            await progress_cb(downloaded, total)
-                                    if written - last_marker_write >= 8 * 1024 * 1024:
-                                        progress_marker.write_text(str(completed + written), encoding="utf-8")
-                                        last_marker_write = written
-                        completed += written
-                        progress_marker.write_text(str(completed), encoding="utf-8")
-                        if completed != expected:
-                            raise RuntimeError(f"分片 {idx} 大小异常：{completed}/{expected}")
-                        marker.write_text(str(expected), encoding="utf-8")
-                        try:
-                            progress_marker.unlink()
-                        except Exception:
-                            pass
-                        return
-                    except Exception as exc:
-                        if self._is_proxy_network_error(exc):
-                            self._mark_proxy_failure(exc)
-                            raise
-                        last_exc = exc
-                        completed = min(max(completed, attempt_base + written), expected)
-                        if completed:
-                            try:
-                                progress_marker.write_text(str(completed), encoding="utf-8")
-                            except Exception:
-                                pass
-                        if "401" in str(exc):
-                            raise
-                        if attempt + 1 >= max_attempts:
-                            break
-                        logger.warning(
-                            f"[ComfyUI] 分片 {idx} 下载失败，准备重试 {attempt + 2}/{max_attempts}: {self._format_network_error(exc)}"
-                        )
-                        await asyncio.sleep(1.2 * (attempt + 1))
-                raise RuntimeError(self._format_network_error(last_exc or RuntimeError(f"分片 {idx} 下载失败")))
-
-            logger.info(f"[ComfyUI] 使用内置多线程下载：{dest_path.name} split={len(ranges)} size={total} direct_range_write=1")
-            await asyncio.gather(*(fetch_range(idx, start, end) for idx, start, end in ranges))
-
-        if tmp_path.stat().st_size != total:
-            raise RuntimeError(f"多线程下载文件大小异常：{tmp_path.stat().st_size}/{total}")
-        for idx, start, end in ranges:
-            marker = part_dir / f"{idx}.done"
-            expected = end - start + 1
-            try:
-                done = int(marker.read_text(encoding="utf-8") or "0")
-            except Exception:
-                done = 0
-            if done != expected:
-                raise RuntimeError(f"分片缺失：{idx}.done")
-        tmp_path.replace(dest_path)
-        try:
-            shutil.rmtree(part_dir, ignore_errors=True)
-        except Exception:
-            pass
-        return dest_path
+        from winefox_core.lora_transfer import download
+        return await download(self, download_url, dest_path, parallel=True, progress_cb=progress_cb)
 
     async def download_file_aria2(self, download_url: str, dest_path: Path, progress_cb=None) -> Path:
         """使用 aria2c 多连接下载。需要系统已安装 aria2c。"""
@@ -2184,13 +1953,13 @@ class HuggingFaceClient(CivitaiClient):
         blocked = self._proxy_circuit_block_message()
         if blocked:
             return RuntimeError(blocked)
-        if self.proxy and isinstance(exc, (ClientProxyConnectionError, ClientConnectorError, TimeoutError, OSError)):
+        if self._is_proxy_network_error(exc):
             return RuntimeError(
-                f"无法连接 Hugging Face 代理：{self.proxy}。请检查代理/防火墙/Docker 网络。原始错误：{exc}"
+                "无法连接 Hugging Face 代理，请检查代理软件、HTTP/Mixed 端口和防火墙。"
             )
         if isinstance(exc, TimeoutError):
-            return RuntimeError(f"连接 Hugging Face 超时，请检查网络或代理。原始错误：{exc}")
-        return RuntimeError(str(exc))
+            return RuntimeError("连接 Hugging Face 来源超时，请检查来源状态或代理节点。")
+        return RuntimeError(f"Hugging Face 网络连接失败（{type(exc).__name__}），请检查网络、代理或来源状态")
 
     async def _get_json(self, url: str):
         if self.request_adapter:
@@ -2269,21 +2038,6 @@ class HuggingFaceClient(CivitaiClient):
             if self._is_proxy_network_error(exc):
                 self._mark_proxy_failure(exc)
             raise RuntimeError(self._format_network_error(exc)) from exc
-
-    async def _probe_download(self, session: aiohttp.ClientSession, download_url: str):
-        self._check_proxy_circuit()
-        async with session.head(download_url, proxy=self.proxy or None, allow_redirects=True) as resp:
-            self._mark_proxy_success()
-            if resp.status == 401:
-                raise RuntimeError("下载失败 401：该 Hugging Face 仓库需要权限，请设置 huggingface_api_token。")
-            if resp.status == 403:
-                raise RuntimeError("下载失败 403：该 Hugging Face 仓库可能是 gated/private，请确认账号已获授权并设置 huggingface_api_token。")
-            if resp.status >= 400:
-                text = await resp.text()
-                raise RuntimeError(f"下载探测失败 {resp.status}: {text[:160]}")
-            length = int(resp.headers.get("Content-Length") or 0)
-            accept_ranges = "bytes" in str(resp.headers.get("Accept-Ranges") or "").lower()
-            return length, accept_ranges
 
     def parse_reference(self, ref: str) -> dict:
         ref = str(ref or "").strip().strip("<>")

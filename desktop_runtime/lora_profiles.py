@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import hashlib
 import logging
+import math
 import os
 import re
 import time
@@ -146,6 +147,11 @@ def _metadata_json_map(value: Any) -> dict[str, Any]:
 
 
 def _metadata_family(filename: str, metadata: Mapping[str, Any]) -> str:
+    declared = " ".join(str(metadata.get(field) or "") for field in ("baseModel", "modelspec.architecture", "ss_base_model_version", "ss_sd_model_name")).casefold()
+    if re.search(r"(?:^|[^a-z])anima(?:[^a-z]|$)", declared):
+        return MODEL_FAMILY_ANIMA
+    if re.search(r"sdxl|sd[_ -]?xl|illustrious|noobai|noobxl|pony", declared):
+        return MODEL_FAMILY_ILLUSTRIOUS
     evidence = " ".join(
         str(value or "")
         for value in (
@@ -189,6 +195,12 @@ def _metadata_aliases(filename: str, metadata: Mapping[str, Any]) -> list[str]:
 
 
 def _metadata_activation_tags(metadata: Mapping[str, Any], aliases: Iterable[str]) -> list[str]:
+    # Explicit model-card/user triggers are authoritative. Training frequency
+    # remains a conservative fallback, never a prerequisite for these fields.
+    from winefox_core.lora_binding import text_list
+    for field in ("trigger_words", "activation_tags", "trainedWords", "trained_words", "modelspec.trigger_phrase", "ss_trigger_words"):
+        if field in metadata:
+            return text_list(metadata[field])[:40]
     frequencies = _metadata_json_map(metadata.get("ss_tag_frequency"))
     totals: dict[str, float] = {}
     display: dict[str, str] = {}
@@ -254,14 +266,17 @@ def profile_from_comfy_metadata(
         family = fallback_family
     aliases = _metadata_aliases(filename, metadata)
     triggers = _metadata_activation_tags(metadata, aliases)
-    if not family or not aliases or not triggers:
+    if not family or not aliases or (not triggers and not _metadata_family(filename, metadata)):
         return None
+    explicit = any(field in metadata for field in ("trigger_words", "activation_tags", "trainedWords", "trained_words", "modelspec.trigger_phrase", "ss_trigger_words"))
     key = aliases[0]
     return family, {
         "lora": str(filename),
         "character": key,
         "aliases": aliases[1:],
-        "trigger_words": triggers,
+        "trigger_words": triggers if explicit else [],
+        "suggested_trigger_words": [] if explicit else triggers,
+        "trigger_source": "model_metadata" if explicit else "training_frequency" if triggers else "unknown",
         "source": "comfyui_metadata",
     }
 
@@ -477,7 +492,7 @@ def _coerce_strength(value: Any, default: float) -> float:
         strength = float(value)
     except (TypeError, ValueError):
         return default
-    if strength <= 0 or strength > 1.5:
+    if not math.isfinite(strength) or strength < -1.5 or strength > 1.5:
         return default
     return strength
 
@@ -489,14 +504,9 @@ def resolve_prompt_loras(
     inventory: Iterable[str],
     excluded_keys: Iterable[str] = (),
 ) -> AutoLoraResolution:
-    excluded = {
-        normalize_lora_key(key) for key in excluded_keys if normalize_lora_key(key)
-    }
-    available = {
-        normalize_lora_key(name): str(name)
-        for name in inventory
-        if normalize_lora_key(name) and normalize_lora_key(name) not in excluded
-    }
+    from winefox_core.lora_binding import LoraNameIndex, lora_is_excluded
+    excluded = tuple(excluded_keys)
+    available = LoraNameIndex(name for name in inventory if not lora_is_excluded(name, excluded))
     # 静默自动注入只认精确命中：模糊匹配的近似词不该替用户决定用哪个 LoRA。
     matched = service.match(text, family=family, limit=3, include_fuzzy=False)
     candidates = matched.matches if matched.multi else matched.matches[:1]
@@ -504,7 +514,7 @@ def resolve_prompt_loras(
     triggers: list[str] = []
     evidence: list[dict[str, Any]] = []
     for match in candidates:
-        actual_name = available.get(normalize_lora_key(match.lora_name))
+        actual_name = available.resolve(match.lora_name)
         if not actual_name:
             continue
         selected.append({
@@ -538,43 +548,59 @@ def resolve_selected_lora_triggers(
     family: str,
     selections: Iterable[dict[str, Any]],
     excluded_keys: Iterable[str] = (),
+    *,
+    prompt: str = '',
+    translated_prompt: str = '',
 ) -> tuple[str, ...]:
-    """Return trigger tags for LoRAs explicitly selected by the desktop UI."""
-    excluded = {
-        normalize_lora_key(key) for key in excluded_keys if normalize_lora_key(key)
-    }
+    return resolve_selected_lora_prompt(service, family, selections, excluded_keys, prompt=prompt, translated_prompt=translated_prompt).tags
+
+
+def resolve_selected_lora_prompt(
+    service: LoraService,
+    family: str,
+    selections: Iterable[dict[str, Any]],
+    excluded_keys: Iterable[str] = (),
+    *,
+    prompt: str = '',
+    translated_prompt: str = '',
+):
+    """Plan request-specific injection for manual, confirmed and automatic LoRAs."""
+    from winefox_core.lora_binding import LoraNameIndex, lora_is_excluded, lora_path_key
+    from winefox_core.lora_prompt import plan_lora_prompt
+    from dataclasses import replace
+    excluded = tuple(excluded_keys)
     profiles = {
-        normalize_lora_key(profile.lora_name): profile
+        lora_path_key(profile.lora_name): profile
         for profile in service.profiles_for(family).values()
         if normalize_lora_key(profile.lora_name)
-        and normalize_lora_key(profile.lora_name) not in excluded
+        and not lora_is_excluded(profile.lora_name, excluded)
     }
-    triggers: list[str] = []
-    seen: set[str] = set()
+    index = LoraNameIndex(profiles)
+    selected = []
     for selection in selections:
         if not isinstance(selection, dict):
             continue
         name = selection.get("name") or selection.get("id") or selection.get("lora_name")
-        profile = profiles.get(normalize_lora_key(name))
+        profile = profiles.get(index.resolve(name))
         if profile is None:
             continue
-        for trigger in profile.trigger_words:
-            value = str(trigger or "").strip()
-            marker = value.casefold()
-            if value and marker not in seen:
-                seen.add(marker)
-                triggers.append(value)
-    return tuple(triggers)
+        if profile.trigger_words and service._profile_is_multi_character_pack(profile):
+            # Keep existing multi-character-pack routing before applying edit
+            # precedence; selecting one role must not activate every pack role.
+            routed = service._route_multi_character_trigger(profile.trigger_words, profile, prompt)
+            profile = replace(profile, trigger_words=list(routed))
+        selected.append(profile)
+    return plan_lora_prompt(selected, prompt, translated_prompt)
 
 
 def merge_prompt_tags(prompt: str, tags: Iterable[str]) -> str:
-    parts = [part.strip() for part in str(prompt or "").split(",") if part.strip()]
-    seen = {part.casefold() for part in parts}
-    for tag in tags:
-        value = str(tag or "").strip()
-        if value and value.casefold() not in seen:
+    from winefox_core.lora_binding import split_prompt_tags, text_list, trigger_key
+    parts = split_prompt_tags(str(prompt or ""))
+    seen = {trigger_key(part) for part in parts}
+    for value in text_list(tags if isinstance(tags, str) else list(tags)):
+        if value and trigger_key(value) not in seen:
             parts.append(value)
-            seen.add(value.casefold())
+            seen.add(trigger_key(value))
     return ", ".join(parts)
 
 

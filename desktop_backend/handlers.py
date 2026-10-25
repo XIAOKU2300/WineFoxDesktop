@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 import time
 import io
@@ -546,13 +547,47 @@ async def handle_get_upload(request: web.Request) -> web.Response:
 def _validate_job_payload(body: Any) -> dict:
     if not isinstance(body, dict):
         raise ValidationError("任务请求体需要 JSON 对象")
-    prompt = body.get("prompt")
-    if not isinstance(prompt, str) or not prompt.strip():
+    body = dict(body)
+    mode = body.get("mode", "txt2img")
+    if not isinstance(mode, str) or mode not in {"txt2img", "img2img"}:
+        raise ValidationError("mode 必须是 txt2img 或 img2img")
+    prompt = body.get("prompt", "")
+    if not isinstance(prompt, str) or (mode == "txt2img" and not prompt.strip()):
         raise ValidationError("prompt 必须是非空字符串")
     if "upload_ids" in body and body["upload_ids"] is not None:
         ids = body["upload_ids"]
         if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
             raise ValidationError("upload_ids 需要字符串数组")
+    if mode == "img2img":
+        ref = body.get("ref_image")
+        has_ref = isinstance(ref, dict) and isinstance(ref.get("url"), str) and bool(re.fullmatch(r"/api/v1/uploads/[^/?#]+", ref["url"]))
+        if not has_ref and not body.get("upload_ids"):
+            raise ValidationError("图生图需要先上传参考图")
+        body["prompt"] = prompt
+    for key in ("width", "height", "steps", "seed"):
+        value = body.get(key)
+        if value is None:
+            continue
+        try:
+            number = int(value)
+            if isinstance(value, bool) or (isinstance(value, float) and value != number) or number < (-1 if key == "seed" else 1):
+                raise ValueError
+            if key in {"width", "height"} and (number < 64 or number % 8):
+                raise ValueError
+            if key == "seed" and number >= 2**63 - 1:
+                raise ValueError
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValidationError(f"{key} 需要有效整数") from exc
+        body[key] = number
+    if body.get("cfg") is not None:
+        try:
+            value = body["cfg"]
+            cfg = float(value)
+            if isinstance(value, bool) or not math.isfinite(cfg) or cfg < 0:
+                raise ValueError
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValidationError("cfg 需要非负有限数值") from exc
+        body["cfg"] = cfg
     return body
 
 

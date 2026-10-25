@@ -149,7 +149,7 @@ class TestListGet(LoraLibraryServiceBase):
 
 
 class TestUpdate(LoraLibraryServiceBase):
-    def test_update_cleans_and_expands_aliases(self):
+    def test_update_cleans_aliases_without_regenerating_removed_values(self):
         self._weight_file("miku.safetensors")
         rec = self._register("miku.safetensors", display_name="Miku")
         self._seed_profile(
@@ -158,11 +158,12 @@ class TestUpdate(LoraLibraryServiceBase):
         )
         result = self.svc.update(rec.id, aliases=["  hatsune miku ", "初音未来", "初音ミク", ""])
         aliases = result["aliases"]
-        # 清洗：去空白、空串丢弃；角色别名表扩展；按匹配键去重
+        # User edits replace aliases exactly; expansion belongs to import,
+        # otherwise deleting a generated nickname can never persist.
         self.assertIn("hatsune miku", aliases)
         self.assertIn("初音未来", aliases)
         self.assertIn("初音ミク", aliases)
-        self.assertIn("miku", aliases)
+        self.assertNotIn("miku", aliases)
         # 持久化到 profile_store
         stored = self.profile_store.get("illustrious", "miku")
         self.assertIsNotNone(stored)

@@ -13,6 +13,7 @@ from typing import Any, Callable, Mapping
 
 from desktop_backend.errors import AppError
 from winefox_core.lora_identity import clean_alias, expand_aliases, extract_identity_candidates, normalize_key
+from winefox_core.lora_binding import LoraNameIndex, lora_path_key, text_list
 from winefox_core.lora_service import (
     LoraService,
     LoraProfile,
@@ -55,9 +56,7 @@ def _public_text(value: Any, limit: int = 200) -> str:
 def _split_list(value: Any):
     if value is None:
         return None
-    if isinstance(value, str):
-        return [piece for piece in re.split(r"[,，;；\n\r]+", value) if piece]
-    return list(value)
+    return text_list(value)
 
 
 def _clean_list(values: Any) -> list[str]:
@@ -164,10 +163,12 @@ class LoraLibraryService:
     # -- 档案关联 ------------------------------------------------------------
 
     def _profile_for_asset(self, asset: Any) -> tuple[Any, dict[str, Any]]:
-        wanted = normalize_lora_key(asset.filename)
-        for rec in self.profile_store.get_family(asset.model_family):
+        records = self.profile_store.get_family(asset.model_family)
+        names = [str(rec.profile.get("lora") or rec.profile.get("lora_name") or "") for rec in records]
+        wanted = LoraNameIndex(names).resolve(asset.comfy_key or asset.filename)
+        for rec in records:
             profile = dict(rec.profile or {})
-            if wanted and normalize_lora_key(profile.get("lora") or profile.get("lora_name") or "") == wanted:
+            if wanted and lora_path_key(profile.get("lora") or profile.get("lora_name") or "") == lora_path_key(wanted):
                 return rec, profile
         return None, {}
 
@@ -179,7 +180,7 @@ class LoraLibraryService:
         identity = extract_identity_candidates(profile) if profile else None
         info = dict(asset.info or {})
         character = str(lp.character if lp else (identity.character if identity else "")).strip()
-        aliases = list(lp.aliases if lp and lp.aliases else (identity.aliases if identity else []))
+        aliases = list(lp.aliases if lp is not None else (identity.aliases if identity else []))
         triggers = list(lp.trigger_words if lp else [])
         role = list(lp.role_terms if lp else [])
         name = str(asset.display_name or character or Path(asset.filename).stem)
@@ -195,6 +196,7 @@ class LoraLibraryService:
             "character": _public_text(character, 100),
             "aliases": [_public_text(item, 100) for item in aliases if _public_text(item, 100)],
             "triggers": [_public_text(item, 100) for item in triggers if _public_text(item, 100)],
+            "trigger_candidates": [_public_text(item, 100) for item in text_list(profile.get("suggested_trigger_words")) if _public_text(item, 100)],
             "role": [_public_text(item, 100) for item in role if _public_text(item, 100)],
             "preview": _public_text(asset.preview_key, 200) or None,
             "state": asset.state,
@@ -310,7 +312,7 @@ class LoraLibraryService:
         if not profile:
             key = Path(asset.filename).stem
             profile = {
-                "lora": asset.filename,
+                "lora": asset.comfy_key or asset.filename,
                 "character": "",
                 "aliases": [],
                 "trigger_words": [],
@@ -320,26 +322,14 @@ class LoraLibraryService:
             }
         else:
             key = rec.display_key
-        existing_aliases = [str(item) for item in (profile.get("aliases") or []) if str(item or "").strip()]
-        new_aliases = _clean_list(aliases) if aliases is not None else existing_aliases
-        profile_name = str(profile.get("character") or profile.get("name") or asset.display_name or Path(asset.filename).stem)
-        trained = (
-            [str(item) for item in (profile.get("trigger_words") or []) if str(item or "").strip()]
-            if triggers is None
-            else [str(item) for item in _clean_list(triggers) if str(item or "").strip()]
-        )
-        # PATCH 传入 aliases 时按“替换”处理，否则 UI 中删掉的旧别名会被
-        # existing_aliases 再次合并回来，造成看似保存成功但永远删不掉。
-        alias_seed = new_aliases if aliases is not None else existing_aliases
-        profile["aliases"] = expand_aliases(
-            alias_seed,
-            profile_name=profile_name,
-            trained_words=trained,
-        )
+        if aliases is not None:
+            profile["aliases"] = _clean_list(aliases)
+            profile["aliases_authoritative"] = True
         if role is not None:
             profile["role_terms"] = _clean_list(role)
         if triggers is not None:
-            profile["trigger_words"] = _clean_list(triggers)
+            profile["trigger_words"] = text_list(triggers)
+            profile["trigger_source"] = "user"
         if not str(profile.get("character") or "").strip():
             identity = extract_identity_candidates(profile)
             if identity and identity.character:
@@ -365,6 +355,7 @@ class LoraLibraryService:
                 d = local_root / sub if sub else local_root
                 if d.is_dir():
                     dirs.append(d)
+                    break  # Never recursively import checkpoints from a ComfyUI root.
         for sub in _SOURCE_SUBDIRS:
             d = self.data_root / sub
             if d.is_dir():
@@ -575,33 +566,49 @@ class LoraLibraryService:
         for family in SUPPORTED_MODEL_FAMILIES:
             for rec in self.profile_store.get_family(family):
                 profile = dict(rec.profile or {})
-                key = normalize_lora_key(profile.get("lora") or profile.get("lora_name") or "")
+                key = lora_path_key(profile.get("lora") or profile.get("lora_name") or "")
                 if key and key not in profiles_by_file:
                     character = str(profile.get("character") or rec.display_key or "")
                     profiles_by_file[key] = (family, rec.display_key, character)
         # 文件系统扫描放线程池：大目录 iterdir/is_file/resolve 是同步 IO，
         # 直接跑会阻塞事件循环（启动后台扫描、设置保存自动扫描都会触发）
         candidates = await asyncio.to_thread(self._scan_lora_files, dirs)
+        profile_names = LoraNameIndex(profiles_by_file)
+        candidate_names = LoraNameIndex(filename for filename, _ in candidates)
         known: set[tuple[str, str]] = set()
-        for asset in self.asset_store.list(limit=5000):
-            known.add((asset.model_family, normalize_lora_key(asset.filename)))
+        for asset in self.asset_store.list(limit=2000):
+            name = asset.comfy_key or asset.filename
+            known.add((asset.model_family, lora_path_key(candidate_names.resolve(name) or name)))
         added = 0
         matched = 0
+        imported_profiles = 0
         for filename, parent_lower in candidates:
-            key = normalize_lora_key(filename)
+            key = lora_path_key(filename)
             if not key:
                 continue
-            profile_hit = profiles_by_file.get(key)
+            profile_hit = profiles_by_file.get(profile_names.resolve(filename))
             if profile_hit is not None:
                 family, _display, character = profile_hit
             else:
                 family = "anima" if "anima" in parent_lower else "illustrious"
                 character = ""
+                from .lora_import import local_lora_profile
+                path = next((base / filename for base in dirs if (base / filename).is_file()), None)
+                if path is not None:
+                    family, profile = await asyncio.to_thread(local_lora_profile, path, filename, family)
+                    if profile is not None:
+                        display_key = str(profile.get("character") or filename)
+                        if self.profile_store.get(family, display_key) is not None:
+                            display_key = filename
+                        self.profile_store.save(family, display_key, profile)
+                        character = str(profile.get("character") or "")
+                        imported_profiles += 1
             if (family, key) in known:
                 continue
             self.asset_store.register(
                 family,
                 filename,
+                comfy_key=filename,
                 display_name=character or Path(filename).stem,
                 source="local",
                 info={"scanned": True},
@@ -610,33 +617,44 @@ class LoraLibraryService:
             added += 1
             if profile_hit is not None:
                 matched += 1
+        if imported_profiles and self.on_profiles_changed is not None:
+            self.on_profiles_changed()
         return {
             "added": added,
             "matched_profiles": matched,
+            "imported_profiles": imported_profiles,
             "scanned_dirs": [str(d) for d in dirs],
         }
 
     @staticmethod
     def _scan_lora_files(dirs: list[Path]) -> list[tuple[str, str]]:
-        """同步扫描目录，返回 (文件名, 父目录小写) 列表（跨目录去重、按名排序）。"""
+        """Bounded recursive scan preserving paths and refusing symlink escapes."""
         results: list[tuple[str, str]] = []
         seen: set[str] = set()
         for directory in dirs:
-            try:
-                entries = sorted(directory.iterdir())
-            except OSError:
+            if directory.is_symlink():
                 continue
-            for entry in entries:
-                try:
-                    if not entry.is_file() or entry.suffix.lower() not in LoraLibraryService._SCAN_SUFFIXES:
+            root = directory.resolve()
+            for current, folders, files in os.walk(directory, followlinks=False):
+                current_path = Path(current)
+                folders[:] = sorted(folder for folder in folders if not folder.startswith(".") and folder != _DELETED_DIR_NAME and not (current_path / folder).is_symlink())
+                if len(current_path.relative_to(directory).parts) >= 8:
+                    folders[:] = []
+                for name in sorted(files):
+                    entry = current_path / name
+                    try:
+                        if entry.is_symlink() or entry.suffix.lower() not in LoraLibraryService._SCAN_SUFFIXES:
+                            continue
+                        resolved = entry.resolve()
+                        resolved.relative_to(root)
+                    except (OSError, ValueError):
                         continue
-                    resolved = str(entry.resolve())
-                except OSError:
-                    continue
-                if resolved in seen:
-                    continue
-                seen.add(resolved)
-                results.append((entry.name, str(entry.parent).lower()))
+                    if str(resolved) in seen:
+                        continue
+                    seen.add(str(resolved))
+                    results.append((entry.relative_to(directory).as_posix(), str(current_path).lower()))
+                    if len(results) >= 10000:
+                        return results
         return results
 
     # -- 匹配预览 ------------------------------------------------------------
@@ -655,12 +673,15 @@ class LoraLibraryService:
         # 已安装/未禁用/未隔离且文件在库的资产可进入候选；
         # 无资产记录的档案无禁用/隔离/缺失状态，视为可用。
         assets = {
-            normalize_lora_key(a.filename): a
+            lora_path_key(a.comfy_key or a.filename): a
             for a in self.asset_store.list(family, limit=2000)
         }
+        asset_names = LoraNameIndex(assets)
 
         def _is_eligible(lora_name: str) -> bool:
-            asset = assets.get(normalize_lora_key(lora_name))
+            if asset_names.ambiguous(lora_name):
+                return False
+            asset = assets.get(asset_names.resolve(lora_name))
             if asset is None:
                 return True
             return (
@@ -674,7 +695,7 @@ class LoraLibraryService:
             if not _is_eligible(selection.lora_name):
                 continue
             lp = profiles.get(selection.key)
-            asset = assets.get(normalize_lora_key(selection.lora_name))
+            asset = assets.get(asset_names.resolve(selection.lora_name))
             extra = dict(lp.extra) if lp else {}
             aliases = list(lp.aliases if lp else [])
             triggers = list(selection.trigger_words) or list(lp.trigger_words if lp else [])
@@ -737,11 +758,12 @@ class LoraLibraryService:
         候选携带解析所需的元数据，但送进 LLM 的净化载荷只含公开安全字段。
         """
         candidates: list[dict] = []
+        asset_names = LoraNameIndex(assets)
         for profile in service.profiles_for(family).values():
             lora_name = str(profile.lora_name or "").strip()
             if not lora_name or not is_eligible(lora_name):
                 continue
-            asset = assets.get(normalize_lora_key(lora_name))
+            asset = assets.get(asset_names.resolve(lora_name))
             extra = dict(profile.extra or {})
             candidates.append({
                 "key": str(profile.key or profile.lora_name),
@@ -772,13 +794,13 @@ class LoraLibraryService:
         if not candidates:
             return None
         try:
-            result = await llm.match(
+            result = await asyncio.wait_for(llm.match(
                 prompt=prompt,
                 candidates=candidates,
                 family=family,
                 revision=self._family_revision(family),
                 limit=max(1, min(int(limit or 5), 8)),
-            )
+            ), timeout=6.0)
         except Exception:
             return None
         if not isinstance(result, dict):

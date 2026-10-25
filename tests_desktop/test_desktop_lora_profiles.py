@@ -62,7 +62,8 @@ class DesktopLoraProfileTests(unittest.TestCase):
         self.assertIsNotNone(parsed)
         family, profile = parsed
         self.assertEqual(family, "illustrious")
-        self.assertEqual(profile["trigger_words"], ["aunahida"])
+        self.assertEqual(profile["trigger_words"], [])
+        self.assertEqual(profile["suggested_trigger_words"], ["aunahida"])
         self.assertFalse(any("\u3400" <= char <= "\u9fff" for char in profile["character"]))
 
     def test_metadata_title_can_preserve_a_specific_chinese_alias(self) -> None:
@@ -79,7 +80,7 @@ class DesktopLoraProfileTests(unittest.TestCase):
         self.assertIsNotNone(parsed)
         _, profile = parsed
         self.assertEqual(profile["character"], "纳西妲 Nahida")
-        self.assertIn("aunahida", profile["trigger_words"])
+        self.assertIn("aunahida", profile["suggested_trigger_words"])
 
     def test_metadata_does_not_turn_franchise_only_terms_into_profile(self) -> None:
         parsed = profile_from_comfy_metadata(
@@ -350,9 +351,10 @@ class DesktopLoraMetadataRefreshTests(unittest.IsolatedAsyncioTestCase):
             records = engine.lora_profile_store.get_family("illustrious")
             self.assertTrue(records)
             self.assertFalse((root / "cache" / "lora_profiles_metadata.json").is_file())
-            self.assertIn("adultnahida", engine._lora_profile_index)
-            profile = engine._lora_profile_index["adultnahida"][0]
-            self.assertEqual(profile.trigger_words, ["aunahida"])
+            self.assertIn("characters/adult_nahida.safetensors", engine._lora_profile_index)
+            profile = engine._lora_profile_index["characters/adult_nahida.safetensors"][0]
+            self.assertEqual(profile.trigger_words, [])
+            self.assertEqual(profile.extra["suggested_trigger_words"], ["aunahida"])
             self.assertEqual(engine.loaded_lora_profiles.sources, ("sqlite",))
             db.close()
 
@@ -379,7 +381,7 @@ class DesktopLoraReconcileTests(unittest.IsolatedAsyncioTestCase):
                 ["models/loras/Arknights_Mizuki.safetensors", "other.safetensors"]
             )
             self.assertEqual(stats["registered"], 2)
-            rec = engine.lora_asset_store.get("illustrious", "Arknights_Mizuki.safetensors")
+            rec = engine.lora_asset_store.get("illustrious", "models/loras/Arknights_Mizuki.safetensors")
             self.assertIsNotNone(rec)
             self.assertEqual(rec.source, "inventory")
             self.assertEqual(rec.comfy_key, "models/loras/Arknights_Mizuki.safetensors")
@@ -410,13 +412,13 @@ class DesktopLoraReconcileTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(stats["marked_missing"], 1)
             rec = engine.lora_asset_store.get("illustrious", "a.safetensors")
             self.assertTrue(rec.info.get("file_missing"))
-            self.assertIn(normalize_lora_key("a.safetensors"), engine._disabled_lora_keys)
+            self.assertIn("a.safetensors", engine._disabled_lora_keys)
             # 文件重新出现 -> 清除标记
             stats2 = engine._reconcile_lora_assets(["a.safetensors"])
             self.assertEqual(stats2["cleared_missing"], 1)
             rec = engine.lora_asset_store.get("illustrious", "a.safetensors")
             self.assertFalse(rec.info.get("file_missing"))
-            self.assertNotIn(normalize_lora_key("a.safetensors"), engine._disabled_lora_keys)
+            self.assertNotIn("a.safetensors", engine._disabled_lora_keys)
             engine.db.close()
 
     def test_unavailable_key_reload_includes_quarantined_assets(self) -> None:
@@ -430,7 +432,7 @@ class DesktopLoraReconcileTests(unittest.IsolatedAsyncioTestCase):
             engine.lora_asset_store.quarantine(rec.id, ".winefox-quarantine/q.safetensors")
             engine._reload_disabled_lora_keys()
             self.assertIn(
-                normalize_lora_key("quarantined.safetensors"),
+                "models/loras/quarantined.safetensors",
                 engine._disabled_lora_keys,
             )
             engine.db.close()

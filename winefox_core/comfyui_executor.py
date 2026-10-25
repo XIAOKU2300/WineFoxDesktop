@@ -24,7 +24,7 @@ import re
 import time
 import uuid
 from pathlib import Path, PurePosixPath
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from .comfyui_transport import ComfyUITransport
 from .comfyui_types import (
@@ -899,7 +899,9 @@ class ComfyUIExecutor:
     # ------------------------------------------------------------------
     # 完整管线
     # ------------------------------------------------------------------
-    async def run(self, snapshot: ExecutionSnapshot) -> ComfyUIResult:
+    async def run(
+        self, snapshot: ExecutionSnapshot, *, on_submitted: Optional[Callable[[str], None]] = None
+    ) -> ComfyUIResult:
         """完整执行：上传（如有）→ 提交（或恢复）→ 轮询 → 结果。
 
         输入只来自不可变 snapshot；本方法不读取/写入任何共享可变状态。
@@ -961,6 +963,11 @@ class ComfyUIExecutor:
                 ComfyUIQueueSubmitUnknownError("未能获得 prompt_id", kind=ErrorKind.QUEUE_SUBMIT_UNKNOWN),
                 meta, started, snapshot,
             )
+
+        # Persist the remote identity before waiting; a crash must never turn
+        # an accepted remote job into a second submission on restart.
+        if on_submitted is not None:
+            on_submitted(prompt_id)
 
         # 4) 轮询等待
         wait_snapshot = snapshot.clone_with(resume_prompt_id=prompt_id)

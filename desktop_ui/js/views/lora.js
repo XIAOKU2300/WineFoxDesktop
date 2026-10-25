@@ -8,7 +8,8 @@ import { store } from "../store.js";
 function formatLoraDownloadError(error) {
   const message = String(error?.message || error || "LoRA 下载失败").trim();
   if (/HTTP\s*401|Unauthorized|requires you to be logged in|要求登录/i.test(message)) {
-    return "Civitai 资源要求登录：请到设置 → 认证与密钥配置 Civitai 登录 Cookie，保存后重试；也可以换用公开资源。";
+    if (/Hugging\s*Face|huggingface/i.test(message)) return "Hugging Face 资源要求授权：请检查该仓库的访问权限和 Hugging Face Token，保存后重试。";
+    return "Civitai 资源要求登录：请到设置 → 认证与密钥配置 API Token 或登录 Cookie，并确认该账号有模型下载权限。";
   }
   return message;
 }
@@ -968,6 +969,7 @@ export class LoraLibraryView {
       if (!this.onlineResults.length && !this.onlineErrors.length) toast("没有找到匹配当前模型族的 LoRA", "warn");
       if (this.onlineResults.length && this.onlineErrors.length) toast("部分来源失败，已展示可用结果", "warn");
     } catch (error) {
+      if (this.searchController !== controller) return;
       const message = error?.name !== "AbortError"
         ? (error?.message || "未知错误")
         : "搜索超时，请检查来源网络或代理";
@@ -979,7 +981,8 @@ export class LoraLibraryView {
       this.onlineHasSearched = true;
     } finally {
       clearTimeout(timeout);
-      if (this.searchController === controller) this.searchController = null;
+      if (this.searchController !== controller) return;
+      this.searchController = null;
       this.onlineLoading = false;
       if (this.root?.isConnected && this.tab === "discover") this.renderWorkspace();
     }
@@ -1026,13 +1029,18 @@ export class LoraLibraryView {
   }
 
   pollLoraDownload(jobId, resultId) {
+    if (this.downloadPolls.has(jobId)) return;
+    this.downloadPolls.set(jobId, null);
+    let failures = 0;
     const tick = async () => {
-      if (!this.root?.isConnected) { this.downloadPolls.delete(jobId); return; }
+      if (!this.root?.isConnected || !this.downloadPolls.has(jobId)) { this.downloadPolls.delete(jobId); return; }
       const row = $$(".lora-search-result", this.root).find((node) => String(node.dataset.resultId) === String(resultId));
       const state = row ? $(".lora-download-state", row) : null;
       const button = row ? $("[data-lora-download]", row) : null;
       try {
         const job = await api.loraDownload(jobId);
+        if (!this.downloadPolls.has(jobId) || !this.root?.isConnected) return;
+        failures = 0;
         const progress = job.progress || {};
         const percent = Number.isFinite(progress.percent) ? progress.percent : null;
         state?.replaceChildren(el("div", { class: "lora-progress" }, [
@@ -1055,7 +1063,19 @@ export class LoraLibraryView {
         }
         this.downloadPolls.set(jobId, setTimeout(tick, 1000));
       } catch (error) {
+        if (!this.downloadPolls.has(jobId) || !this.root?.isConnected) return;
+        const retryable = !error?.status || error.status >= 500 || [408, 429].includes(error.status);
+        if (retryable && ++failures <= 6) {
+          state?.replaceChildren(el("div", { class: "notice warn" }, "暂时无法读取进度，正在重新连接；下载任务仍在后台执行。"));
+          this.downloadPolls.set(jobId, setTimeout(tick, Math.min(15000, 1000 * 2 ** failures)));
+          return;
+        }
         state?.replaceChildren(el("div", { class: "notice err" }, esc("读取下载进度失败：" + formatLoraDownloadError(error))));
+        if (retryable) {
+          const retry = el("button", { class: "btn btn-sm", type: "button" }, "重新读取进度");
+          retry.addEventListener("click", () => this.pollLoraDownload(jobId, resultId));
+          state?.append(retry);
+        }
         if (button) button.disabled = false;
         this.downloadPolls.delete(jobId);
       }
@@ -1162,18 +1182,22 @@ export class LoraLibraryView {
     overlay.append(el("div", { class: "modal" }, [
       el("div", { class: "modal-head" }, [el("h3", { id: "le-title" }, esc(`编辑 ${item.name || "LoRA"}`)), el("button", { class: "icon-btn", type: "button", "aria-label": "关闭" }, [ic("x")])]),
       el("div", { class: "modal-body stack-2" }, [
-        el("p", { class: "text-sm text-muted", id: "le-desc" }, "别名与触发词用英文逗号分隔，留空表示清空。"),
+        el("p", { class: "text-sm text-muted", id: "le-desc" }, "别名与触发词支持中英文逗号、分号或换行分隔，留空表示清空。"),
         el("div", { class: "field" }, [
           el("label", { for: "le-aliases" }, "别名"),
           el("input", { id: "le-aliases", class: "input", type: "text", value: asList(item.aliases).join(", "), autocomplete: "off" }),
         ]),
         el("div", { class: "field" }, [
           el("label", { for: "le-role" }, "角色"),
-          el("input", { id: "le-role", class: "input", type: "text", value: item.role || "", autocomplete: "off" }),
+          el("input", { id: "le-role", class: "input", type: "text", value: asList(item.role).join(", "), autocomplete: "off" }),
         ]),
         el("div", { class: "field" }, [
           el("label", { for: "le-triggers" }, "触发词"),
           el("input", { id: "le-triggers", class: "input", type: "text", value: asList(item.triggers).join(", "), autocomplete: "off" }),
+          item.trigger_candidates?.length ? el("div", { class: "stack-1" }, [
+            el("span", { class: "hint" }, "训练标签中的候选词，采用并保存后才会自动加入提示词：" + item.trigger_candidates.join(", ")),
+            el("button", { class: "btn btn-sm", type: "button", id: "le-use-suggested" }, "采用建议触发词"),
+          ]) : null,
         ]),
         el("label", { class: "check" }, [
           el("input", { type: "checkbox", id: "le-disabled", checked: !!item.disabled }),
@@ -1210,10 +1234,16 @@ export class LoraLibraryView {
     };
     document.addEventListener("keydown", onKey);
     $("#le-cancel", overlay)?.addEventListener("click", close);
+    $("#le-use-suggested", overlay)?.addEventListener("click", () => {
+      $("#le-triggers", overlay).value = asList(item.trigger_candidates).join(", ");
+      $("#le-triggers", overlay).focus();
+    });
     $("#le-save", overlay)?.addEventListener("click", async () => {
       const save = $("#le-save", overlay);
       if (save?.disabled) return;
-      const split = (v) => String(v).split(",").map((s) => s.trim()).filter(Boolean);
+      // The backend owns delimiter/attention parsing, including weighted tags
+      // containing commas. Keep the submitted field intact until then.
+      const split = (v) => String(v).trim() ? [String(v).trim()] : [];
       const patch = {
         aliases: split($("#le-aliases", overlay).value),
         role: ($("#le-role", overlay).value || "").trim(),

@@ -6,30 +6,7 @@ import copy
 import random
 import re
 from typing import Any, Mapping
-
-
-def _replace_ref(value: Any, node_id: str, replacement: Any, output_index: int) -> Any:
-    if isinstance(value, list):
-        if len(value) == 2 and str(value[0]) == node_id and value[1] == output_index:
-            return copy.deepcopy(replacement)
-        return [_replace_ref(v, node_id, replacement, output_index) for v in value]
-    if isinstance(value, dict):
-        return {k: _replace_ref(v, node_id, replacement, output_index) for k, v in value.items()}
-    return value
-
-
-def _bypass_lora(workflow: dict[str, Any], node_id: str, node: Mapping[str, Any]) -> None:
-    inputs = node.get("inputs") if isinstance(node, Mapping) else {}
-    model_ref = (inputs or {}).get("model")
-    clip_ref = (inputs or {}).get("clip")
-    for other_id, other in list(workflow.items()):
-        if other_id == node_id or not isinstance(other, dict):
-            continue
-        if model_ref is not None:
-            other["inputs"] = _replace_ref(other.get("inputs", {}), node_id, model_ref, 0)
-        if clip_ref is not None:
-            other["inputs"] = _replace_ref(other.get("inputs", {}), node_id, clip_ref, 1)
-    workflow.pop(node_id, None)
+from .lora_workflow import bind_loras, prompt_roles
 
 
 _QUALITY_MARKERS = (
@@ -95,10 +72,29 @@ def workflow_prompt_texts(workflow: Mapping[str, Any]) -> tuple[str, str]:
     return _template_prompt_defaults(workflow)
 
 
+def workflow_sampling_summary(workflow: Mapping[str, Any]) -> str:
+    """Expose actual active sampling passes so expensive presets are visible."""
+    from .lora_workflow import active_nodes
+    active = active_nodes(dict(workflow))
+    samplers = [node.get("inputs", {}) for key, node in workflow.items()
+                if key in active and "sampler" in str(node.get("class_type", "")).lower()
+                and "steps" in node.get("inputs", {})]
+    if not samplers:
+        return ""
+    steps = "＋".join(str(item.get("steps")) for item in samplers)
+    detail = f"{steps} 步 · {samplers[0].get('sampler_name', '')}"
+    scales = [node.get("inputs", {}).get("scale_by") for key, node in workflow.items()
+              if key in active and node.get("class_type") == "LatentUpscaleBy"]
+    if scales:
+        detail += f" · 潜空间放大 {scales[0]}×"
+    return detail
+
+
 def _template_prompt_defaults(workflow: Mapping[str, Any]) -> tuple[str, str]:
     """返回模板自带的 (positive, negative) 默认文本（首个 CLIPTextEncode 各取其一）。"""
     positive = ""
     negative = ""
+    positives, negatives = prompt_roles(workflow)
     for node_id, node in workflow.items():
         if not isinstance(node, dict):
             continue
@@ -109,22 +105,15 @@ def _template_prompt_defaults(workflow: Mapping[str, Any]) -> tuple[str, str]:
             continue
         title = str((node.get("_meta") or {}).get("title") or "").lower()
         text = str(inputs.get("text") or "")
-        if "negative" in title or str(node_id) in {"12", "33"}:
+        if (positives or negatives) and str(node_id) not in positives | negatives:
+            continue
+        is_negative = str(node_id) in negatives and str(node_id) not in positives if positives or negatives else "negative" in title or str(node_id) in {"12", "33"}
+        if is_negative:
             if not negative:
                 negative = text
         elif not positive:
             positive = text
     return positive, negative
-
-
-def _coerce_lora_strength(value: Any, default: float = 0.75) -> float:
-    try:
-        strength = float(value)
-    except (TypeError, ValueError):
-        return default
-    if strength <= 0 or strength > 1.5:
-        return default
-    return strength
 
 
 def prepare_workflow(
@@ -135,6 +124,17 @@ def prepare_workflow(
     uploaded_name: str | None = None,
 ) -> tuple[dict[str, Any], int]:
     workflow: dict[str, Any] = copy.deepcopy(dict(source))
+    # HTTP execution downloads saved images from history. The old optional
+    # websocket example node is not installed on a standard ComfyUI server.
+    saved_images = [node.get("inputs", {}).get("images") for node in workflow.values() if node.get("class_type") == "SaveImage"]
+    for key, node in list(workflow.items()):
+        if node.get("class_type") == "SaveImageWebsocket":
+            images = node.get("inputs", {}).get("images")
+            if images in saved_images:
+                workflow.pop(key)
+            else:
+                node["class_type"] = "SaveImage"
+                node["inputs"] = {"images": images, "filename_prefix": "WineFox"}
     prompt = str(payload.get("prompt") or "").strip()
     negative = str(payload.get("negative_prompt") or "").strip()
     # 模板自带的质量/风格基底与用户 prompt 合并而不是整段替换：
@@ -155,9 +155,8 @@ def prepare_workflow(
     height -= height % 8
     loras = payload.get("loras") if isinstance(payload.get("loras"), list) else []
     selected_loras = [item for item in loras if isinstance(item, dict)]
-    lora_index = 0
+    positives, negatives = prompt_roles(workflow)
     positive_done = False
-    negative_done = False
     seed_index = 0
 
     for node_id, node in list(workflow.items()):
@@ -171,11 +170,12 @@ def prepare_workflow(
         lowered = class_type.lower()
 
         if "cliptextencode" in lowered and "text" in inputs:
-            if "negative" in title or str(node_id) in {"12", "33"}:
-                if negative and not negative_done:
+            connected = bool(positives or negatives)
+            is_negative = (str(node_id) in negatives and str(node_id) not in positives) if connected else ("negative" in title or str(node_id) in {"12", "33"})
+            if is_negative:
+                if negative:
                     inputs["text"] = negative
-                    negative_done = True
-            elif not positive_done or "positive prompt" in title:
+            elif str(node_id) in positives or (not positives and not negatives and (not positive_done or "positive prompt" in title)):
                 inputs["text"] = prompt
                 positive_done = True
         for key in ("seed", "noise_seed"):
@@ -198,19 +198,5 @@ def prepare_workflow(
             inputs["ckpt_name"] = checkpoint
         if class_type == "LoadImage" and uploaded_name:
             inputs["image"] = uploaded_name
-        if "lora" in lowered and "lora_name" in inputs:
-            selected_lora = selected_loras[lora_index] if lora_index < len(selected_loras) else None
-            if selected_lora:
-                inputs["lora_name"] = str(selected_lora.get("name") or selected_lora.get("id") or inputs["lora_name"])
-                strength = _coerce_lora_strength(
-                    selected_lora.get("strength", selected_lora.get("strength_model")), 0.75
-                )
-                if "strength_model" in inputs:
-                    inputs["strength_model"] = strength
-                if "strength_clip" in inputs:
-                    inputs["strength_clip"] = _coerce_lora_strength(selected_lora.get("strength_clip"), strength)
-                lora_index += 1
-            else:
-                _bypass_lora(workflow, str(node_id), node)
-
+    bind_loras(workflow, selected_loras)
     return workflow, seed

@@ -956,14 +956,9 @@ class LoraProfileStore:
 # LoraAssetStore
 # ---------------------------------------------------------------------------
 
-def _clean_plain_filename(filename: str) -> str:
-    """文件名只允许纯文件名（无分隔符/无 .. 越界）。"""
-    text = str(filename or "").strip()
-    if not text:
-        raise ValidationError("filename 不能为空")
-    if "/" in text or "\\" in text or ".." in text:
-        raise ValidationError(f"filename 必须是纯文件名（不允许路径分隔符）: {text!r}")
-    return text
+def _clean_lora_filename(filename: str) -> str:
+    """ComfyUI LoRA identity is a safe relative path, including subfolders."""
+    return normalize_relative_path(filename, name="filename")
 
 
 class LoraAssetStore:
@@ -995,7 +990,7 @@ class LoraAssetStore:
         family = str(model_family or "").strip().lower()
         if not family:
             raise _raise_key_error("model_family")
-        name = _clean_plain_filename(filename)
+        name = _clean_lora_filename(filename)
         data = dict(info or {})
         validate_public_json(data, name="info")
         if preview_key is not None:
@@ -1031,7 +1026,7 @@ class LoraAssetStore:
         row = _fetch_one(
             self.db.connection,
             "SELECT * FROM lora_assets WHERE model_family = ? AND filename = ?",
-            (str(model_family or "").strip(), _clean_plain_filename(filename)),
+            (str(model_family or "").strip(), _clean_lora_filename(filename)),
         )
         return _row_to_lora_asset(row) if row else None
 

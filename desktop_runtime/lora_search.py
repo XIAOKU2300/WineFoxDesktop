@@ -37,8 +37,9 @@ _DEFAULT_SOURCES = ["civitai", "huggingface"]
 _LLM_CACHE_TTL = 60 * 60
 _LLM_CACHE_MAX = 500
 #: 整场搜索硬预算：到点立刻返回已收集的结果（"搜到一个出一个"）。
-#: 覆盖首轮 / LLM 扩展 / 兜底 / 补救全部轮次，目标是 P95 在 10s 内出结果。
-_SEARCH_TOTAL_BUDGET = 9.0
+#: 覆盖首轮 / LLM 扩展 / 兜底 / 补救全部轮次，短于界面 45 秒取消时限。
+_SEARCH_TOTAL_BUDGET = 30.0
+_SEARCH_RESULT_GRACE = 2.0
 
 
 def _bounded_text(value: Any, limit: int) -> str:
@@ -126,10 +127,10 @@ class LoraSearchService:
             "proxy": proxy,
             "timeout": max(10, min(int(settings.get("request_timeout") or 60), 180)),
             "split": max(1, min(int(settings.get("split") or 4), 8)),
-            # 搜索是"多词 × 多源"并发扇出：单请求被源站拒绝（503/429）时
-            # 靠其余并发请求兜住结果即可，原地退避重试只会拖满整场时限。
-            # 下载链路（lora_download._client）保留自己的重试策略，不受影响。
-            "network_max_retries": 1,
+            # One reconnect handles a transient reset; the source/round
+            # deadlines still bound retries and prevent a request storm.
+            "network_max_retries": 2,
+            "proxy_circuit_breaker": False,
         }
 
     def _client_signature(self, kwargs: dict[str, Any]) -> tuple:
@@ -149,15 +150,14 @@ class LoraSearchService:
     def _per_source_search_timeout(self) -> float:
         """单个来源/关键词的时间预算，必须短于整场搜索预算。
 
-        Civitai 健康节点单请求 <2s；病态节点（503/超时）时靠并发扇出的
-        其他请求兜底，单个请求拖满预算毫无价值。
+        给来源内部的 Web/REST 切换留出时间，并短于整场预算。
         """
         settings = self._lora_download_settings()
         try:
             request_timeout = max(10, min(int(settings.get("request_timeout") or 60), 180))
         except (TypeError, ValueError):
             request_timeout = 60
-        return min(8.0, max(4.0, request_timeout * 0.1))
+        return min(24.0, max(12.0, request_timeout * 0.4))
 
     def _source_client(self, source: str) -> Any:
         source = str(source or "civitai").strip().lower()
@@ -461,20 +461,32 @@ class LoraSearchService:
             tasks = [asyncio.ensure_future(coro) for coro in coroutines]
             if not tasks:
                 return False
-            budget = max(0.2, remaining_budget())
-            done, pending = await asyncio.wait(tasks, timeout=budget)
-            for task in pending:
-                task.cancel()
-            if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
-            for task in done:
-                try:
-                    result = task.result()
-                except Exception:
-                    continue  # run_one_search 内部已把失败写进 errors
-                if result is not None:
-                    absorb_items(*result)
-            return bool(pending)
+            try:
+                pending = set(tasks)
+                grace_deadline = None
+                while pending:
+                    budget = max(.001, remaining_budget())
+                    if grace_deadline is not None:
+                        budget = min(budget, max(.001, grace_deadline - time.monotonic()))
+                    done, pending = await asyncio.wait(pending, timeout=budget, return_when=asyncio.FIRST_COMPLETED)
+                    for task in done:
+                        try:
+                            result = task.result()
+                        except Exception:
+                            continue  # run_one_search 已记录来源错误
+                        if result is not None:
+                            absorb_items(*result)
+                    if candidates and grace_deadline is None:
+                        grace_deadline = time.monotonic() + _SEARCH_RESULT_GRACE
+                    if not done or remaining_budget() <= 0:
+                        break
+                return bool(pending)
+            finally:
+                # Cancellation by navigation must also stop the source requests.
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
 
         truncated = await run_search_round([
             run_one_search(source, term, term_idx, source_idx)
@@ -597,7 +609,7 @@ class LoraSearchService:
         items = [self._public_item(item, family) for item in page_candidates]
         if truncated:
             errors.append(
-                f"已优先返回 {_SEARCH_TOTAL_BUDGET:g} 秒内收到的结果，部分来源尚未返回"
+                "已优先返回可用结果，部分来源未在本轮等待时间内返回"
             )
         return {
             "query": query,
@@ -920,30 +932,12 @@ class LoraSearchService:
 
         term_patterns: dict[str, Any] = {}
 
-        def get_compiled_pattern(term: str):
-            if term in term_patterns:
-                return term_patterns[term]
-            if not self._lora_source_alias_term_is_matchable(term):
-                term_patterns[term] = None
-                return None
-            pattern = self._lora_source_alias_term_pattern(term)
-            compiled = None
-            if pattern:
-                try:
-                    compiled = re.compile(pattern, flags=re.I)
-                except re.error:
-                    compiled = None
-            term_patterns[term] = compiled
-            return compiled
-
         entries = []
         for source, aliases in alias_map.items():
             terms = self._dedupe_lora_source_alias_terms([source] + list(aliases or []))
             match_terms = [term for term in terms if self._lora_source_alias_term_is_matchable(term)]
             if not match_terms:
                 continue
-            for term in match_terms:
-                get_compiled_pattern(term)
             source_key = self._normalize_profile_match_key(source)
             entries.append({
                 "source": source,
@@ -1043,6 +1037,15 @@ class LoraSearchService:
         text = str(text or "")
         if not text.strip():
             return False
+        # Separators in source aliases are optional. A normalized substring is
+        # necessary for the regex too; reject unrelated terms before compiling
+        # thousands of patterns or rechecking the source files for every term.
+        marker = self._normalize_profile_match_key(term)
+        normalized_text = self._normalize_profile_match_key(text)
+        if marker not in normalized_text:
+            return False
+        if len(marker) >= 4:
+            return True
         bundle = self._source_alias_bundle()
         term_patterns = bundle.setdefault("term_patterns", {})
         compiled = term_patterns.get(term)
@@ -1055,9 +1058,6 @@ class LoraSearchService:
                     compiled = None
             term_patterns[term] = compiled
         if compiled is not None and compiled.search(text):
-            return True
-        marker = self._normalize_profile_match_key(term)
-        if len(marker) >= 4 and marker in self._normalize_profile_match_key(text):
             return True
         return False
 

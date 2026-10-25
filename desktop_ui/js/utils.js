@@ -104,7 +104,8 @@ export function parseDate(value) {
   if (/^\d+(?:\.\d+)?$/.test(text)) {
     const n = Number(text);
     if (!Number.isFinite(n) || n <= 0) return null;
-    return new Date(n > 1e12 ? n : n * 1000);
+    const date = new Date(n > 1e12 ? n : n * 1000);
+    return Number.isNaN(date.getTime()) ? null : date;
   }
   const d = new Date(text);
   return Number.isNaN(d.getTime()) ? null : d;
@@ -212,7 +213,14 @@ export function toast(msg, kind = "ok", ms = 3200) {
 
 /** 通过 fetch → blob → objectURL 触发下载：WebView2 下 <a download> 对 http URL 无效 */
 export async function downloadUrl(url, filename) {
-  const blob = await (await fetch(url)).blob();
+  if (!url) throw new Error("没有可保存的图片");
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`图片读取失败 (${response.status})`);
+  const blob = await response.blob();
+  downloadBlob(blob, filename);
+}
+
+function downloadBlob(blob, filename) {
   const objectUrl = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = objectUrl;
@@ -240,19 +248,23 @@ export function saveImageDialog(url, filename) {
   return new Promise((resolve) => {
     (async () => {
       try {
-        const blob = await (await fetch(url)).blob();
+        if (!url) throw new Error("没有可保存的图片");
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`图片读取失败 (${response.status})`);
+        const blob = await response.blob();
+        // Browser fallback reuses the fetched bytes; do not fetch the same
+        // image again or download an HTTP error document as a PNG.
+        if (window.parent === window) {
+          downloadBlob(blob, filename);
+          resolve({ ok: true, downloaded: true });
+          return;
+        }
         const dataUrl = await new Promise((res, rej) => {
           const reader = new FileReader();
           reader.onload = () => res(reader.result);
           reader.onerror = () => rej(new Error("读取图片失败"));
           reader.readAsDataURL(blob);
         });
-        // 不在 Shell iframe 内（浏览器直接打开）→ 降级为直接下载
-        if (window.parent === window) {
-          await downloadUrl(url, filename);
-          resolve({ ok: true, downloaded: true });
-          return;
-        }
         const id = "save-" + (++saveSeq) + "-" + Date.now();
         const result = await new Promise((res) => {
           const timer = setTimeout(() => {
@@ -264,7 +276,7 @@ export function saveImageDialog(url, filename) {
         });
         if (!result.ok && !result.cancelled) {
           // 桥失败（旧 Shell）→ 降级为直接下载
-          await downloadUrl(url, filename);
+          downloadBlob(blob, filename);
           resolve({ ok: true, downloaded: true });
         } else {
           resolve(result);

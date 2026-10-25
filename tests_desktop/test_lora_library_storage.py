@@ -241,8 +241,12 @@ class TestLoraAssetStore(LoraLibraryStorageBase):
     def test_validation(self):
         with self.assertRaises(ValidationError):
             self.assets.register("illustrious", "")
+        # ComfyUI subfolders are valid identities; absolute/traversal paths
+        # remain forbidden. Distinct subfolders must remain distinct assets.
+        nested = self.assets.register("illustrious", "sub/a.safetensors")
+        self.assertEqual(nested.filename, "sub/a.safetensors")
         with self.assertRaises(ValidationError):
-            self.assets.register("illustrious", "sub/a.safetensors")
+            self.assets.register("illustrious", "/outside/a.safetensors")
         with self.assertRaises(ValidationError):
             self.assets.register("illustrious", "..\\a.safetensors")
         with self.assertRaises(ValidationError):

@@ -10,6 +10,25 @@ from urllib.parse import urlparse
 import aiohttp
 
 
+class AIProviderError(RuntimeError):
+    """A public diagnostic that never includes response bodies or credentials."""
+    def __init__(self, message: str):
+        self.safe_message = message
+        super().__init__(message)
+
+
+async def _read_response(response: aiohttp.ClientResponse, limit: int = 2 * 1024 * 1024) -> bytes:
+    # StreamReader.read(n) may return just the currently available first packet.
+    # A chat response often arrives in multiple chunks even with stream=false.
+    chunks, size = [], 0
+    async for chunk in response.content.iter_chunked(64 * 1024):
+        size += len(chunk)
+        if size > limit:
+            raise AIProviderError("AI 提供商响应过大")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 @dataclass(frozen=True)
 class ResolvedAIProvider:
     """Non-sensitive endpoint selection plus the exact SecretStore entry to use."""
@@ -150,20 +169,21 @@ class OpenAICompatibleLLMClient:
             "messages": messages,
             "max_tokens": max(128, min(int(max_tokens), 2000)),
             "temperature": max(0.0, min(float(temperature), 2.0)),
+            "stream": False,
         }
         async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
             async with session.post(self.endpoint, json=payload) as response:
-                raw = await response.content.read(2 * 1024 * 1024 + 1)
-                if len(raw) > 2 * 1024 * 1024:
-                    raise RuntimeError("AI 提供商响应过大")
+                raw = await _read_response(response)
                 if response.status >= 400:
-                    raise RuntimeError(f"AI 提供商请求失败（HTTP {response.status}）")
+                    raise AIProviderError(f"AI 提供商请求失败（HTTP {response.status}）")
                 try:
                     data = json.loads(raw.decode(response.charset or "utf-8"))
                 except (ValueError, UnicodeDecodeError) as exc:
-                    raise RuntimeError("AI 提供商返回了无效 JSON") from exc
+                    raise AIProviderError("AI 提供商返回了无效 JSON") from exc
         if not isinstance(data, dict):
-            raise RuntimeError("AI 提供商返回格式无效")
+            raise AIProviderError("AI 提供商返回格式无效")
+        if data.get("error"):
+            raise AIProviderError("AI 提供商返回了错误响应，请在设置中测试当前模型")
         return data
 
     async def list_models(self) -> list[str]:
@@ -179,13 +199,13 @@ class OpenAICompatibleLLMClient:
         timeout = aiohttp.ClientTimeout(total=self.timeout_seconds, connect=min(15.0, self.timeout_seconds))
         async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
             async with session.get(models_url) as response:
-                raw = await response.content.read(2 * 1024 * 1024 + 1)
+                raw = await _read_response(response)
                 if response.status >= 400:
-                    raise RuntimeError(f"获取模型列表失败（HTTP {response.status}）")
+                    raise AIProviderError(f"获取模型列表失败（HTTP {response.status}）")
                 try:
                     data = json.loads(raw.decode(response.charset or "utf-8"))
                 except (ValueError, UnicodeDecodeError) as exc:
-                    raise RuntimeError("AI 提供商返回了无效 JSON") from exc
+                    raise AIProviderError("AI 提供商返回了无效 JSON") from exc
         items = data.get("data") if isinstance(data, dict) else None
         if not isinstance(items, list):
             items = data if isinstance(data, list) else []

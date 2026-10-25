@@ -14,6 +14,7 @@ const SCHEDULERS = ["normal", "karras", "exponential", "sgm_uniform", "simple"];
 
 export class GenerateView {
   constructor() {
+    const defaults = store.get("settings")?.defaults || {};
     this.poller = new JobPoller(
       (job) => this.onJobUpdate(job),
       (job) => this.onJobDone(job),
@@ -23,8 +24,9 @@ export class GenerateView {
       mode: "txt2img",
       // 默认模型族跟随设置（向导/设置页配置的 defaults.family），此前硬编码
       // anima 会与设置的 illustrious 脱节，还会连带选错初始工作流。
-      family: store.get("settings")?.defaults?.family || "anima",
-      workflow: "",
+      family: defaults.family || "anima",
+      workflow: defaults.workflow || "",
+      params: { width: defaults.width || 832, height: defaults.height || 1216 },
       loras: new Map(), // id -> { label, strength }
       refImage: null,   // { url, width, height }
       job: null,
@@ -37,6 +39,8 @@ export class GenerateView {
       autoLoraMatches: [], // 生成前自动匹配预览：提交时作为 auto_lora_confirmations
       autoLoraBusy: false,
       autoLoraPreviewReady: false,
+      submitting: false,
+      cancelling: false,
     };
     store.set("genParams", this.state);
     this.root = null;
@@ -71,7 +75,9 @@ export class GenerateView {
   leftPanel() {
     const cat = store.get("catalog") || {};
     const families = cat.families?.length ? cat.families : [{ id: "anima", label: "Anima" }, { id: "illustrious", label: "Illustrious" }];
-    const workflows = (cat.workflows || []).filter((w) => !w.mode || w.mode === this.state.mode || w.mode === "any");
+    const workflows = (cat.workflows || []).filter((w) =>
+      (!w.mode || w.mode === this.state.mode || w.mode === "any") &&
+      (!w.family || w.family === "any" || w.family === this.state.family));
     const loras = this.familyLoras(cat.loras || []);
 
     return el("aside", { class: "gen-panel gen-left", "aria-label": "生成导航" }, [
@@ -137,14 +143,10 @@ export class GenerateView {
     const workflows = (store.get("catalog")?.workflows || []).filter((w) =>
       !w.mode || w.mode === mode || w.mode === "any");
     const fits = (list) => list.some((w) => w.id === s.workflow);
-    if (!fits(workflows)) {
-      s.workflow = workflows[0]?.id || "";
-      return s.workflow;
-    }
     const familyWorkflows = workflows.filter((w) =>
       !w.family || w.family === "any" || w.family === family);
-    if (!fits(familyWorkflows)) {
-      s.workflow = familyWorkflows[0]?.id || s.workflow;
+    if (!fits(familyWorkflows) || !fits(workflows)) {
+      s.workflow = familyWorkflows.find((w) => w.preferred)?.id || familyWorkflows[0]?.id || "";
     }
     return s.workflow;
   }
@@ -331,6 +333,7 @@ export class GenerateView {
         this.state.loras.set(id, { label, strength: Number.isFinite(strength) ? strength : 0.8 });
       }
       this.renderLoraResults();
+      this.scheduleAutoLoraPreview();
     });
     const copy = el("button", {
       type: "button", class: "icon-btn lora-copy",
@@ -407,9 +410,9 @@ export class GenerateView {
         this.promptDebugCard(),
         this.autoLoraPanel(),
         el("div", { class: "gen-actions gen-submit-bar" }, [
-          el("button", { class: "btn btn-primary", id: "g-submit", type: "button", disabled: !!s.job }, [
+          el("button", { class: "btn btn-primary", id: "g-submit", type: "button", disabled: !!s.job || s.submitting }, [
             s.mode === "img2img" ? ic("wand") : ic("play"),
-            esc(s.job ? "生成中…" : "开始生成"),
+            esc(s.job ? "生成中…" : s.submitting ? "提交中…" : "开始生成"),
           ]),
           el("button", { class: "btn btn-sm", id: "g-cancel", type: "button", hidden: !s.job }, "取消"),
           ...this.resultActions(),
@@ -446,6 +449,7 @@ export class GenerateView {
       ["清理后（去 seed/标记）", dbg.cleaned_prompt],
       ["最终正向 prompt", dbg.final_prompt],
       ["最终负面 prompt", dbg.negative_prompt],
+      ["实际采样", dbg.sampling],
       ["转译来源", `${dbg.source === "llm" ? "LLM 转译" : "未转译（原文直出）"} · ${dbg.family || "—"}`],
     ];
     if (Array.isArray(dbg.matches) && dbg.matches.length) {
@@ -453,6 +457,12 @@ export class GenerateView {
     }
     if (Array.isArray(dbg.loras) && dbg.loras.length) {
       rows.push(["应用 LoRA", dbg.loras.map((l) => `${l.name}${l.strength != null ? ` @${Number(l.strength).toFixed(2)}` : ""}`).join("、")]);
+    }
+    if (dbg.lora_injection) {
+      rows.push(["实际注入词", (dbg.lora_injection.applied || []).join(", ")]);
+      if (dbg.lora_injection.omitted?.length) {
+        rows.push(["按本次要求省略", dbg.lora_injection.omitted.map((item) => item.tag).join(", ")]);
+      }
     }
     if (Array.isArray(dbg.warnings) && dbg.warnings.length) {
       rows.push(["告警", dbg.warnings.join("；")]);
@@ -596,6 +606,8 @@ export class GenerateView {
   scheduleAutoLoraPreview() {
     const s = this.state;
     if (this._autoPreviewTimer != null) { clearTimeout(this._autoPreviewTimer); this._autoPreviewTimer = null; }
+    this._autoPreviewController?.abort();
+    this._autoPreviewController = null;
     const prompt = (s.params?.prompt || "").trim();
     const family = s.family;
     const seq = (s._autoPreviewSeq = (s._autoPreviewSeq || 0) + 1);
@@ -603,7 +615,7 @@ export class GenerateView {
     s.autoLoraPreviewReady = false;
     s.autoLoraMatches = [];
     this.refreshAutoLoraPanel();
-    if (!prompt) {
+    if (!prompt || s.loras.size || s.job || s.submitting) {
       s.autoLoraBusy = false;
       s.autoLoraPreviewReady = false;
       this.refreshAutoLoraPanel();
@@ -611,8 +623,10 @@ export class GenerateView {
     }
     this._autoPreviewTimer = setTimeout(async () => {
       this._autoPreviewTimer = null;
+      const controller = new AbortController();
+      this._autoPreviewController = controller;
       try {
-        const result = await api.loraMatchPreview({ prompt, family });
+        const result = await api.loraMatchPreview({ prompt, family }, { signal: controller.signal });
         if (seq !== s._autoPreviewSeq || !this.root?.isConnected) return;
         s.autoLoraBusy = false;
         s.autoLoraPreviewReady = true;
@@ -630,7 +644,11 @@ export class GenerateView {
 
   cancelAutoLoraPreview() {
     if (this._autoPreviewTimer != null) { clearTimeout(this._autoPreviewTimer); this._autoPreviewTimer = null; }
+    this._autoPreviewController?.abort();
+    this._autoPreviewController = null;
     this.state._autoPreviewSeq = (this.state._autoPreviewSeq || 0) + 1;
+    this.state.autoLoraBusy = false;
+    this.refreshAutoLoraPanel();
   }
 
   /* 「重生成」：把上次提交的提示词回填到输入框，交由用户修改后再生成 */
@@ -683,19 +701,19 @@ export class GenerateView {
           el("label", { for: "g-seed" }, "种子（-1 = 随机）"),
           el("div", { class: "num-group" }, [
             el("button", { type: "button", class: "num-btn", id: "g-seed-dec", "aria-label": "种子减一" }, "−"),
-            el("input", { id: "g-seed", class: "input", type: "number", min: "-1", step: "1", value: s.seed }), 
+            el("input", { id: "g-seed", class: "input", type: "text", inputmode: "numeric", pattern: "-?[0-9]+", value: s.seed }),
             el("button", { type: "button", class: "num-btn", id: "g-seed-inc", "aria-label": "种子加一" }, "+"),
           ]),
         ]),
         el("div", { class: "form-row" }, [
           el("div", { class: "field" }, [
             el("label", { for: "g-w" }, "宽度"),
-            el("select", { id: "g-w", class: "select" }, [512, 768, 832, 1024, 1280].map((v) =>
+            el("select", { id: "g-w", class: "select" }, [...new Set([512, 768, 832, 1024, 1216, 1280, p.width || 832])].sort((a, b) => a - b).map((v) =>
               el("option", { value: v, selected: (p.width || 832) === v }, String(v)))),
           ]),
           el("div", { class: "field" }, [
             el("label", { for: "g-h" }, "高度"),
-            el("select", { id: "g-h", class: "select" }, [512, 768, 832, 1024, 1280].map((v) =>
+            el("select", { id: "g-h", class: "select" }, [...new Set([512, 768, 832, 1024, 1216, 1280, p.height || 1216])].sort((a, b) => a - b).map((v) =>
               el("option", { value: v, selected: (p.height || 1216) === v }, String(v)))),
           ]),
         ]),
@@ -831,9 +849,18 @@ export class GenerateView {
       this.scheduleAutoLoraPreview();
     });
     g("g-neg")?.addEventListener("input", (e) => { s.params = s.params || {}; s.params.negative = e.target.value; });
-    g("g-seed")?.addEventListener("input", (e) => { s.seed = parseInt(e.target.value, 10) || -1; });
-    g("g-seed-dec")?.addEventListener("click", () => { s.seed = (s.seed <= 0 ? 1 : s.seed) - 1; g("g-seed").value = s.seed; });
-    g("g-seed-inc")?.addEventListener("click", () => { s.seed = s.seed < 0 ? 1 : s.seed + 1; g("g-seed").value = s.seed; });
+    g("g-seed")?.addEventListener("input", (e) => {
+      const value = e.target.value.trim();
+      s.seed = /^-?\d+$/.test(value) ? value : -1;
+    });
+    const stepSeed = (delta) => {
+      let value = BigInt(s.seed);
+      value = delta < 0 ? (value <= 0n ? 0n : value - 1n) : (value < 0n ? 1n : value + 1n);
+      s.seed = String(value);
+      g("g-seed").value = s.seed;
+    };
+    g("g-seed-dec")?.addEventListener("click", () => stepSeed(-1));
+    g("g-seed-inc")?.addEventListener("click", () => stepSeed(1));
     for (const id of ["g-w", "g-h", "g-steps", "g-cfg", "g-sampler", "g-sched"]) {
       g(id)?.addEventListener("change", (e) => {
         s.params = s.params || {};
@@ -852,7 +879,7 @@ export class GenerateView {
     g("g-fav")?.addEventListener("click", () => this.favoriteResult());
     g("g-copy")?.addEventListener("click", () => this.copyResult());
     g("g-regen")?.addEventListener("click", () => this.restoreLastParams());
-    g("g-clearref")?.addEventListener("click", () => { s.refImage = null; s.result = null; this.render(); });
+    g("g-clearref")?.addEventListener("click", () => { this._uploadToken = (this._uploadToken || 0) + 1; s.refImage = null; s.result = null; this.render(); });
 
     // 拖放（img2img 参考图）
     this.bindDrop();
@@ -913,10 +940,12 @@ export class GenerateView {
   }
 
   async setRefImage(file) {
+    const token = this._uploadToken = (this._uploadToken || 0) + 1;
     try {
       const fd = new FormData();
       fd.append("file", file, file.name || "ref.png");
       const res = await api.uploads(fd);
+      if (token !== this._uploadToken) return;
       this.state.refImage = { url: res.url, name: sanitizeName(res.name || file.name), width: res.width, height: res.height };
       this.state.result = null;
       this.render();
@@ -928,13 +957,18 @@ export class GenerateView {
   /* ============ 任务 ============ */
   async submit() {
     const s = this.state;
-    if (s.job) return;
+    if (s.job || s.submitting) return;
     const p = s.params || {};
     if (!(p.prompt || "").trim() && s.mode === "txt2img") {
       toast("请先填写提示词", "warn");
       $("#g-prompt", this.root)?.focus();
       return;
     }
+    if (s.mode === "img2img" && !s.refImage) {
+      toast("请先选择参考图", "warn");
+      return;
+    }
+    s.submitting = true;
     this.cancelAutoLoraPreview();
     const payload = {
       mode: s.mode,
@@ -987,26 +1021,48 @@ export class GenerateView {
       this.poller.watch(job.id);
     } catch (e) {
       toast("提交失败：" + e.message, "err");
-      if (btn) btn.disabled = false;
+    } finally {
+      s.submitting = false;
+      const currentButton = $("#g-submit", this.root);
+      if (currentButton) {
+        currentButton.disabled = !!s.job;
+        if (!s.job) currentButton.replaceChildren(ic("play"), "开始生成");
+      }
     }
   }
 
   async cancel() {
     const s = this.state;
-    if (!s.job) return;
-    try { await api.cancelJob(s.job.id); } catch { /* 忽略 */ }
-    this.poller.stop(s.job.id);
-    s.job = null;
-    this.render();
-    toast("已取消任务", "ok");
+    if (!s.job || s.cancelling) return;
+    const jobId = s.job.id;
+    s.cancelling = true;
+    const button = $("#g-cancel", this.root);
+    if (button) button.disabled = true;
+    try {
+      await api.cancelJob(jobId);
+      this.poller.stop(jobId);
+      if (s.job?.id === jobId) {
+        s.job = null;
+        store.setJobTally(0, 0);
+        this.render();
+      }
+      toast("已取消本地等待", "ok");
+    } catch (error) {
+      toast("取消失败：" + error.message, "err");
+    } finally {
+      s.cancelling = false;
+      const currentButton = $("#g-cancel", this.root);
+      if (currentButton) currentButton.disabled = false;
+    }
   }
 
   onJobUpdate(job) {
     const s = this.state;
+    if (!s.job || s.job.id !== job.id) return;
     s.job = job;
     const bar = $("#g-submit", this.root);
     if (bar) bar.disabled = !!job;
-    const area = $(".gen-center .canvas-wrap");
+    const area = $(".gen-center .canvas-wrap", this.root);
     if (area && s.job) {
       const existing = area.querySelector(".gen-progress");
       const holder = area.querySelector(".canvas-placeholder");
@@ -1045,6 +1101,7 @@ export class GenerateView {
 
   onJobDone(job) {
     const s = this.state;
+    if (!s.job || s.job.id !== job.id) return;
     s.job = null;
     store.setJobTally(0, 0);
     store.set("historyDirty", true); // 历史数据已变化，历史页下次进入时重新拉取
@@ -1078,7 +1135,7 @@ export class GenerateView {
     if (!r?.job?.id) return;
     const btn = $("#g-fav", this.root);
     try {
-      await api.favoriteHistory(r.job.id);
+      await api.favoriteHistory(r.job.result?.history_id || r.job.image?.id || r.job.id);
       store.set("favoritesDirty", true);
       if (btn) {
         btn.classList.remove("fav-pop");
@@ -1187,7 +1244,7 @@ export class GenerateView {
     };
     const onUp = (e) => {
       drag = null;
-      if (e?.pointerId != null) img.releasePointerCapture?.(e.pointerId);
+      if (e?.pointerId != null && img.hasPointerCapture?.(e.pointerId)) img.releasePointerCapture(e.pointerId);
       img.classList.remove("dragging");
     };
     const onDbl = (e) => {
@@ -1209,12 +1266,18 @@ export class GenerateView {
     img.addEventListener("pointerdown", onDown);
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    window.addEventListener("blur", onUp);
+    img.addEventListener("lostpointercapture", onUp);
     img.addEventListener("dblclick", onDbl);
     this._canvasZoomCleanup = () => {
       area.removeEventListener("wheel", onWheel);
       img.removeEventListener("pointerdown", onDown);
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      window.removeEventListener("blur", onUp);
+      img.removeEventListener("lostpointercapture", onUp);
       img.removeEventListener("dblclick", onDbl);
     };
   }
@@ -1331,6 +1394,8 @@ export class GenerateView {
   }
 
   dispose() {
+    this._uploadToken = (this._uploadToken || 0) + 1;
+    this._canvasZoomCleanup?.();
     this.cancelAutoLoraPreview();
     this.teardownLoraPagination();
     if (this.loraPageFrame != null) cancelAnimationFrame(this.loraPageFrame);

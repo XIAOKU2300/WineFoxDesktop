@@ -97,7 +97,15 @@ else:
 # LoraBridge 随包分发（环境中心安装桥接器时从 _MEIPASS/plugin_data 复制）。
 bridge_src = os.path.join(ROOT, "comfyui_custom_nodes", "ComfyUI-AstrBot-LoraBridge")
 if os.path.isdir(bridge_src):
-    datas.append((bridge_src, os.path.join("plugin_data", "comfyui_custom_nodes", "ComfyUI-AstrBot-LoraBridge")))
+    # The bridge's ignored config.json contains the local installation token.
+    # Ship source/documentation only; setup writes a fresh configuration later.
+    bridge_dst = os.path.join("plugin_data", "comfyui_custom_nodes", "ComfyUI-AstrBot-LoraBridge")
+    for dirpath, dirnames, filenames in os.walk(bridge_src):
+        dirnames[:] = [name for name in dirnames if not name.startswith(".") and name != "__pycache__"]
+        for filename in filenames:
+            if filename.endswith(".py") or filename in {"README.md", "LICENSE", "requirements.txt", "config.example.json"}:
+                relative_dir = os.path.relpath(dirpath, bridge_src)
+                datas.append((os.path.join(dirpath, filename), os.path.join(bridge_dst, relative_dir)))
 else:
     print("[spec] WARN: ComfyUI-AstrBot-LoraBridge not found, bridge install will be unavailable", file=sys.stderr)
 

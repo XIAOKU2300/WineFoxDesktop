@@ -49,7 +49,7 @@
   padding: var(--sp-3) var(--sp-2);
   background: var(--glass-strong);
   border-right: 1px solid var(--border);
-  overflow-y: auto;
+  overflow-y: auto; overflow-x: hidden;
 }
 .rail-item {
   position: relative;
@@ -268,6 +268,14 @@
 .canvas-area.dragover { border-color: var(--primary); border-style: solid; background: var(--primary-soft); }
 .canvas-area.offline { border-style: solid; border-color: var(--border); }
 .canvas-img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: var(--r-sm); box-shadow: var(--shadow-2); animation: fadeIn var(--dur-slow) var(--ease); }
+.canvas-img { touch-action: none; }
+.history-failure {
+  min-height: 180px; padding: var(--sp-4); display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: var(--sp-2);
+  background: var(--surface-2); color: var(--text-2); overflow-wrap: anywhere;
+}
+.history-failure > svg { color: var(--danger); }
+.history-failure > span { font-size: var(--fs-sm); }
 
 /* 画布中央占位 */
 .canvas-placeholder { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--sp-2); color: var(--faint); pointer-events: none; text-align: center; padding: var(--sp-4); }
@@ -576,6 +584,7 @@
 .img-cell.selected { box-shadow: 0 0 0 2px var(--danger); border-color: var(--danger); }
 
 /* 批量操作条 */
+.view:has(> .batch-bar) { padding-bottom: 128px; scroll-padding-bottom: 128px; }
 .batch-bar {
   position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
   z-index: 60; display: flex; align-items: center; gap: var(--sp-2);
@@ -590,7 +599,10 @@
   font-variant-numeric: tabular-nums; margin-right: var(--sp-2); white-space: nowrap;
 }
 @keyframes batchBarIn { from { opacity: 0; transform: translateX(-50%) translateY(16px) scale(.97); } }
-@media (max-width: 720px) { .batch-bar { left: var(--sp-3); right: var(--sp-3); transform: none; flex-wrap: wrap; justify-content: center; } }
+@media (max-width: 720px) {
+  .view:has(> .batch-bar) { padding-bottom: 192px; scroll-padding-bottom: 192px; }
+  .batch-bar { left: var(--sp-3); right: var(--sp-3); transform: none; flex-wrap: wrap; justify-content: center; }
+}
 .img-cell .fav-dot { position: absolute; left: 6px; top: 6px; width: 18px; height: 18px; border-radius: 50%; background: var(--glass-strong); backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center; color: var(--danger); }
 .img-cell .fav-dot svg { width: 10px; height: 10px; }
 .img-cell.trashed { opacity: 0.55; }

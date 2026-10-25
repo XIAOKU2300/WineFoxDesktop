@@ -81,15 +81,14 @@ pub fn confirm_exit_impl<R: Runtime>(
     manager: &Arc<SidecarManager>,
     mode: &str,
 ) {
-    {
+    let generation = {
         let mut inner = manager.state.inner.lock().unwrap();
         inner.quitting = true;
-        if mode == "now" {
-            inner.shutdown_pending = true;
-            inner.shutdown_mode = Some("now".into());
-        }
-        drop(inner);
-    }
+        inner.exit_generation = inner.exit_generation.wrapping_add(1);
+        inner.shutdown_pending = true;
+        inner.shutdown_mode = Some(mode.into());
+        inner.exit_generation
+    };
     manager.emit_status();
 
     let mode = mode.to_string();
@@ -103,7 +102,13 @@ pub fn confirm_exit_impl<R: Runtime>(
             } else {
                 Duration::from_secs(10)
             };
-            let exited = me.request_shutdown_and_wait(&mode, timeout);
+            let exited = me.request_shutdown_and_wait_generation(&mode, timeout, Some(generation));
+            {
+                let inner = me.state.inner.lock().unwrap();
+                if !inner.quitting || inner.exit_generation != generation {
+                    return;
+                }
+            }
             if !exited {
                 // Force kill: Job Object + TerminateProcess fallback.
                 me.log(
@@ -117,6 +122,12 @@ pub fn confirm_exit_impl<R: Runtime>(
                 "info",
                 &format!("exit flow: done (exited={exited}), exiting shell"),
             );
+            {
+                let inner = me.state.inner.lock().unwrap();
+                if !inner.quitting || inner.exit_generation != generation {
+                    return;
+                }
+            }
             app.exit(0);
         })
         .expect("spawn exit flow thread");
@@ -129,10 +140,9 @@ pub fn cancel_exit_impl<R: Runtime>(_app: &AppHandle<R>, manager: &Arc<SidecarMa
             return;
         }
         inner.quitting = false;
+        inner.exit_generation = inner.exit_generation.wrapping_add(1);
         inner.shutdown_pending = false;
         inner.shutdown_mode = None;
-        // Reset the exit-done latch so a later quit waits again.
-        *manager.state.exit_done.lock().unwrap() = false;
         drop(inner);
     }
     manager.request_shutdown_cancel();

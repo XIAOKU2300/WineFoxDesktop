@@ -85,6 +85,8 @@ pub struct Inner {
     pub quitting: bool,
     pub shutdown_pending: bool,
     pub shutdown_mode: Option<String>,
+    /// Invalidates an exit waiter when the user cancels or replaces it.
+    pub exit_generation: u64,
     /// Ring buffer of the last sanitized sidecar stderr lines.
     pub log_tail: Vec<String>,
     /// 房间运行时状态（供 Rust 门禁与前端展示）。

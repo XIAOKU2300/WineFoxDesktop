@@ -19,6 +19,9 @@ export class HistoryView {
     this.selectMode = false;
     this.selected = new Set(); // 批量选择：记录 id
     this.pageItems = [];
+    this.loadToken = 0;
+    this.loadingMore = false;
+    this.batchBusy = false;
   }
 
   async mount(container) {
@@ -91,9 +94,11 @@ export class HistoryView {
   batchBar() {
     const n = this.selected.size;
     const trash = this.trash;
+    const pageIds = this.selectableIds();
+    const allSelected = pageIds.length > 0 && pageIds.every((id) => this.selected.has(id));
     return el("div", { class: "batch-bar", role: "toolbar", "aria-label": "批量操作" }, [
       el("span", { class: "bb-count" }, `已选 ${n} 项`),
-      el("button", { class: "btn btn-sm", type: "button", id: "bb-all" }, [ic("check"), esc(n === this.pageItems.length && this.pageItems.length ? "取消全选" : "全选")]),
+      el("button", { class: "btn btn-sm", type: "button", id: "bb-all" }, [ic("check"), esc(allSelected ? "取消全选" : "全选")]),
       trash
         ? el("button", { class: "btn btn-sm", type: "button", id: "bb-restore" }, [ic("restore"), esc("恢复")])
         : el("button", { class: "btn btn-sm", type: "button", id: "bb-fav" }, [ic("favFill"), esc("收藏")]),
@@ -109,12 +114,11 @@ export class HistoryView {
 
   bindBatchBar() {
     $("#bb-all", this.root)?.addEventListener("click", () => {
-      const pageIds = this.pageItems.map((it) => it.id);
+      const pageIds = this.selectableIds();
       const allSelected = pageIds.length && pageIds.every((id) => this.selected.has(id));
       if (allSelected) pageIds.forEach((id) => this.selected.delete(id));
       else pageIds.forEach((id) => this.selected.add(id));
-      this.render();
-      this.load();
+      this.updateSelection();
     });
     $("#bb-fav", this.root)?.addEventListener("click", () => this.batchAction(async (id) => api.favoriteHistory(id), "已收藏"));
     $("#bb-unfav", this.root)?.addEventListener("click", () => this.batchAction(async (id) => api.unfavoriteHistory(id), "已取消收藏"));
@@ -125,8 +129,11 @@ export class HistoryView {
   }
 
   async batchAction(fn, label) {
+    if (this.batchBusy) return;
     const ids = [...this.selected];
     if (!ids.length) { toast("请先选择记录", "warn"); return; }
+    this.batchBusy = true;
+    $$(".batch-bar button", this.root).forEach((button) => { button.disabled = true; });
     let ok = 0;
     for (const id of ids) {
       try { await fn(id); ok++; } catch { /* 单项失败继续 */ }
@@ -135,16 +142,26 @@ export class HistoryView {
     store.set("favoritesDirty", true);
     this.selectMode = false;
     this.selected.clear();
+    this.batchBusy = false;
     this.render();
     this.load();
   }
 
   toggleSelect(id) {
+    if (!this.selectableIds().includes(id)) return;
     if (this.selected.has(id)) this.selected.delete(id);
     else this.selected.add(id);
-    // 更新当前 cell 状态与计数，不整页重渲染
-    const cell = $(`.img-cell[data-id="${id}"]`, this.root);
-    if (cell) {
+    this.updateSelection();
+  }
+
+  selectableIds() {
+    return this.pageItems.filter((it) => it.image?.url).map((it) => it.id);
+  }
+
+  updateSelection() {
+    // 保留已经加载的页和滚动位置，仅更新选择状态。
+    for (const cell of $$(".img-cell", this.root)) {
+      const id = cell.dataset.id;
       cell.classList.toggle("selected", this.selected.has(id));
       const check = cell.querySelector(".cell-check");
       if (check) check.classList.toggle("on", this.selected.has(id));
@@ -153,14 +170,19 @@ export class HistoryView {
     if (count) count.textContent = `已选 ${this.selected.size} 项`;
     const all = $("#bb-all", this.root);
     if (all) {
-      const pageIds = this.pageItems.map((it) => it.id);
+      const pageIds = this.selectableIds();
       all.textContent = pageIds.length && pageIds.every((id) => this.selected.has(id)) ? "取消全选" : "全选";
     }
   }
 
   async load(append = false, prefetched = null) {
-    const grid = $("#h-grid");
-    const body = $("#h-body");
+    if (append && (this.loadingMore || !this.cursor)) return;
+    const token = ++this.loadToken;
+    const cursor = append ? this.cursor : null;
+    this.loadingMore = append;
+    if (!append) this.cursor = null;
+    const grid = $("#h-grid", this.root);
+    const body = $("#h-body", this.root);
     if (!grid) return;
     if (!append) {
       grid.innerHTML = "";
@@ -169,19 +191,25 @@ export class HistoryView {
     }
     try {
       const q = { limit: PAGE_SIZE };
-      if (this.cursor) q.cursor = this.cursor;
+      if (cursor) q.cursor = cursor;
       if (this.q) q.q = this.q;
       if (this.filter !== "all") q.status = this.filter;
       if (this.trash) q.trash = "1";
       const res = prefetched || await api.history(q);
+      if (token !== this.loadToken) return;
       this.total = res.total ?? this.total;
       const items = res.items || [];
       if (!append) this.pageItems = items;
       else this.pageItems = this.pageItems.concat(items);
+      const visibleIds = new Set(this.selectableIds());
+      for (const id of this.selected) {
+        if (!visibleIds.has(id)) this.selected.delete(id);
+      }
       if (!append) this.prevCursors = [];
-      else this.prevCursors.push(this.cursor);
+      else this.prevCursors.push(cursor);
       this.cursor = res.next_cursor || null;
       this.renderItems(items, append);
+      if (this.selectMode) this.updateSelection();
       const loader = $(".load-more", body);
       if (loader) {
         if (res.next_cursor) {
@@ -195,8 +223,11 @@ export class HistoryView {
       }
       this.loaded = true;
     } catch (e) {
+      if (token !== this.loadToken) return;
       const loader = $(".load-more", body);
       if (loader) loader.textContent = "加载失败：" + e.message;
+    } finally {
+      if (token === this.loadToken) this.loadingMore = false;
     }
   }
 
@@ -222,6 +253,7 @@ export class HistoryView {
   }
 
   cell(it) {
+    const hasImage = !!it.image?.url;
     const fav = !!it.favorite;
     const selected = this.selectMode && this.selected.has(it.id);
     // prompt 退化（null/undefined/"null" 字符串等）时回退到 id，绝不显示 "null"。
@@ -230,31 +262,32 @@ export class HistoryView {
       : (isDegenerate(it.id) ? "" : it.id);
     const labelText = promptText || it.id || "历史记录";
     const cell = el("figure", {
-      class: "img-cell" + (this.trash ? " trashed" : "") + (selected ? " selected" : ""),
+      class: "img-cell" + (!hasImage ? " no-image" : "") + (this.trash ? " trashed" : "") + (selected ? " selected" : ""),
       tabindex: "0",
       role: "button",
       "aria-label": `预览记录：${labelText}`,
       dataset: { id: it.id },
     }, [
-      this.selectMode ? el("span", { class: "cell-check" + (selected ? " on" : ""), "aria-hidden": "true" }, [ic("check")]) : null,
-      el("img", { src: it.image?.url || "", alt: labelText, loading: "lazy", decoding: "async" }),
+      this.selectMode && hasImage ? el("span", { class: "cell-check" + (selected ? " on" : ""), "aria-hidden": "true" }, [ic("check")]) : null,
+      hasImage ? el("img", { src: it.image.url, alt: labelText, loading: "lazy", decoding: "async" })
+        : el("div", { class: "history-failure" }, [ic("warn"), el("b", {}, "生成失败"), el("span", {}, esc(it.error || "点击查看详情"))]),
       fav ? el("span", { class: "fav-dot" }, [ic("fav")]) : null,
       el("figcaption", { class: "cell-meta" }, [
         el("span", {}, esc(promptText)),
         el("span", {}, esc(fmtRelative(it.created_at))),
       ]),
-      el("div", { class: "cell-actions" }, [
+      hasImage ? el("div", { class: "cell-actions" }, [
         this.trash
           ? el("button", { class: "cell-btn", type: "button", "aria-label": "恢复", title: "恢复" }, [ic("restore")])
           : el("button", { class: "cell-btn" + (fav ? " on" : ""), type: "button", "aria-label": fav ? "取消收藏" : "收藏", title: fav ? "取消收藏" : "收藏" }, [ic("fav")]),
         this.trash
           ? el("button", { class: "cell-btn", type: "button", "aria-label": "彻底删除", title: "彻底删除" }, [ic("x")])
           : el("button", { class: "cell-btn", type: "button", "aria-label": "移入回收站", title: "移入回收站" }, [ic("trash")]),
-      ]),
+      ]) : null,
     ]);
     // 点击卡片本身就是预览，悬浮操作只保留收藏/回收，减少视觉噪音。
     const btns = $$(".cell-btn", cell);
-    if (this.trash) {
+    if (hasImage && this.trash) {
       btns[0].addEventListener("click", async (e) => {
         e.stopPropagation();
         try { await api.restoreHistory(it.id); toast("已恢复", "ok"); this.load(); }
@@ -265,7 +298,7 @@ export class HistoryView {
         try { await api.purgeHistory(it.id); toast("已彻底删除", "ok"); this.load(); }
         catch (err) { toast("删除失败：" + err.message, "err"); }
       });
-    } else {
+    } else if (hasImage) {
       btns[0].addEventListener("click", async (e) => {
         e.stopPropagation();
         try {
@@ -282,13 +315,14 @@ export class HistoryView {
       });
     }
     cell.addEventListener("click", () => {
-      if (this.selectMode) this.toggleSelect(it.id);
+      if (this.selectMode && hasImage) this.toggleSelect(it.id);
       else this.preview(it);
     });
     cell.addEventListener("keydown", (e) => {
+      if (e.target !== cell) return;
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
-        if (this.selectMode) this.toggleSelect(it.id);
+        if (this.selectMode && hasImage) this.toggleSelect(it.id);
         else this.preview(it);
       }
     });
@@ -303,7 +337,8 @@ export class HistoryView {
         el("button", { class: "icon-btn", type: "button", "aria-label": "关闭" }, [ic("x")]),
       ]),
       el("div", { class: "preview-body" }, [
-        el("img", { src: it.image?.url || "", alt: isDegenerate(it.prompt) ? "历史图片" : it.prompt }),
+        it.image?.url ? el("img", { src: it.image.url, alt: isDegenerate(it.prompt) ? "历史图片" : it.prompt })
+          : el("div", { class: "notice err", role: "alert" }, esc(it.error || "生成失败，未产生图片")),
         el("div", { class: "preview-meta" }, [
           el("div", { class: "pm-block" }, [el("span", { class: "pm-label" }, "提示词"), el("span", { class: "pm-val" }, esc(it.prompt || "—"))]),
           el("div", { class: "pm-block" }, [el("span", { class: "pm-label" }, "负面提示词"), el("span", { class: "pm-val" }, esc(it.negative_prompt || "—"))]),
@@ -314,11 +349,11 @@ export class HistoryView {
           ]),
           el("div", { class: "pm-block" }, [el("span", { class: "pm-label" }, "模型族 / 工作流"), el("span", { class: "pm-val" }, esc(`${it.family || "—"} / ${sanitizeName(it.workflow) || "—"}`))]),
           el("div", { class: "pm-block" }, [el("span", { class: "pm-label" }, "创建时间"), el("span", { class: "pm-val" }, esc(fmtRelative(it.created_at)))]),
-          el("div", { class: "row gap-2" }, [
+          it.image?.url ? el("div", { class: "row gap-2" }, [
             el("button", { class: "btn btn-primary btn-sm", type: "button", id: "pv-save" }, [ic("download"), esc("保存")]),
             el("button", { class: "btn btn-sm", type: "button", id: "pv-fav" }, [ic(it.favorite ? "favFill" : "fav"), esc(it.favorite ? "取消收藏" : "收藏")]),
             this.trash ? null : el("button", { class: "btn btn-sm btn-danger", type: "button", id: "pv-trash" }, [ic("trash"), esc("删除")]),
-          ]),
+          ]) : null,
         ]),
       ]),
     ]);
